@@ -1,0 +1,18 @@
+{
+  "name": "exact_alias_temp_to_temperature",
+  "description": "A tool returns the Python attribute name instead of the schema's declared alias; ExactAliasStrategy should rename it back.",
+  "expected_schema": {
+    "fields": [
+      {"path": "temp", "type": "float", "known_aliases": ["temperature"]},
+      {"path": "humidity", "type": "integer"}
+    ]
+  },
+  "broken_payload": {
+    "temperature": 31.5,
+    "humidity": 80
+  },
+  "expected_result": {
+    "status": "success",
+    "min_confidence": 1.0
+  }
+}

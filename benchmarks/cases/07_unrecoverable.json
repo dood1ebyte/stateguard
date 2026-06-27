@@ -1,0 +1,17 @@
+{
+  "name": "unrecoverable_unrelated_field_names",
+  "description": "Field names share no structural similarity with the contract's declared fields and there is no alias or default to fall back on; no strategy can safely propose a repair. Proves StateGuard fails safely rather than guessing.",
+  "expected_schema": {
+    "fields": [
+      {"path": "temperature", "type": "float"},
+      {"path": "humidity", "type": "integer"}
+    ]
+  },
+  "broken_payload": {
+    "xyz": 31.5,
+    "abc": 80
+  },
+  "expected_result": {
+    "status": "failed"
+  }
+}

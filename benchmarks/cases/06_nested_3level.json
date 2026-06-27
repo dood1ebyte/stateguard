@@ -1,0 +1,40 @@
+{
+  "name": "nested_3level_country_code_fuzzy",
+  "description": "A depth-3 nested field (root.address.country.code) is returned under a slightly different name; proves StateGuard's officially validated maximum nesting depth works end-to-end through the CLI/benchmark adapter path, not just the Pydantic adapter.",
+  "expected_schema": {
+    "fields": [
+      {"path": "name", "type": "string"},
+      {
+        "path": "address",
+        "type": "object",
+        "nested": {
+          "fields": [
+            {"path": "city", "type": "string"},
+            {
+              "path": "country",
+              "type": "object",
+              "nested": {
+                "fields": [
+                  {"path": "code", "type": "string"}
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "broken_payload": {
+    "name": "Alice",
+    "address": {
+      "city": "Mumbai",
+      "country": {
+        "cod": "IN"
+      }
+    }
+  },
+  "expected_result": {
+    "status": "success",
+    "min_confidence": 0.9
+  }
+}

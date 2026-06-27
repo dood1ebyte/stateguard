@@ -1,0 +1,18 @@
+{
+  "name": "type_coercion_string_to_float",
+  "description": "A tool returns numeric values as strings; TypeCoercionStrategy should cast them to the contract's declared types.",
+  "expected_schema": {
+    "fields": [
+      {"path": "temperature", "type": "float"},
+      {"path": "humidity", "type": "integer"}
+    ]
+  },
+  "broken_payload": {
+    "temperature": "31.5",
+    "humidity": "80"
+  },
+  "expected_result": {
+    "status": "success",
+    "min_confidence": 0.9
+  }
+}

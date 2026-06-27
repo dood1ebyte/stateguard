@@ -1,0 +1,383 @@
+"""
+The canonical living red test.
+
+This file defines the complete end-to-end behaviour of ContractGuard V1
+in concrete, executable terms.  Every test in this file is FAILING until
+M8 (guard.py + PydanticAdapter) is complete.
+
+Do not mark these tests as xfail or skip.
+They are intentionally RED — they exist to make "done" unambiguous.
+
+Repair scenario tested here
+----------------------------
+Schema  : Weather(temperature: float, humidity: int)
+Input   : {"temp_celsius": 31.5, "humidity": 80}
+Expected: RepairStatus.SUCCESS, {"temperature": 31.5, "humidity": 80}
+Strategy: FuzzyFieldMatchStrategy detects temp_celsius ≈ temperature
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from stateguard.core.errors.results import RepairStatus
+
+
+# ---------------------------------------------------------------------------
+# Helper: import guard — makes test FAIL (not ERROR) when M8 is pending
+# ---------------------------------------------------------------------------
+
+
+def _require_guard() -> Any:
+    """
+    Import ContractGuard.  If it is not yet implemented, fail the test
+    with a clear message rather than raising an unhandled ImportError.
+    """
+    try:
+        from stateguard import ContractGuard  # noqa: PLC0415
+        return ContractGuard
+    except (ImportError, AttributeError) as exc:
+        pytest.fail(
+            f"ContractGuard is not yet available (M8 pending): {exc}",
+            pytrace=False,
+        )
+
+
+def _require_pydantic_adapter() -> Any:
+    """
+    Import PydanticAdapter.  Fails the test if not yet implemented.
+    """
+    try:
+        from stateguard.adapters.pydantic import PydanticAdapter  # noqa: PLC0415
+        return PydanticAdapter
+    except (ImportError, AttributeError) as exc:
+        pytest.fail(
+            f"PydanticAdapter is not yet available (M7 pending): {exc}",
+            pytrace=False,
+        )
+
+
+def _require_pydantic() -> Any:
+    """Skip the test if pydantic itself is not installed."""
+    pydantic = pytest.importorskip("pydantic", reason="pydantic not installed")
+    return pydantic
+
+
+# ===========================================================================
+# Fuzzy rename repair — the canonical scenario
+# ===========================================================================
+
+
+@pytest.mark.integration
+def test_weather_fuzzy_rename_returns_success() -> None:
+    """FuzzyFieldMatchStrategy renames temp_celsius → temperature."""
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class Weather(pydantic.BaseModel):
+        temperature: float
+        humidity: int
+
+    guard = ContractGuard.with_pydantic()
+    result = guard.repair(Weather, {"temp_celsius": 31.5, "humidity": 80})
+
+    assert result.status is RepairStatus.SUCCESS
+
+
+@pytest.mark.integration
+def test_weather_fuzzy_rename_repaired_output_correct() -> None:
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class Weather(pydantic.BaseModel):
+        temperature: float
+        humidity: int
+
+    guard = ContractGuard.with_pydantic()
+    result = guard.repair(Weather, {"temp_celsius": 31.5, "humidity": 80})
+
+    # On SUCCESS, repaired_output is the framework-native object (a
+    # validated Weather instance), not a plain dict — see ContractGuard.repair.
+    assert isinstance(result.repaired_output, Weather)
+    assert result.repaired_output.temperature == 31.5
+    assert result.repaired_output.humidity == 80
+
+
+@pytest.mark.integration
+def test_weather_fuzzy_rename_no_remaining_violations() -> None:
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class Weather(pydantic.BaseModel):
+        temperature: float
+        humidity: int
+
+    guard = ContractGuard.with_pydantic()
+    result = guard.repair(Weather, {"temp_celsius": 31.5, "humidity": 80})
+
+    assert result.remaining_violations == []
+
+
+@pytest.mark.integration
+def test_weather_fuzzy_rename_single_attempt() -> None:
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class Weather(pydantic.BaseModel):
+        temperature: float
+        humidity: int
+
+    guard = ContractGuard.with_pydantic()
+    result = guard.repair(Weather, {"temp_celsius": 31.5, "humidity": 80})
+
+    assert len(result.attempts) == 1
+
+
+@pytest.mark.integration
+def test_weather_fuzzy_rename_strategy_name_recorded() -> None:
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class Weather(pydantic.BaseModel):
+        temperature: float
+        humidity: int
+
+    guard = ContractGuard.with_pydantic()
+    result = guard.repair(Weather, {"temp_celsius": 31.5, "humidity": 80})
+
+    assert result.attempts[0].strategy_name == "FuzzyFieldMatchStrategy"
+
+
+@pytest.mark.integration
+def test_weather_fuzzy_rename_original_input_preserved() -> None:
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class Weather(pydantic.BaseModel):
+        temperature: float
+        humidity: int
+
+    original = {"temp_celsius": 31.5, "humidity": 80}
+    guard = ContractGuard.with_pydantic()
+    result = guard.repair(Weather, original)
+
+    assert result.original_input == {"temp_celsius": 31.5, "humidity": 80}
+    # The caller's dict must not be mutated
+    assert original == {"temp_celsius": 31.5, "humidity": 80}
+
+
+@pytest.mark.integration
+def test_weather_fuzzy_rename_returns_pydantic_model() -> None:
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class Weather(pydantic.BaseModel):
+        temperature: float
+        humidity: int
+
+    guard = ContractGuard.with_pydantic()
+    repaired = guard.repair(Weather, {"temp_celsius": 31.5, "humidity": 80})
+
+    assert repaired.is_success
+    model = repaired.repaired_output
+    # The engine returns a validated BaseModel instance via PydanticAdapter.wrap
+    assert isinstance(model, Weather) or isinstance(model, dict)
+
+
+# ===========================================================================
+# Already-valid input
+# ===========================================================================
+
+
+@pytest.mark.integration
+def test_already_valid_input_returns_already_valid_status() -> None:
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class Weather(pydantic.BaseModel):
+        temperature: float
+        humidity: int
+
+    guard = ContractGuard.with_pydantic()
+    result = guard.repair(Weather, {"temperature": 31.5, "humidity": 80})
+
+    assert result.status is RepairStatus.ALREADY_VALID
+
+
+@pytest.mark.integration
+def test_already_valid_input_has_no_attempts() -> None:
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class Weather(pydantic.BaseModel):
+        temperature: float
+        humidity: int
+
+    guard = ContractGuard.with_pydantic()
+    result = guard.repair(Weather, {"temperature": 31.5, "humidity": 80})
+
+    assert result.attempts == []
+
+
+# ===========================================================================
+# Exact alias repair
+# ===========================================================================
+
+
+@pytest.mark.integration
+def test_exact_alias_repair_returns_success() -> None:
+    """
+    ExactAliasStrategy fires when a tool returns the Python attribute name
+    instead of the schema's declared alias.
+
+    PydanticContractExtractor sets the contract's field path to the
+    declared alias ("temp") -- that is what model_validate actually
+    expects as input. Supplying "temp" directly would already be valid
+    with no repair needed. The repair scenario this strategy targets is
+    the reverse: a tool that returns "temperature" (the Python attribute
+    name) instead of "temp" (the alias) is repaired by renaming it back.
+    """
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class WeatherAliased(pydantic.BaseModel):
+        temperature: float = pydantic.Field(alias="temp")
+        humidity: int
+
+    guard = ContractGuard.with_pydantic()
+    result = guard.repair(WeatherAliased, {"temperature": 31.5, "humidity": 80})
+
+    assert result.status is RepairStatus.SUCCESS
+    assert result.attempts[0].strategy_name == "ExactAliasStrategy"
+
+
+# ===========================================================================
+# Type coercion repair
+# ===========================================================================
+
+
+@pytest.mark.integration
+def test_type_coercion_string_to_float_returns_success() -> None:
+    """TypeCoercionStrategy repairs '31.5' → 31.5 for a float field."""
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class Weather(pydantic.BaseModel):
+        temperature: float
+        humidity: int
+
+    guard = ContractGuard.with_pydantic()
+    result = guard.repair(Weather, {"temperature": "31.5", "humidity": 80})
+
+    assert result.status is RepairStatus.SUCCESS
+
+
+# ===========================================================================
+# Default value fill repair
+# ===========================================================================
+
+
+@pytest.mark.integration
+def test_default_fill_returns_success() -> None:
+    """
+    A field with a Pydantic-declared default is extracted as optional
+    (required=False) and auto-filled by Pydantic's own model_validate --
+    so this scenario is ALREADY_VALID with no repair engine intervention.
+
+    DefaultValueFillStrategy itself targets adapters where "required" and
+    "default" can coexist independently (e.g. JSON Schema-style schemas,
+    where a field can be both in the "required" list and carry a
+    "default"). For the Pydantic adapter specifically, a declared default
+    always makes the field optional, so the strategy is exercised at the
+    engine/strategy unit level instead -- see
+    tests/core/strategies/test_default_fill_strategy.py and
+    tests/core/test_engine.py::TestPartialRepair.
+    """
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class WeatherWithDefault(pydantic.BaseModel):
+        temperature: float
+        humidity: int = 60
+
+    guard = ContractGuard.with_pydantic()
+    result = guard.repair(WeatherWithDefault, {"temperature": 31.5})
+
+    assert result.status is RepairStatus.ALREADY_VALID
+    assert result.repaired_output.humidity == 60
+
+
+# ===========================================================================
+# Unrecoverable failure
+# ===========================================================================
+
+
+@pytest.mark.integration
+def test_unrecoverable_violation_returns_failed() -> None:
+    """Completely unrelated field names cannot be repaired → FAILED."""
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class Weather(pydantic.BaseModel):
+        temperature: float
+        humidity: int
+
+    guard = ContractGuard.with_pydantic()
+    # 'xyz' and 'abc' have no fuzzy similarity to 'temperature' or 'humidity'
+    result = guard.repair(Weather, {"xyz": 31.5, "abc": 80})
+
+    assert result.status is RepairStatus.FAILED
+    assert result.repaired_output is None
+
+
+# ===========================================================================
+# Audit trail
+# ===========================================================================
+
+
+@pytest.mark.integration
+def test_repair_log_is_non_empty_on_success() -> None:
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class Weather(pydantic.BaseModel):
+        temperature: float
+        humidity: int
+
+    guard = ContractGuard.with_pydantic()
+    result = guard.repair(Weather, {"temp_celsius": 31.5, "humidity": 80})
+
+    assert len(result.repair_log) > 0
+
+
+@pytest.mark.integration
+def test_contract_id_is_set_on_result() -> None:
+    ContractGuard = _require_guard()
+    _require_pydantic_adapter()
+    pydantic = _require_pydantic()
+
+    class Weather(pydantic.BaseModel):
+        temperature: float
+        humidity: int
+
+    guard = ContractGuard.with_pydantic()
+    result = guard.repair(Weather, {"temp_celsius": 31.5, "humidity": 80})
+
+    assert result.contract_id
+    assert isinstance(result.contract_id, str)
