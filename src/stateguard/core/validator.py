@@ -85,9 +85,7 @@ class ContractValidator:
         self._validate_fields(contract, data, prefix="", violations=violations)
         self._detect_unexpected(contract, data, prefix="", violations=violations)
 
-        is_valid = not any(
-            v.severity is ViolationSeverity.ERROR for v in violations
-        )
+        is_valid = not any(v.severity is ViolationSeverity.ERROR for v in violations)
         return ValidationResult(
             is_valid=is_valid,
             violations=violations,
@@ -163,8 +161,7 @@ class ContractValidator:
                         violation_type=ViolationType.STRUCTURAL_MISMATCH,
                         severity=ViolationSeverity.ERROR,
                         message=(
-                            f"Field '{full_path}' expected an object, "
-                            f"got {type(value).__name__}."
+                            f"Field '{full_path}' expected an object, got {type(value).__name__}."
                         ),
                         expected_type=FieldType.OBJECT,
                         received_value=value,
@@ -197,8 +194,7 @@ class ContractValidator:
                         violation_type=ViolationType.TYPE_MISMATCH,
                         severity=ViolationSeverity.ERROR,
                         message=(
-                            f"Field '{full_path}' expected an array, "
-                            f"got {type(value).__name__}."
+                            f"Field '{full_path}' expected an array, got {type(value).__name__}."
                         ),
                         expected_type=FieldType.ARRAY,
                         received_value=value,
@@ -261,11 +257,7 @@ class ContractValidator:
     ) -> None:
         """Emit UNEXPECTED_FIELD for keys in *data* not declared by *contract*."""
         known_local_names = {self._local_name(f.path) for f in contract.fields}
-        severity = (
-            ViolationSeverity.ERROR
-            if contract.strict_mode
-            else ViolationSeverity.WARNING
-        )
+        severity = ViolationSeverity.ERROR if contract.strict_mode else ViolationSeverity.WARNING
         for key in data:
             if key not in known_local_names:
                 full_path = self._full_path(prefix, key)
@@ -275,8 +267,7 @@ class ContractValidator:
                         violation_type=ViolationType.UNEXPECTED_FIELD,
                         severity=severity,
                         message=(
-                            f"Unexpected field '{full_path}' is not declared "
-                            f"in the contract."
+                            f"Unexpected field '{full_path}' is not declared in the contract."
                         ),
                         received_value=data[key],
                     )
@@ -300,9 +291,7 @@ class ContractValidator:
                 # in _validate_field. A non-None value always satisfies it.
                 continue
 
-            violation = self._check_single_constraint(
-                constraint, value, full_path, field_spec
-            )
+            violation = self._check_single_constraint(constraint, value, full_path, field_spec)
             if violation is not None:
                 violations.append(violation)
 
@@ -321,8 +310,7 @@ class ContractValidator:
             if isinstance(value, _NUMERIC_TYPES) and value < bound:
                 return self._constraint_violation(
                     full_path,
-                    f"Field '{full_path}' value {value!r} is below the "
-                    f"minimum of {bound!r}.",
+                    f"Field '{full_path}' value {value!r} is below the minimum of {bound!r}.",
                     bound,
                     value,
                     field_spec,
@@ -332,8 +320,7 @@ class ContractValidator:
             if isinstance(value, _NUMERIC_TYPES) and value > bound:
                 return self._constraint_violation(
                     full_path,
-                    f"Field '{full_path}' value {value!r} exceeds the "
-                    f"maximum of {bound!r}.",
+                    f"Field '{full_path}' value {value!r} exceeds the maximum of {bound!r}.",
                     bound,
                     value,
                     field_spec,
@@ -365,8 +352,7 @@ class ContractValidator:
             if isinstance(value, str) and re.match(bound, value) is None:
                 return self._constraint_violation(
                     full_path,
-                    f"Field '{full_path}' value {value!r} does not match "
-                    f"pattern {bound!r}.",
+                    f"Field '{full_path}' value {value!r} does not match pattern {bound!r}.",
                     bound,
                     value,
                     field_spec,
@@ -375,8 +361,7 @@ class ContractValidator:
         elif ctype is FieldConstraintType.ENUM_VALUES and value not in bound:
             return self._constraint_violation(
                 full_path,
-                f"Field '{full_path}' value {value!r} is not one of "
-                f"the allowed values {bound!r}.",
+                f"Field '{full_path}' value {value!r} is not one of the allowed values {bound!r}.",
                 bound,
                 value,
                 field_spec,

@@ -81,7 +81,6 @@ FAILED_CASE = {
 
 
 class TestLoadCases:
-
     def test_loads_all_json_files(self, tmp_path: Path) -> None:
         _write_case(tmp_path, "a.json", SUCCESS_CASE)
         _write_case(tmp_path, "b.json", FAILED_CASE)
@@ -116,7 +115,6 @@ class TestLoadCases:
 
 
 class TestRunCase:
-
     def test_success_case_passes(self) -> None:
         outcome = runner.run_case(SUCCESS_CASE)
         assert outcome.passed is True
@@ -201,7 +199,6 @@ class TestRunCase:
 
 
 class TestRunBenchmark:
-
     def test_aggregates_total_cases(self) -> None:
         summary = runner.run_benchmark([SUCCESS_CASE, ALREADY_VALID_CASE, FAILED_CASE])
         assert summary.total_cases == 3
@@ -245,7 +242,9 @@ class TestRunBenchmark:
         summary = runner.run_benchmark([SUCCESS_CASE, FAILED_CASE, ALREADY_VALID_CASE])
         names = [o.name for o in summary.outcomes]
         assert names == [
-            "fuzzy_rename_test", "unrecoverable_test", "already_valid_test",
+            "fuzzy_rename_test",
+            "unrecoverable_test",
+            "already_valid_test",
         ]
 
     def test_timestamp_is_iso_format(self) -> None:
@@ -261,13 +260,18 @@ class TestRunBenchmark:
 
 
 class TestSummaryToDict:
-
     def test_to_dict_has_required_keys(self) -> None:
         summary = runner.run_benchmark([SUCCESS_CASE])
         d = summary.to_dict()
         for key in (
-            "timestamp", "total_cases", "passed_cases", "failed_cases",
-            "repaired_cases", "repair_rate", "average_confidence", "outcomes",
+            "timestamp",
+            "total_cases",
+            "passed_cases",
+            "failed_cases",
+            "repaired_cases",
+            "repair_rate",
+            "average_confidence",
+            "outcomes",
         ):
             assert key in d
 
@@ -279,8 +283,13 @@ class TestSummaryToDict:
         summary = runner.run_benchmark([SUCCESS_CASE])
         outcome_dict = summary.to_dict()["outcomes"][0]
         for key in (
-            "name", "description", "expected_status", "actual_status",
-            "passed", "average_confidence", "error",
+            "name",
+            "description",
+            "expected_status",
+            "actual_status",
+            "passed",
+            "average_confidence",
+            "error",
         ):
             assert key in outcome_dict
 
@@ -291,7 +300,6 @@ class TestSummaryToDict:
 
 
 class TestWriteResults:
-
     def test_creates_results_directory(self, tmp_path: Path) -> None:
         results_dir = tmp_path / "results"
         summary = runner.run_benchmark([SUCCESS_CASE])
@@ -320,7 +328,6 @@ class TestWriteResults:
 
 
 class TestPrintSummary:
-
     def test_print_summary_does_not_raise(self, capsys: pytest.CaptureFixture) -> None:
         summary = runner.run_benchmark([SUCCESS_CASE, FAILED_CASE, ALREADY_VALID_CASE])
         runner.print_summary(summary)
@@ -357,17 +364,20 @@ class TestPrintSummary:
 
 
 class TestMain:
-
     def test_main_returns_zero_on_all_passing(self, tmp_path: Path) -> None:
         cases_dir = tmp_path / "cases"
         cases_dir.mkdir()
         _write_case(cases_dir, "a.json", SUCCESS_CASE)
         results_dir = tmp_path / "results"
 
-        exit_code = runner.main([
-            "--cases-dir", str(cases_dir),
-            "--results-dir", str(results_dir),
-        ])
+        exit_code = runner.main(
+            [
+                "--cases-dir",
+                str(cases_dir),
+                "--results-dir",
+                str(results_dir),
+            ]
+        )
         assert exit_code == 0
 
     def test_main_returns_one_on_failure(self, tmp_path: Path) -> None:
@@ -378,10 +388,14 @@ class TestMain:
         _write_case(cases_dir, "a.json", bad_case)
         results_dir = tmp_path / "results"
 
-        exit_code = runner.main([
-            "--cases-dir", str(cases_dir),
-            "--results-dir", str(results_dir),
-        ])
+        exit_code = runner.main(
+            [
+                "--cases-dir",
+                str(cases_dir),
+                "--results-dir",
+                str(results_dir),
+            ]
+        )
         assert exit_code == 1
 
     def test_main_returns_one_on_empty_cases_dir(self, tmp_path: Path) -> None:
@@ -406,11 +420,15 @@ class TestMain:
         _write_case(cases_dir, "a.json", SUCCESS_CASE)
         results_dir = tmp_path / "results"
 
-        runner.main([
-            "--cases-dir", str(cases_dir),
-            "--results-dir", str(results_dir),
-            "--no-write",
-        ])
+        runner.main(
+            [
+                "--cases-dir",
+                str(cases_dir),
+                "--results-dir",
+                str(results_dir),
+                "--no-write",
+            ]
+        )
         assert not results_dir.exists()
 
     def test_main_verbose_flag_accepted(
@@ -421,11 +439,15 @@ class TestMain:
         _write_case(cases_dir, "a.json", SUCCESS_CASE)
         results_dir = tmp_path / "results"
 
-        exit_code = runner.main([
-            "--cases-dir", str(cases_dir),
-            "--results-dir", str(results_dir),
-            "--verbose",
-        ])
+        exit_code = runner.main(
+            [
+                "--cases-dir",
+                str(cases_dir),
+                "--results-dir",
+                str(results_dir),
+                "--verbose",
+            ]
+        )
         assert exit_code == 0
         out = capsys.readouterr().out
         assert "test case" in out
@@ -437,7 +459,6 @@ class TestMain:
 
 
 class TestRealBenchmarkCases:
-
     def test_all_shipped_cases_load_without_error(self) -> None:
         cases_dir = _REPO_ROOT / "benchmarks" / "cases"
         cases = runner.load_cases(cases_dir)

@@ -24,7 +24,6 @@ from tests.conftest import make_violation
 
 
 class TestLevenshteinDistance:
-
     def test_identical_strings(self) -> None:
         assert _levenshtein_distance("hello", "hello") == 0
 
@@ -83,7 +82,6 @@ class TestLevenshteinDistance:
 
 
 class TestNormalizedScore:
-
     def test_identical_strings_score_one(self) -> None:
         assert _normalized_score("hello", "hello") == 1.0
 
@@ -100,9 +98,7 @@ class TestNormalizedScore:
         assert _normalized_score("a", "b") == 0.0
 
     def test_is_symmetric(self) -> None:
-        assert _normalized_score("user_id", "userId") == _normalized_score(
-            "userId", "user_id"
-        )
+        assert _normalized_score("user_id", "userId") == _normalized_score("userId", "user_id")
 
     def test_score_is_in_unit_interval(self) -> None:
         for a, b in [
@@ -138,7 +134,6 @@ class TestNormalizedScore:
 
 
 class TestTokenPrefixBoost:
-
     def test_temp_celsius_vs_temperature(self) -> None:
         """The motivating example: 'temp' is a token-prefix of 'temperature'."""
         score = _token_prefix_boost("temperature", "temp_celsius")
@@ -188,7 +183,6 @@ class TestTokenPrefixBoost:
 
 
 class TestCombinedScore:
-
     def test_temp_celsius_clears_default_threshold(self) -> None:
         """The canonical scenario: combined score clears the engine's
         default min_confidence_threshold (0.7)."""
@@ -220,7 +214,6 @@ class TestCombinedScore:
 
 
 class TestIdentity:
-
     def test_name(self) -> None:
         assert FuzzyFieldMatchStrategy().name == "FuzzyFieldMatchStrategy"
 
@@ -246,7 +239,6 @@ class TestIdentity:
 
 
 class TestCanHandle:
-
     def test_true_with_missing_and_unexpected(self) -> None:
         missing = make_violation(
             field_path="city", violation_type=ViolationType.MISSING_REQUIRED_FIELD
@@ -298,7 +290,6 @@ def make_contract() -> ContractSpec:
 
 
 class TestProposeSingleMatch:
-
     def test_high_confidence_match_proposes_rename(self) -> None:
         """'cty' -> 'city' scores 0.75, above default threshold 0.7,
         with no second candidate -> no collision."""
@@ -348,9 +339,7 @@ class TestProposeSingleMatch:
             severity=ViolationSeverity.WARNING,
         )
         strategy = FuzzyFieldMatchStrategy()
-        ops = strategy.propose(
-            [missing, unexpected], make_contract(), {"zipcode": "400001"}
-        )
+        ops = strategy.propose([missing, unexpected], make_contract(), {"zipcode": "400001"})
         assert len(ops) == 1
         assert ops[0].confidence == pytest.approx(0.875)
         assert ops[0].source_path == "zipcode"
@@ -363,7 +352,6 @@ class TestProposeSingleMatch:
 
 
 class TestProposeBelowThreshold:
-
     def test_score_below_threshold_proposes_nothing(self) -> None:
         """'humidity' -> 'temperature' scores 0.18, well below 0.7."""
         missing = make_violation(
@@ -376,9 +364,7 @@ class TestProposeBelowThreshold:
             severity=ViolationSeverity.WARNING,
         )
         strategy = FuzzyFieldMatchStrategy()
-        ops = strategy.propose(
-            [missing, unexpected], make_contract(), {"humidity": 80}
-        )
+        ops = strategy.propose([missing, unexpected], make_contract(), {"humidity": 80})
         assert ops == []
 
     def test_completely_dissimilar_single_chars(self) -> None:
@@ -406,9 +392,7 @@ class TestProposeBelowThreshold:
             severity=ViolationSeverity.WARNING,
         )
         strategy = FuzzyFieldMatchStrategy(min_confidence_threshold=0.1)
-        ops = strategy.propose(
-            [missing, unexpected], make_contract(), {"humidity": 80}
-        )
+        ops = strategy.propose([missing, unexpected], make_contract(), {"humidity": 80})
         assert len(ops) == 1
         assert ops[0].confidence == pytest.approx(0.18181818181818177)
 
@@ -419,7 +403,6 @@ class TestProposeBelowThreshold:
 
 
 class TestProposeCollision:
-
     def test_collision_proposes_nothing(self) -> None:
         """
         'userId' and 'usr_id' both score 0.8571 against 'user_id' —
@@ -561,7 +544,6 @@ class TestProposeCollision:
 
 
 class TestProposeMultipleMissing:
-
     def test_two_missing_two_unexpected_each_matched(self) -> None:
         missing_city = make_violation(
             field_path="city", violation_type=ViolationType.MISSING_REQUIRED_FIELD
@@ -658,7 +640,6 @@ class TestProposeMultipleMissing:
 
 
 class TestProposeSelfMatchGuard:
-
     def test_identical_name_never_matches_itself(self) -> None:
         """
         If a missing field's name is identical to an unexpected key's name
@@ -701,9 +682,7 @@ class TestProposeSelfMatchGuard:
             severity=ViolationSeverity.WARNING,
         )
         strategy = FuzzyFieldMatchStrategy()
-        ops = strategy.propose(
-            [missing, unexpected_self], make_contract(), {"duplicate_name": 1}
-        )
+        ops = strategy.propose([missing, unexpected_self], make_contract(), {"duplicate_name": 1})
         assert ops == []
 
 
@@ -713,7 +692,6 @@ class TestProposeSelfMatchGuard:
 
 
 class TestProposeEmptyInputs:
-
     def test_no_violations_proposes_nothing(self) -> None:
         strategy = FuzzyFieldMatchStrategy()
         assert strategy.propose([], make_contract(), {}) == []
@@ -741,7 +719,6 @@ class TestProposeEmptyInputs:
 
 
 class TestProposeUnicode:
-
     def test_unicode_field_names(self) -> None:
         """'café' vs 'cafe' scores 0.75 (above default threshold)."""
         missing = make_violation(
@@ -753,9 +730,7 @@ class TestProposeUnicode:
             severity=ViolationSeverity.WARNING,
         )
         strategy = FuzzyFieldMatchStrategy()
-        ops = strategy.propose(
-            [missing, unexpected], make_contract(), {"cafe": "value"}
-        )
+        ops = strategy.propose([missing, unexpected], make_contract(), {"cafe": "value"})
         assert len(ops) == 1
         assert ops[0].confidence == pytest.approx(0.75)
 
@@ -766,26 +741,19 @@ class TestProposeUnicode:
 
 
 class TestInternalHelpers:
-
     def test_find_missing_fields(self) -> None:
-        v1 = make_violation(
-            field_path="a", violation_type=ViolationType.MISSING_REQUIRED_FIELD
-        )
+        v1 = make_violation(field_path="a", violation_type=ViolationType.MISSING_REQUIRED_FIELD)
         v2 = make_violation(
             field_path="b",
             violation_type=ViolationType.UNEXPECTED_FIELD,
             severity=ViolationSeverity.WARNING,
         )
-        v3 = make_violation(
-            field_path="c", violation_type=ViolationType.MISSING_REQUIRED_FIELD
-        )
+        v3 = make_violation(field_path="c", violation_type=ViolationType.MISSING_REQUIRED_FIELD)
         result = FuzzyFieldMatchStrategy._find_missing_fields([v1, v2, v3])
         assert result == ["a", "c"]
 
     def test_find_unexpected_keys(self) -> None:
-        v1 = make_violation(
-            field_path="a", violation_type=ViolationType.MISSING_REQUIRED_FIELD
-        )
+        v1 = make_violation(field_path="a", violation_type=ViolationType.MISSING_REQUIRED_FIELD)
         v2 = make_violation(
             field_path="b",
             violation_type=ViolationType.UNEXPECTED_FIELD,
@@ -795,9 +763,7 @@ class TestInternalHelpers:
         assert result == ["b"]
 
     def test_score_candidates_sorted_descending(self) -> None:
-        result = FuzzyFieldMatchStrategy._score_candidates(
-            "zip_code", ["postal_code", "zipcode"]
-        )
+        result = FuzzyFieldMatchStrategy._score_candidates("zip_code", ["postal_code", "zipcode"])
         assert [c for c, _ in result] == ["zipcode", "postal_code"]
         assert result[0][1] > result[1][1]
 
@@ -869,12 +835,10 @@ class TestNestedDepth2:
         """The shared 'address.' prefix raises the score well above what
         the bare field names ('city' vs 'cty', already 0.75) would give
         alone -- nesting context makes the match even more confident."""
-        bare_score = FuzzyFieldMatchStrategy._score_candidates(
-            "city", ["cty"]
-        )[0][1]
-        nested_score = FuzzyFieldMatchStrategy._score_candidates(
-            "address.city", ["address.cty"]
-        )[0][1]
+        bare_score = FuzzyFieldMatchStrategy._score_candidates("city", ["cty"])[0][1]
+        nested_score = FuzzyFieldMatchStrategy._score_candidates("address.city", ["address.cty"])[
+            0
+        ][1]
         assert nested_score > bare_score
 
     def test_depth2_cross_branch_not_matched_by_default(self) -> None:
@@ -892,9 +856,7 @@ class TestNestedDepth2:
         )
         strategy = FuzzyFieldMatchStrategy()
         data = {"billing": {"zipcode": "400001"}}
-        ops = strategy.propose(
-            [missing, unexpected_wrong_branch], make_contract(), data
-        )
+        ops = strategy.propose([missing, unexpected_wrong_branch], make_contract(), data)
         # "address.zip_code" vs "billing.zipcode" scores far below threshold
         # because their prefixes ("address." vs "billing.") differ entirely.
         assert ops == []
@@ -1034,9 +996,7 @@ class TestNestedDepth3:
             "branchA": {"cod": "x"},
             "branchB": {"cod": "y"},
         }
-        scores_for_a = strategy._score_candidates(
-            "branchA.code", ["branchA.cod", "branchB.cod"]
-        )
+        scores_for_a = strategy._score_candidates("branchA.code", ["branchA.cod", "branchB.cod"])
         # The same-branch candidate scores higher, but not by a wide
         # margin -- "branchA" and "branchB" differ by only one character.
         assert scores_for_a[0][0] == "branchA.cod"

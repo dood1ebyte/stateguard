@@ -19,11 +19,16 @@ from stateguard.core.models.field_types import (
 
 
 class TestFieldType:
-
     def test_all_expected_values_present(self) -> None:
         expected = {
-            "string", "integer", "float", "boolean",
-            "object", "array", "any", "null",
+            "string",
+            "integer",
+            "float",
+            "boolean",
+            "object",
+            "array",
+            "any",
+            "null",
         }
         assert {ft.value for ft in FieldType} == expected
 
@@ -100,12 +105,15 @@ class TestFieldType:
 
 
 class TestFieldConstraintType:
-
     def test_all_expected_values_present(self) -> None:
         expected = {
-            "minimum", "maximum",
-            "min_length", "max_length",
-            "pattern", "enum_values", "not_null",
+            "minimum",
+            "maximum",
+            "min_length",
+            "max_length",
+            "pattern",
+            "enum_values",
+            "not_null",
         }
         assert {fct.value for fct in FieldConstraintType} == expected
 
@@ -134,9 +142,7 @@ class TestFieldConstraintType:
         assert FieldConstraintType.NOT_NULL == "not_null"
 
     @pytest.mark.parametrize("member", list(FieldConstraintType))
-    def test_every_member_round_trips_via_value(
-        self, member: FieldConstraintType
-    ) -> None:
+    def test_every_member_round_trips_via_value(self, member: FieldConstraintType) -> None:
         assert FieldConstraintType(member.value) is member
 
     def test_invalid_value_raises(self) -> None:
@@ -150,7 +156,6 @@ class TestFieldConstraintType:
 
 
 class TestFieldConstraint:
-
     # --- Construction ---------------------------------------------------------
 
     def test_minimum_with_int(self) -> None:
@@ -243,7 +248,7 @@ class TestFieldConstraint:
 
     def test_can_be_stored_in_set(self) -> None:
         c1 = FieldConstraint(FieldConstraintType.MINIMUM, 0)
-        c2 = FieldConstraint(FieldConstraintType.MINIMUM, 0)   # duplicate
+        c2 = FieldConstraint(FieldConstraintType.MINIMUM, 0)  # duplicate
         c3 = FieldConstraint(FieldConstraintType.MAXIMUM, 100)
         s = {c1, c2, c3}
         assert len(s) == 2

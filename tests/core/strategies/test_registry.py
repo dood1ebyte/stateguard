@@ -19,7 +19,6 @@ from tests.conftest import MockRepairStrategy, make_contract_spec, make_violatio
 
 
 class TestConstructionAndOrdering:
-
     def test_empty_registry(self) -> None:
         registry = StrategyRegistry([])
         assert len(registry) == 0
@@ -84,12 +83,13 @@ class TestConstructionAndOrdering:
 
 
 class TestIterationAndLength:
-
     def test_len(self) -> None:
-        registry = StrategyRegistry([
-            MockRepairStrategy(name="A", priority=10),
-            MockRepairStrategy(name="B", priority=20),
-        ])
+        registry = StrategyRegistry(
+            [
+                MockRepairStrategy(name="A", priority=10),
+                MockRepairStrategy(name="B", priority=20),
+            ]
+        )
         assert len(registry) == 2
 
     def test_iteration_order_matches_priority(self) -> None:
@@ -100,9 +100,7 @@ class TestIterationAndLength:
         assert names == ["A", "B"]
 
     def test_iteration_yields_all_strategies(self) -> None:
-        strategies = [
-            MockRepairStrategy(name=f"S{i}", priority=i * 10) for i in range(5)
-        ]
+        strategies = [MockRepairStrategy(name=f"S{i}", priority=i * 10) for i in range(5)]
         registry = StrategyRegistry(strategies)
         assert len(list(registry)) == 5
 
@@ -113,7 +111,6 @@ class TestIterationAndLength:
 
 
 class TestGetApplicable:
-
     def test_no_strategies_returns_empty(self) -> None:
         registry = StrategyRegistry([])
         contract = make_contract_spec()
@@ -167,14 +164,15 @@ class TestGetApplicable:
 
 
 class TestConformance:
-
     def test_mock_strategy_satisfies_irepairstrategy(self) -> None:
         assert isinstance(MockRepairStrategy(), IRepairStrategy)
 
     def test_registry_strategies_are_irepairstrategy_instances(self) -> None:
-        registry = StrategyRegistry([
-            MockRepairStrategy(name="A", priority=10),
-            MockRepairStrategy(name="B", priority=20),
-        ])
+        registry = StrategyRegistry(
+            [
+                MockRepairStrategy(name="A", priority=10),
+                MockRepairStrategy(name="B", priority=20),
+            ]
+        )
         for s in registry:
             assert isinstance(s, IRepairStrategy)

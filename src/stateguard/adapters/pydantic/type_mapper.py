@@ -244,10 +244,7 @@ class PydanticTypeMapper:
         # tooling that introspects this module without pydantic installed.
         from pydantic import BaseModel  # noqa: PLC0415
 
-        return (
-            isinstance(annotation, type)
-            and issubclass(annotation, BaseModel)
-        )
+        return isinstance(annotation, type) and issubclass(annotation, BaseModel)
 
     @staticmethod
     def _literal_field_type(values: tuple[Any, ...]) -> FieldType:

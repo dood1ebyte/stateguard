@@ -186,9 +186,7 @@ class DictContractAdapter(IContractAdapter):
         required = bool(field_dict.get("required", True))
         default = field_dict.get("default", MISSING)
         known_aliases = list(field_dict.get("known_aliases", []))
-        constraints = [
-            cls._parse_constraint(c, path) for c in field_dict.get("constraints", [])
-        ]
+        constraints = [cls._parse_constraint(c, path) for c in field_dict.get("constraints", [])]
 
         item_type: FieldType | None = None
         if "item_type" in field_dict:
@@ -222,22 +220,17 @@ class DictContractAdapter(IContractAdapter):
     @staticmethod
     def _parse_field_type(type_str: Any, path: str) -> FieldType:
         if not isinstance(type_str, str):
-            raise ValueError(
-                f"Field '{path}': 'type' must be a string, got {type_str!r}."
-            )
+            raise ValueError(f"Field '{path}': 'type' must be a string, got {type_str!r}.")
         try:
             return FieldType(type_str)
         except ValueError as exc:
             valid = ", ".join(f"'{t.value}'" for t in FieldType)
             raise ValueError(
-                f"Field '{path}': unrecognized type {type_str!r}. "
-                f"Valid types are: {valid}."
+                f"Field '{path}': unrecognized type {type_str!r}. Valid types are: {valid}."
             ) from exc
 
     @staticmethod
-    def _parse_constraint(
-        constraint_dict: dict[str, Any], path: str
-    ) -> FieldConstraint:
+    def _parse_constraint(constraint_dict: dict[str, Any], path: str) -> FieldConstraint:
         if "type" not in constraint_dict or "value" not in constraint_dict:
             raise ValueError(
                 f"Field '{path}': each constraint must have 'type' and "

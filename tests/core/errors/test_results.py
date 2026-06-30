@@ -115,7 +115,6 @@ def _result(
 
 
 class TestRepairStatus:
-
     def test_all_expected_values_present(self) -> None:
         expected = {"success", "partial", "failed", "already_valid"}
         assert {rs.value for rs in RepairStatus} == expected
@@ -150,7 +149,6 @@ class TestRepairStatus:
 
 
 class TestValidationResult:
-
     def test_valid_construction(self) -> None:
         vr = ValidationResult(
             is_valid=True,
@@ -183,7 +181,10 @@ class TestValidationResult:
     def test_validated_at_explicit(self) -> None:
         ts = datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
         vr = ValidationResult(
-            is_valid=True, violations=[], raw_input={}, contract_id="c",
+            is_valid=True,
+            violations=[],
+            raw_input={},
+            contract_id="c",
             validated_at=ts,
         )
         assert vr.validated_at == ts
@@ -206,7 +207,10 @@ class TestValidationResult:
     def test_equality(self) -> None:
         vr1 = ValidationResult(is_valid=True, violations=[], raw_input={}, contract_id="c")
         vr2 = ValidationResult(
-            is_valid=True, violations=[], raw_input={}, contract_id="c",
+            is_valid=True,
+            violations=[],
+            raw_input={},
+            contract_id="c",
             validated_at=vr1.validated_at,
         )
         assert vr1 == vr2
@@ -218,7 +222,6 @@ class TestValidationResult:
 
 
 class TestRepairAttempt:
-
     def test_basic_construction(self) -> None:
         a = _attempt()
         assert a.attempt_number == 1
@@ -242,10 +245,15 @@ class TestRepairAttempt:
         fixed = "ffffffff-0000-4000-8000-000000000001"
         op = _rename_op()
         a = RepairAttempt(
-            attempt_number=1, strategy_name="S",
-            violations_targeted=[], proposed_operations=[op],
-            applied_operations=[op], rejected_operations=[],
-            data_before={}, data_after={}, succeeded=True,
+            attempt_number=1,
+            strategy_name="S",
+            violations_targeted=[],
+            proposed_operations=[op],
+            applied_operations=[op],
+            rejected_operations=[],
+            data_before={},
+            data_after={},
+            succeeded=True,
             attempt_id=fixed,
         )
         assert a.attempt_id == fixed
@@ -288,20 +296,28 @@ class TestRepairAttempt:
 
     def test_separate_applied_and_rejected(self) -> None:
         high_conf = FieldOperation(
-            op_type=FieldOpType.RENAME, target_path="temperature",
-            confidence=0.9, rationale="r", source_path="temp_celsius",
+            op_type=FieldOpType.RENAME,
+            target_path="temperature",
+            confidence=0.9,
+            rationale="r",
+            source_path="temp_celsius",
         )
         low_conf = FieldOperation(
-            op_type=FieldOpType.REMOVE, target_path="extra",
-            confidence=0.3, rationale="r",
+            op_type=FieldOpType.REMOVE,
+            target_path="extra",
+            confidence=0.3,
+            rationale="r",
         )
         a = RepairAttempt(
-            attempt_number=1, strategy_name="S",
+            attempt_number=1,
+            strategy_name="S",
             violations_targeted=[],
             proposed_operations=[high_conf, low_conf],
             applied_operations=[high_conf],
             rejected_operations=[low_conf],
-            data_before={}, data_after={}, succeeded=True,
+            data_before={},
+            data_after={},
+            succeeded=True,
         )
         assert len(a.proposed_operations) == 2
         assert len(a.applied_operations) == 1
@@ -314,7 +330,6 @@ class TestRepairAttempt:
 
 
 class TestRepairResultConstruction:
-
     def test_success_construction(self) -> None:
         rr = _result(
             status=RepairStatus.SUCCESS,
@@ -444,25 +459,24 @@ class TestRepairResultConstruction:
 
 
 class TestRepairResultProperties:
-
     @pytest.mark.parametrize(
         ("status", "prop", "expected"),
         [
-            (RepairStatus.SUCCESS,       "is_success",       True),
-            (RepairStatus.SUCCESS,       "is_partial",       False),
-            (RepairStatus.SUCCESS,       "is_failed",        False),
-            (RepairStatus.SUCCESS,       "is_already_valid", False),
-            (RepairStatus.PARTIAL,       "is_success",       False),
-            (RepairStatus.PARTIAL,       "is_partial",       True),
-            (RepairStatus.PARTIAL,       "is_failed",        False),
-            (RepairStatus.PARTIAL,       "is_already_valid", False),
-            (RepairStatus.FAILED,        "is_success",       False),
-            (RepairStatus.FAILED,        "is_partial",       False),
-            (RepairStatus.FAILED,        "is_failed",        True),
-            (RepairStatus.FAILED,        "is_already_valid", False),
-            (RepairStatus.ALREADY_VALID, "is_success",       False),
-            (RepairStatus.ALREADY_VALID, "is_partial",       False),
-            (RepairStatus.ALREADY_VALID, "is_failed",        False),
+            (RepairStatus.SUCCESS, "is_success", True),
+            (RepairStatus.SUCCESS, "is_partial", False),
+            (RepairStatus.SUCCESS, "is_failed", False),
+            (RepairStatus.SUCCESS, "is_already_valid", False),
+            (RepairStatus.PARTIAL, "is_success", False),
+            (RepairStatus.PARTIAL, "is_partial", True),
+            (RepairStatus.PARTIAL, "is_failed", False),
+            (RepairStatus.PARTIAL, "is_already_valid", False),
+            (RepairStatus.FAILED, "is_success", False),
+            (RepairStatus.FAILED, "is_partial", False),
+            (RepairStatus.FAILED, "is_failed", True),
+            (RepairStatus.FAILED, "is_already_valid", False),
+            (RepairStatus.ALREADY_VALID, "is_success", False),
+            (RepairStatus.ALREADY_VALID, "is_partial", False),
+            (RepairStatus.ALREADY_VALID, "is_failed", False),
             (RepairStatus.ALREADY_VALID, "is_already_valid", True),
         ],
     )
@@ -508,7 +522,6 @@ class TestRepairResultProperties:
 
 
 class TestRepairLogEntry:
-
     def test_construction(self) -> None:
         e = _log_entry()
         assert e.level is LogLevel.INFO
@@ -554,7 +567,6 @@ class TestRepairLogEntry:
 
 
 class TestRepairLogger:
-
     def test_starts_empty(self) -> None:
         logger = RepairLogger()
         assert logger.entries == []
@@ -626,7 +638,6 @@ class TestRepairLogger:
 
 
 class TestLogLevel:
-
     def test_all_expected_values(self) -> None:
         assert {ll.value for ll in LogLevel} == {"debug", "info", "warning", "error"}
 
@@ -644,12 +655,17 @@ class TestLogLevel:
 
 
 class TestTelemetryEventType:
-
     def test_all_expected_values_present(self) -> None:
         expected = {
-            "validation_started", "violation_detected", "repair_started",
-            "strategy_selected", "repair_attempt_started", "operation_applied",
-            "operation_rejected", "revalidation_started", "repair_completed",
+            "validation_started",
+            "violation_detected",
+            "repair_started",
+            "strategy_selected",
+            "repair_attempt_started",
+            "operation_applied",
+            "operation_rejected",
+            "revalidation_started",
+            "repair_completed",
             "repair_failed",
         }
         assert {t.value for t in TelemetryEventType} == expected
@@ -660,7 +676,6 @@ class TestTelemetryEventType:
 
 
 class TestTelemetryEvent:
-
     def test_construction(self) -> None:
         e = TelemetryEvent(
             event_type=TelemetryEventType.REPAIR_COMPLETED,
@@ -698,7 +713,6 @@ class TestTelemetryEvent:
 
 
 class TestNoopTelemetry:
-
     def test_emit_does_not_raise(self) -> None:
         noop = NoopTelemetry()
         event = TelemetryEvent(
@@ -718,6 +732,7 @@ class TestNoopTelemetry:
 
     def test_custom_hook_satisfies_protocol(self) -> None:
         """Any object with emit() satisfies ITelemetryHook (structural check)."""
+
         class CustomHook:
             def __init__(self) -> None:
                 self.received: list[TelemetryEvent] = []
@@ -728,9 +743,7 @@ class TestNoopTelemetry:
         hook = CustomHook()
         assert isinstance(hook, ITelemetryHook)
 
-        event = TelemetryEvent(
-            event_type=TelemetryEventType.REPAIR_STARTED, contract_id="c"
-        )
+        event = TelemetryEvent(event_type=TelemetryEventType.REPAIR_STARTED, contract_id="c")
         hook.emit(event)
         assert len(hook.received) == 1
         assert hook.received[0] is event

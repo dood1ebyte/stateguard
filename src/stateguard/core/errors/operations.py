@@ -120,10 +120,6 @@ class FieldOperation:
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.confidence <= 1.0):
-            raise ValueError(
-                f"confidence must be in [0.0, 1.0], got {self.confidence!r}"
-            )
+            raise ValueError(f"confidence must be in [0.0, 1.0], got {self.confidence!r}")
         if self.op_type is FieldOpType.RENAME and self.source_path is None:
-            raise ValueError(
-                "FieldOperation with op_type=RENAME requires source_path to be set."
-            )
+            raise ValueError("FieldOperation with op_type=RENAME requires source_path to be set.")

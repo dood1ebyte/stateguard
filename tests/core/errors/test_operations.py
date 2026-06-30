@@ -15,7 +15,6 @@ from stateguard.core.errors.operations import FieldOperation, FieldOpType
 
 
 class TestFieldOpType:
-
     def test_all_expected_values_present(self) -> None:
         expected = {"rename", "coerce", "set_default", "remove", "set_value"}
         assert {fot.value for fot in FieldOpType} == expected
@@ -82,7 +81,6 @@ def _remove(target: str = "unwanted", confidence: float = 1.0) -> FieldOperation
 
 
 class TestFieldOperationConstruction:
-
     def test_rename_stores_all_fields(self) -> None:
         op = _rename()
         assert op.op_type is FieldOpType.RENAME
@@ -191,7 +189,6 @@ class TestFieldOperationConstruction:
 
 
 class TestFieldOperationValidation:
-
     def test_confidence_above_one_raises(self) -> None:
         with pytest.raises(ValueError, match="confidence must be in"):
             _remove(confidence=1.001)
@@ -238,9 +235,7 @@ class TestFieldOperationValidation:
             FieldOpType.SET_VALUE,
         ],
     )
-    def test_non_rename_ops_do_not_require_source_path(
-        self, op_type: FieldOpType
-    ) -> None:
+    def test_non_rename_ops_do_not_require_source_path(self, op_type: FieldOpType) -> None:
         op = FieldOperation(
             op_type=op_type,
             target_path="some_field",
@@ -258,9 +253,7 @@ class TestFieldOperationValidation:
             FieldOpType.SET_VALUE,
         ],
     )
-    def test_non_rename_ops_accept_source_path_if_provided(
-        self, op_type: FieldOpType
-    ) -> None:
+    def test_non_rename_ops_accept_source_path_if_provided(self, op_type: FieldOpType) -> None:
         """source_path is optional for non-RENAME ops; providing it is allowed."""
         op = FieldOperation(
             op_type=op_type,
@@ -278,7 +271,6 @@ class TestFieldOperationValidation:
 
 
 class TestFieldOperationImmutability:
-
     def test_op_type_is_immutable(self) -> None:
         op = _rename()
         with pytest.raises(FrozenInstanceError):
@@ -327,7 +319,6 @@ class TestFieldOperationImmutability:
 
 
 class TestFieldOperationEquality:
-
     def test_identical_renames_are_equal(self) -> None:
         assert _rename() == _rename()
 
@@ -363,7 +354,6 @@ class TestFieldOperationEquality:
 
 
 class TestFieldOperationHashability:
-
     def test_is_hashable(self) -> None:
         h = hash(_rename())
         assert isinstance(h, int)
@@ -379,8 +369,8 @@ class TestFieldOperationHashability:
 
     def test_can_be_stored_in_set(self) -> None:
         op1 = _rename()
-        op2 = _rename()                      # duplicate
-        op3 = _rename(confidence=0.99)       # different
+        op2 = _rename()  # duplicate
+        op3 = _rename(confidence=0.99)  # different
         s = {op1, op2, op3}
         assert len(s) == 2
 
@@ -400,7 +390,6 @@ class TestFieldOperationHashability:
 
 
 class TestFieldOperationRepr:
-
     def test_repr_contains_class_name(self) -> None:
         assert "FieldOperation" in repr(_rename())
 
@@ -419,7 +408,6 @@ class TestFieldOperationRepr:
 
 
 class TestFieldOperationAllOpTypes:
-
     @pytest.mark.parametrize("op_type", list(FieldOpType))
     def test_every_op_type_is_constructable(self, op_type: FieldOpType) -> None:
         source = "src" if op_type is FieldOpType.RENAME else None
@@ -436,9 +424,7 @@ class TestFieldOperationAllOpTypes:
         "confidence",
         [0.0, 0.01, 0.5, 0.7, 0.99, 1.0],
     )
-    def test_boundary_and_typical_confidence_values(
-        self, confidence: float
-    ) -> None:
+    def test_boundary_and_typical_confidence_values(self, confidence: float) -> None:
         op = _remove(confidence=confidence)
         assert op.confidence == confidence
 
@@ -446,8 +432,6 @@ class TestFieldOperationAllOpTypes:
         "confidence",
         [-0.001, -1.0, 1.001, 2.0, float("inf")],
     )
-    def test_out_of_range_confidence_values_raise(
-        self, confidence: float
-    ) -> None:
+    def test_out_of_range_confidence_values_raise(self, confidence: float) -> None:
         with pytest.raises(ValueError):
             _remove(confidence=confidence)

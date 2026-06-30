@@ -25,9 +25,7 @@ def make_contract() -> ContractSpec:
     return ContractSpec(fields=[FieldSpec("placeholder", FieldType.STRING)])
 
 
-def _type_mismatch(
-    field_path: str, expected_type: FieldType, received_value: Any
-) -> Any:
+def _type_mismatch(field_path: str, expected_type: FieldType, received_value: Any) -> Any:
     return make_violation(
         field_path=field_path,
         violation_type=ViolationType.TYPE_MISMATCH,
@@ -43,7 +41,6 @@ def _type_mismatch(
 
 
 class TestIdentity:
-
     def test_name(self) -> None:
         assert TypeCoercionStrategy().name == "TypeCoercionStrategy"
 
@@ -57,7 +54,6 @@ class TestIdentity:
 
 
 class TestCanHandle:
-
     def test_true_with_type_mismatch(self) -> None:
         v = _type_mismatch("count", FieldType.INTEGER, "5")
         strategy = TypeCoercionStrategy()
@@ -82,7 +78,6 @@ class TestCanHandle:
 
 
 class TestStrToInt:
-
     def test_positive_digit_string_coerces(self) -> None:
         v = _type_mismatch("count", FieldType.INTEGER, "5")
         strategy = TypeCoercionStrategy()
@@ -138,7 +133,6 @@ class TestStrToInt:
 
 
 class TestStrToFloat:
-
     def test_decimal_string_coerces(self) -> None:
         v = _type_mismatch("temperature", FieldType.FLOAT, "31.5")
         strategy = TypeCoercionStrategy()
@@ -187,7 +181,6 @@ class TestStrToFloat:
 
 
 class TestIntToFloat:
-
     def test_int_always_coerces_to_float(self) -> None:
         v = _type_mismatch("temperature", FieldType.FLOAT, 30)
         strategy = TypeCoercionStrategy()
@@ -221,7 +214,6 @@ class TestIntToFloat:
 
 
 class TestStrToBool:
-
     @pytest.mark.parametrize("value", ["true", "TRUE", "True", "false", "FALSE", "1", "0"])
     def test_recognized_strings_coerce(self, value: str) -> None:
         v = _type_mismatch("active", FieldType.BOOLEAN, value)
@@ -256,7 +248,6 @@ class TestStrToBool:
 
 
 class TestUnsupportedCoercions:
-
     def test_int_to_string_not_coerced(self) -> None:
         v = _type_mismatch("name", FieldType.STRING, 123)
         strategy = TypeCoercionStrategy()
@@ -294,7 +285,6 @@ class TestUnsupportedCoercions:
 
 
 class TestProposeGuards:
-
     def test_non_type_mismatch_violation_ignored(self) -> None:
         v = make_violation(
             field_path="count",
@@ -333,7 +323,6 @@ class TestProposeGuards:
 
 
 class TestProposeNested:
-
     def test_nested_field_coercion(self) -> None:
         v = _type_mismatch("address.zip_code", FieldType.INTEGER, "400001")
         strategy = TypeCoercionStrategy()
@@ -403,7 +392,6 @@ class TestProposeNested:
 
 
 class TestGetNestedValue:
-
     def test_top_level_key(self) -> None:
         assert _get_nested_value({"a": 1}, "a") == 1
 
@@ -426,23 +414,17 @@ class TestGetNestedValue:
 
 
 class TestIsIntegerString:
-
     @pytest.mark.parametrize("value", ["0", "5", "100", "-5", "-100"])
     def test_valid_integer_strings(self, value: str) -> None:
         assert _is_integer_string(value) is True
 
-    @pytest.mark.parametrize(
-        "value", ["", "-", "--5", "5.0", "five", " 5", "5 ", "+5"]
-    )
+    @pytest.mark.parametrize("value", ["", "-", "--5", "5.0", "five", " 5", "5 ", "+5"])
     def test_invalid_integer_strings(self, value: str) -> None:
         assert _is_integer_string(value) is False
 
 
 class TestIsFloatString:
-
-    @pytest.mark.parametrize(
-        "value", ["0", "5", "3.14", "-3.14", "1e10", "1E-5", "  3.14  ", "+5"]
-    )
+    @pytest.mark.parametrize("value", ["0", "5", "3.14", "-3.14", "1e10", "1E-5", "  3.14  ", "+5"])
     def test_valid_float_strings(self, value: str) -> None:
         assert _is_float_string(value) is True
 
@@ -452,7 +434,6 @@ class TestIsFloatString:
 
 
 class TestCoercionConfidenceDirect:
-
     def test_str_to_integer_valid(self) -> None:
         assert _coercion_confidence("5", FieldType.INTEGER) == pytest.approx(0.95)
 

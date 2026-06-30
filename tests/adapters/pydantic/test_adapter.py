@@ -54,7 +54,6 @@ class WithDefaults(BaseModel):
 
 
 class TestConformance:
-
     def test_implements_icontractadapter(self, adapter: PydanticAdapter) -> None:
         assert isinstance(adapter, IContractAdapter)
 
@@ -74,7 +73,6 @@ class TestConformance:
 
 
 class TestExtractContract:
-
     def test_returns_contract_spec(self, adapter: PydanticAdapter) -> None:
         contract = adapter.extract_contract(Weather)
         assert isinstance(contract, ContractSpec)
@@ -88,9 +86,7 @@ class TestExtractContract:
         paths = {f.path for f in contract.fields}
         assert paths == {"temperature", "humidity"}
 
-    def test_non_basemodel_class_raises_type_error(
-        self, adapter: PydanticAdapter
-    ) -> None:
+    def test_non_basemodel_class_raises_type_error(self, adapter: PydanticAdapter) -> None:
         with pytest.raises(TypeError, match="type\\[BaseModel\\]"):
             adapter.extract_contract(dict)
 
@@ -98,9 +94,7 @@ class TestExtractContract:
         with pytest.raises(TypeError, match="type\\[BaseModel\\]"):
             adapter.extract_contract({"not": "a model"})
 
-    def test_basemodel_instance_raises_type_error(
-        self, adapter: PydanticAdapter
-    ) -> None:
+    def test_basemodel_instance_raises_type_error(self, adapter: PydanticAdapter) -> None:
         """An instance (not the class) is not a valid schema."""
         instance = Weather(temperature=1.0, humidity=2)
         with pytest.raises(TypeError, match="type\\[BaseModel\\]"):
@@ -120,7 +114,6 @@ class TestExtractContract:
 
 
 class TestValidateSuccess:
-
     def test_valid_data_returns_valid_result(self, adapter: PydanticAdapter) -> None:
         contract = adapter.extract_contract(Weather)
         result = adapter.validate(contract, {"temperature": 31.5, "humidity": 80})
@@ -144,9 +137,7 @@ class TestValidateSuccess:
         result = adapter.validate(contract, {"temperature": 30, "humidity": 80})
         assert result.is_valid is True
 
-    def test_missing_optional_field_with_default_is_valid(
-        self, adapter: PydanticAdapter
-    ) -> None:
+    def test_missing_optional_field_with_default_is_valid(self, adapter: PydanticAdapter) -> None:
         contract = adapter.extract_contract(WithDefaults)
         result = adapter.validate(contract, {"temperature": 31.5})
         assert result.is_valid is True
@@ -175,7 +166,6 @@ class TestValidateSuccess:
 
 
 class TestValidateFailure:
-
     def test_missing_required_field(self, adapter: PydanticAdapter) -> None:
         contract = adapter.extract_contract(Weather)
         result = adapter.validate(contract, {"humidity": 80})
@@ -188,9 +178,7 @@ class TestValidateFailure:
 
     def test_type_mismatch(self, adapter: PydanticAdapter) -> None:
         contract = adapter.extract_contract(Weather)
-        result = adapter.validate(
-            contract, {"temperature": [1, 2], "humidity": 80}
-        )
+        result = adapter.validate(contract, {"temperature": [1, 2], "humidity": 80})
         assert result.is_valid is False
         v = result.violations[0]
         assert v.field_path == "temperature"
@@ -215,9 +203,7 @@ class TestValidateFailure:
 
     def test_nested_missing_field(self, adapter: PydanticAdapter) -> None:
         contract = adapter.extract_contract(User)
-        result = adapter.validate(
-            contract, {"name": "Alice", "address": {"city": "Mumbai"}}
-        )
+        result = adapter.validate(contract, {"name": "Alice", "address": {"city": "Mumbai"}})
         assert result.is_valid is False
         v = result.violations[0]
         assert v.field_path == "address.zip_code"
@@ -247,7 +233,6 @@ class TestValidateFailure:
 
 
 class TestWrapSuccess:
-
     def test_returns_basemodel_instance(self, adapter: PydanticAdapter) -> None:
         contract = adapter.extract_contract(Weather)
         result = adapter.wrap(contract, {"temperature": 31.5, "humidity": 80})
@@ -288,24 +273,17 @@ class TestWrapSuccess:
 
 
 class TestWrapFailure:
-
-    def test_invalid_data_raises_runtime_error(
-        self, adapter: PydanticAdapter
-    ) -> None:
+    def test_invalid_data_raises_runtime_error(self, adapter: PydanticAdapter) -> None:
         contract = adapter.extract_contract(Weather)
         with pytest.raises(RuntimeError, match="failed to rehydrate"):
             adapter.wrap(contract, {"temperature": "not a number", "humidity": 80})
 
-    def test_missing_field_raises_runtime_error(
-        self, adapter: PydanticAdapter
-    ) -> None:
+    def test_missing_field_raises_runtime_error(self, adapter: PydanticAdapter) -> None:
         contract = adapter.extract_contract(Weather)
         with pytest.raises(RuntimeError):
             adapter.wrap(contract, {"temperature": 31.5})
 
-    def test_runtime_error_mentions_model_name(
-        self, adapter: PydanticAdapter
-    ) -> None:
+    def test_runtime_error_mentions_model_name(self, adapter: PydanticAdapter) -> None:
         contract = adapter.extract_contract(Weather)
         with pytest.raises(RuntimeError, match="Weather"):
             adapter.wrap(contract, {})
@@ -317,40 +295,27 @@ class TestWrapFailure:
 
 
 class TestModelClassValidation:
-
-    def test_validate_with_non_basemodel_source_ref_raises(
-        self, adapter: PydanticAdapter
-    ) -> None:
+    def test_validate_with_non_basemodel_source_ref_raises(self, adapter: PydanticAdapter) -> None:
         bad_contract = ContractSpec(
             fields=[FieldSpec("x", FieldType.STRING)], source_ref="not a model"
         )
         with pytest.raises(TypeError, match="source_ref"):
             adapter.validate(bad_contract, {"x": "y"})
 
-    def test_wrap_with_non_basemodel_source_ref_raises(
-        self, adapter: PydanticAdapter
-    ) -> None:
+    def test_wrap_with_non_basemodel_source_ref_raises(self, adapter: PydanticAdapter) -> None:
         bad_contract = ContractSpec(
             fields=[FieldSpec("x", FieldType.STRING)], source_ref="not a model"
         )
         with pytest.raises(TypeError, match="source_ref"):
             adapter.wrap(bad_contract, {"x": "y"})
 
-    def test_validate_with_none_source_ref_raises(
-        self, adapter: PydanticAdapter
-    ) -> None:
-        bad_contract = ContractSpec(
-            fields=[FieldSpec("x", FieldType.STRING)], source_ref=None
-        )
+    def test_validate_with_none_source_ref_raises(self, adapter: PydanticAdapter) -> None:
+        bad_contract = ContractSpec(fields=[FieldSpec("x", FieldType.STRING)], source_ref=None)
         with pytest.raises(TypeError, match="source_ref"):
             adapter.validate(bad_contract, {"x": "y"})
 
-    def test_wrap_with_dict_source_ref_raises(
-        self, adapter: PydanticAdapter
-    ) -> None:
-        bad_contract = ContractSpec(
-            fields=[FieldSpec("x", FieldType.STRING)], source_ref=dict
-        )
+    def test_wrap_with_dict_source_ref_raises(self, adapter: PydanticAdapter) -> None:
+        bad_contract = ContractSpec(fields=[FieldSpec("x", FieldType.STRING)], source_ref=dict)
         with pytest.raises(TypeError, match="source_ref"):
             adapter.wrap(bad_contract, {"x": "y"})
 
@@ -361,10 +326,7 @@ class TestModelClassValidation:
 
 
 class TestRoundTrip:
-
-    def test_extract_validate_wrap_round_trip(
-        self, adapter: PydanticAdapter
-    ) -> None:
+    def test_extract_validate_wrap_round_trip(self, adapter: PydanticAdapter) -> None:
         contract = adapter.extract_contract(Weather)
         data = {"temperature": 31.5, "humidity": 80}
 
@@ -374,9 +336,7 @@ class TestRoundTrip:
         model = adapter.wrap(contract, data)
         assert model.model_dump() == data
 
-    def test_round_trip_with_nested_and_defaults(
-        self, adapter: PydanticAdapter
-    ) -> None:
+    def test_round_trip_with_nested_and_defaults(self, adapter: PydanticAdapter) -> None:
         class Profile(BaseModel):
             bio: Optional[str] = None
             tags: List[str] = Field(default_factory=list)

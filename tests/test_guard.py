@@ -25,7 +25,6 @@ class Weather(BaseModel):
 
 
 class TestConstruction:
-
     def test_with_pydantic_returns_contractguard(self) -> None:
         guard = ContractGuard.with_pydantic()
         assert isinstance(guard, ContractGuard)
@@ -58,7 +57,6 @@ class TestConstruction:
 
 
 class TestRepairHistoryIntegration:
-
     def test_history_recorder_receives_result(self, tmp_path: Path) -> None:
         history_path = tmp_path / "repairs.jsonl"
         recorder = RepairHistoryRecorder(path=history_path)
@@ -123,7 +121,6 @@ class TestRepairHistoryIntegration:
 
 
 class TestValidate:
-
     def test_validate_valid_data(self) -> None:
         guard = ContractGuard.with_pydantic()
         result = guard.validate(Weather, {"temperature": 31.5, "humidity": 80})
@@ -157,9 +154,7 @@ class TestValidate:
         """validate() surfaces UNEXPECTED_FIELD via the merged validator,
         even though Pydantic alone (extra='ignore') would not."""
         guard = ContractGuard.with_pydantic()
-        result = guard.validate(
-            Weather, {"temperature": 31.5, "humidity": 80, "extra": "field"}
-        )
+        result = guard.validate(Weather, {"temperature": 31.5, "humidity": 80, "extra": "field"})
         violation_types = {v.violation_type.value for v in result.violations}
         assert "unexpected_field" in violation_types
 
@@ -170,10 +165,7 @@ class TestValidate:
 
 
 class TestWithPydanticImportError:
-
-    def test_import_error_message_mentions_extra(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_import_error_message_mentions_extra(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import builtins
 
         real_import = builtins.__import__
@@ -197,7 +189,6 @@ class TestWithPydanticImportError:
 
 
 class TestStrictModePropagation:
-
     def test_strict_mode_true_makes_extra_field_an_error(self) -> None:
         guard = ContractGuard.with_pydantic(config=GuardConfig(strict_mode=True))
         result = guard.repair(
@@ -209,9 +200,7 @@ class TestStrictModePropagation:
 
     def test_strict_mode_false_extra_field_is_already_valid(self) -> None:
         guard = ContractGuard.with_pydantic(config=GuardConfig(strict_mode=False))
-        result = guard.repair(
-            Weather, {"temperature": 31.5, "humidity": 80, "extra_field_xyz": 1}
-        )
+        result = guard.repair(Weather, {"temperature": 31.5, "humidity": 80, "extra_field_xyz": 1})
         assert result.status is RepairStatus.ALREADY_VALID
 
     def test_strict_mode_default_matches_guardconfig_default(self) -> None:

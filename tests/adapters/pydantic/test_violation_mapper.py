@@ -38,7 +38,6 @@ def _raise_and_map(model_class: type[BaseModel], data: dict) -> list:
 
 
 class TestLocToFieldPath:
-
     def test_single_segment(self) -> None:
         assert _loc_to_field_path(("temperature",)) == "temperature"
 
@@ -61,7 +60,6 @@ class TestLocToFieldPath:
 
 
 class TestClassify:
-
     def test_missing(self) -> None:
         assert _classify("missing") is ViolationType.MISSING_REQUIRED_FIELD
 
@@ -74,8 +72,14 @@ class TestClassify:
     @pytest.mark.parametrize(
         "error_type",
         [
-            "string_type", "int_type", "float_type", "bool_type",
-            "model_type", "list_type", "dict_type", "none_type",
+            "string_type",
+            "int_type",
+            "float_type",
+            "bool_type",
+            "model_type",
+            "list_type",
+            "dict_type",
+            "none_type",
         ],
     )
     def test_type_suffix(self, error_type: str) -> None:
@@ -91,8 +95,13 @@ class TestClassify:
     @pytest.mark.parametrize(
         "error_type",
         [
-            "greater_than", "greater_than_equal", "less_than", "less_than_equal",
-            "string_pattern_mismatch", "literal_error", "value_error",
+            "greater_than",
+            "greater_than_equal",
+            "less_than",
+            "less_than_equal",
+            "string_pattern_mismatch",
+            "literal_error",
+            "value_error",
         ],
     )
     def test_constraint_exact(self, error_type: str) -> None:
@@ -120,7 +129,6 @@ class TestClassify:
 
 
 class TestMapMissing:
-
     def test_single_missing_field(self) -> None:
         class Weather(BaseModel):
             temperature: float
@@ -162,9 +170,7 @@ class TestMapMissing:
             name: str
             address: Address
 
-        violations = _raise_and_map(
-            User, {"name": "Alice", "address": {"city": "Mumbai"}}
-        )
+        violations = _raise_and_map(User, {"name": "Alice", "address": {"city": "Mumbai"}})
         assert len(violations) == 1
         v = violations[0]
         assert v.field_path == "address.zip_code"
@@ -178,7 +184,6 @@ class TestMapMissing:
 
 
 class TestMapTypeMismatch:
-
     def test_string_type_error(self) -> None:
         class Weather(BaseModel):
             temperature: float
@@ -259,7 +264,6 @@ class TestMapTypeMismatch:
 
 
 class TestMapUnexpectedField:
-
     def test_extra_forbidden(self) -> None:
         class Strict(BaseModel):
             model_config = {"extra": "forbid"}
@@ -274,6 +278,7 @@ class TestMapUnexpectedField:
 
     def test_extra_forbidden_expected_type_is_none(self) -> None:
         """An extra field has no corresponding FieldSpec -> expected_type=None."""
+
         class Strict(BaseModel):
             model_config = {"extra": "forbid"}
             x: int
@@ -288,7 +293,6 @@ class TestMapUnexpectedField:
 
 
 class TestMapConstraintViolations:
-
     def test_greater_than_equal(self) -> None:
         class Bounded(BaseModel):
             value: int = Field(ge=0)
@@ -372,7 +376,6 @@ class TestMapConstraintViolations:
 
 
 class TestMapMultiple:
-
     def test_multiple_errors_all_mapped(self) -> None:
         class Multi(BaseModel):
             a: int
@@ -410,7 +413,6 @@ class TestMapMultiple:
 
 
 class TestMapMessages:
-
     def test_message_is_non_empty(self) -> None:
         class M(BaseModel):
             x: int
@@ -433,7 +435,6 @@ class TestMapMessages:
 
 
 class TestMapTopLevel:
-
     def test_returns_list(self) -> None:
         class M(BaseModel):
             x: int

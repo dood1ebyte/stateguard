@@ -21,7 +21,6 @@ from tests.conftest import make_violation
 
 
 class TestIdentity:
-
     def test_name(self) -> None:
         assert ExactAliasStrategy().name == "ExactAliasStrategy"
 
@@ -35,11 +34,12 @@ class TestIdentity:
 
 
 class TestCanHandle:
-
     def test_true_when_missing_field_has_aliases(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
+            ]
+        )
         v = make_violation(
             field_path="temperature",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -48,9 +48,11 @@ class TestCanHandle:
         assert strategy.can_handle([v], contract, {"temp": 30.0}) is True
 
     def test_false_when_missing_field_has_no_aliases(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT),
+            ]
+        )
         v = make_violation(
             field_path="temperature",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -59,16 +61,20 @@ class TestCanHandle:
         assert strategy.can_handle([v], contract, {}) is False
 
     def test_false_when_no_violations(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
+            ]
+        )
         strategy = ExactAliasStrategy()
         assert strategy.can_handle([], contract, {}) is False
 
     def test_false_when_only_unexpected_field_violations(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
+            ]
+        )
         v = make_violation(
             field_path="extra",
             violation_type=ViolationType.UNEXPECTED_FIELD,
@@ -79,9 +85,11 @@ class TestCanHandle:
 
     def test_false_when_field_spec_not_found(self) -> None:
         """Violation references a field_path not present in the contract."""
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
+            ]
+        )
         v = make_violation(
             field_path="nonexistent",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -90,10 +98,12 @@ class TestCanHandle:
         assert strategy.can_handle([v], contract, {}) is False
 
     def test_true_with_multiple_violations_one_matching(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
-            FieldSpec("humidity", FieldType.INTEGER),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
+                FieldSpec("humidity", FieldType.INTEGER),
+            ]
+        )
         v1 = make_violation(
             field_path="humidity",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -112,12 +122,13 @@ class TestCanHandle:
 
 
 class TestProposeTopLevel:
-
     def test_exact_alias_present_proposes_rename(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
-            FieldSpec("humidity", FieldType.INTEGER),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
+                FieldSpec("humidity", FieldType.INTEGER),
+            ]
+        )
         v = make_violation(
             field_path="temperature",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -134,9 +145,11 @@ class TestProposeTopLevel:
         assert op.confidence == 1.0
 
     def test_alias_not_present_proposes_nothing(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
+            ]
+        )
         v = make_violation(
             field_path="temperature",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -147,9 +160,11 @@ class TestProposeTopLevel:
         assert ops == []
 
     def test_no_field_spec_proposes_nothing(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
+            ]
+        )
         v = make_violation(
             field_path="nonexistent",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -159,9 +174,11 @@ class TestProposeTopLevel:
         assert ops == []
 
     def test_no_known_aliases_proposes_nothing(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT),
+            ]
+        )
         v = make_violation(
             field_path="temperature",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -171,9 +188,11 @@ class TestProposeTopLevel:
         assert ops == []
 
     def test_non_missing_violation_ignored(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
+            ]
+        )
         v = make_violation(
             field_path="temperature",
             violation_type=ViolationType.TYPE_MISMATCH,
@@ -184,13 +203,15 @@ class TestProposeTopLevel:
         assert ops == []
 
     def test_multiple_aliases_first_match_wins(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec(
-                "temperature",
-                FieldType.FLOAT,
-                known_aliases=["temp", "temp_c"],
-            ),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec(
+                    "temperature",
+                    FieldType.FLOAT,
+                    known_aliases=["temp", "temp_c"],
+                ),
+            ]
+        )
         v = make_violation(
             field_path="temperature",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -203,13 +224,15 @@ class TestProposeTopLevel:
         assert ops[0].source_path == "temp_c"
 
     def test_first_alias_preferred_when_both_present(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec(
-                "temperature",
-                FieldType.FLOAT,
-                known_aliases=["temp", "temp_c"],
-            ),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec(
+                    "temperature",
+                    FieldType.FLOAT,
+                    known_aliases=["temp", "temp_c"],
+                ),
+            ]
+        )
         v = make_violation(
             field_path="temperature",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -221,10 +244,12 @@ class TestProposeTopLevel:
         assert ops[0].source_path == "temp"
 
     def test_multiple_missing_fields_each_repaired(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
-            FieldSpec("humidity", FieldType.INTEGER, known_aliases=["rh"]),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
+                FieldSpec("humidity", FieldType.INTEGER, known_aliases=["rh"]),
+            ]
+        )
         v1 = make_violation(
             field_path="temperature",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -241,9 +266,11 @@ class TestProposeTopLevel:
         assert targets == {"temperature", "humidity"}
 
     def test_rationale_mentions_alias_and_field(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT, known_aliases=["temp"]),
+            ]
+        )
         v = make_violation(
             field_path="temperature",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -260,16 +287,19 @@ class TestProposeTopLevel:
 
 
 class TestProposeNested:
-
     def _address_contract(self) -> ContractSpec:
-        inner = ContractSpec(fields=[
-            FieldSpec("zip_code", FieldType.STRING, known_aliases=["zip"]),
-            FieldSpec("city", FieldType.STRING),
-        ])
-        return ContractSpec(fields=[
-            FieldSpec("name", FieldType.STRING),
-            FieldSpec("address", FieldType.OBJECT, nested_spec=inner),
-        ])
+        inner = ContractSpec(
+            fields=[
+                FieldSpec("zip_code", FieldType.STRING, known_aliases=["zip"]),
+                FieldSpec("city", FieldType.STRING),
+            ]
+        )
+        return ContractSpec(
+            fields=[
+                FieldSpec("name", FieldType.STRING),
+                FieldSpec("address", FieldType.OBJECT, nested_spec=inner),
+            ]
+        )
 
     def test_nested_alias_match(self) -> None:
         contract = self._address_contract()
@@ -330,7 +360,6 @@ class TestProposeNested:
 
 
 class TestFindFieldSpec:
-
     def test_top_level_field_found(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("temperature", FieldType.FLOAT)])
         spec = _find_field_spec(contract, "temperature")
@@ -343,41 +372,50 @@ class TestFindFieldSpec:
 
     def test_nested_field_found(self) -> None:
         inner = ContractSpec(fields=[FieldSpec("city", FieldType.STRING)])
-        contract = ContractSpec(fields=[
-            FieldSpec("address", FieldType.OBJECT, nested_spec=inner),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("address", FieldType.OBJECT, nested_spec=inner),
+            ]
+        )
         spec = _find_field_spec(contract, "address.city")
         assert spec is not None
         assert spec.path == "city"
 
     def test_nested_field_not_found_no_nested_spec(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("address", FieldType.OBJECT),  # no nested_spec
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("address", FieldType.OBJECT),  # no nested_spec
+            ]
+        )
         assert _find_field_spec(contract, "address.city") is None
 
     def test_deeply_nested_field(self) -> None:
         level2 = ContractSpec(fields=[FieldSpec("code", FieldType.STRING)])
-        level1 = ContractSpec(fields=[
-            FieldSpec("country", FieldType.OBJECT, nested_spec=level2),
-        ])
-        contract = ContractSpec(fields=[
-            FieldSpec("address", FieldType.OBJECT, nested_spec=level1),
-        ])
+        level1 = ContractSpec(
+            fields=[
+                FieldSpec("country", FieldType.OBJECT, nested_spec=level2),
+            ]
+        )
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("address", FieldType.OBJECT, nested_spec=level1),
+            ]
+        )
         spec = _find_field_spec(contract, "address.country.code")
         assert spec is not None
         assert spec.path == "code"
 
     def test_intermediate_segment_not_found(self) -> None:
         inner = ContractSpec(fields=[FieldSpec("city", FieldType.STRING)])
-        contract = ContractSpec(fields=[
-            FieldSpec("address", FieldType.OBJECT, nested_spec=inner),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("address", FieldType.OBJECT, nested_spec=inner),
+            ]
+        )
         assert _find_field_spec(contract, "billing.city") is None
 
 
 class TestSplitPath:
-
     def test_top_level_path(self) -> None:
         assert _split_path("temperature") == ("", "temperature")
 
@@ -389,7 +427,6 @@ class TestSplitPath:
 
 
 class TestGetDictAtPath:
-
     def test_root_path_returns_data_itself(self) -> None:
         data = {"a": 1}
         assert _get_dict_at_path(data, "") is data

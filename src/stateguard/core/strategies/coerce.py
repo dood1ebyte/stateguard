@@ -149,9 +149,7 @@ class TypeCoercionStrategy(IRepairStrategy):
         contract: ContractSpec,
         data: dict[str, Any],
     ) -> bool:
-        return any(
-            v.violation_type is ViolationType.TYPE_MISMATCH for v in violations
-        )
+        return any(v.violation_type is ViolationType.TYPE_MISMATCH for v in violations)
 
     def propose(
         self,

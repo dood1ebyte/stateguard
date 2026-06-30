@@ -296,8 +296,7 @@ class FuzzyFieldMatchStrategy(IRepairStrategy):
                     target_path=missing,
                     confidence=best_score,
                     rationale=(
-                        f"Fuzzy name match: '{best_key}' -> '{missing}' "
-                        f"(score: {best_score:.2f})."
+                        f"Fuzzy name match: '{best_key}' -> '{missing}' (score: {best_score:.2f})."
                     ),
                     source_path=best_key,
                 )
@@ -323,9 +322,7 @@ class FuzzyFieldMatchStrategy(IRepairStrategy):
     def _find_unexpected_keys(violations: list[ContractViolation]) -> list[str]:
         """Return ``field_path`` for every UNEXPECTED_FIELD violation."""
         return [
-            v.field_path
-            for v in violations
-            if v.violation_type is ViolationType.UNEXPECTED_FIELD
+            v.field_path for v in violations if v.violation_type is ViolationType.UNEXPECTED_FIELD
         ]
 
     @staticmethod

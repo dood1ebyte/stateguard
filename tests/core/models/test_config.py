@@ -13,7 +13,6 @@ from stateguard.core.models.config import GuardConfig, RepairConfig
 
 
 class TestRepairConfig:
-
     # --- Defaults -------------------------------------------------------------
 
     def test_default_max_attempts(self) -> None:
@@ -138,9 +137,8 @@ class TestRepairConfig:
         assert RepairConfig(max_attempts=3) != RepairConfig(max_attempts=5)
 
     def test_inequality_on_threshold(self) -> None:
-        assert (
-            RepairConfig(min_confidence_threshold=0.7)
-            != RepairConfig(min_confidence_threshold=0.8)
+        assert RepairConfig(min_confidence_threshold=0.7) != RepairConfig(
+            min_confidence_threshold=0.8
         )
 
     def test_repr_contains_class_name(self) -> None:
@@ -174,7 +172,6 @@ class TestRepairConfig:
 
 
 class TestGuardConfig:
-
     # --- Defaults -------------------------------------------------------------
 
     def test_default_repair_is_repair_config(self) -> None:
@@ -231,9 +228,8 @@ class TestGuardConfig:
         assert GuardConfig(strict_mode=False) != GuardConfig(strict_mode=True)
 
     def test_inequality_on_repair_config(self) -> None:
-        assert (
-            GuardConfig(repair=RepairConfig(max_attempts=1))
-            != GuardConfig(repair=RepairConfig(max_attempts=3))
+        assert GuardConfig(repair=RepairConfig(max_attempts=1)) != GuardConfig(
+            repair=RepairConfig(max_attempts=3)
         )
 
     def test_repr_contains_class_name(self) -> None:

@@ -20,7 +20,6 @@ from stateguard.core.models.field_types import FieldType
 
 
 class TestStripAnnotated:
-
     def test_plain_type_unchanged(self) -> None:
         assert PydanticTypeMapper.strip_annotated(int) is int
 
@@ -42,7 +41,6 @@ class TestStripAnnotated:
 
 
 class TestUnwrapOptional:
-
     def test_optional_float(self) -> None:
         inner, is_opt = PydanticTypeMapper.unwrap_optional(Optional[float])
         assert inner is float
@@ -68,9 +66,7 @@ class TestUnwrapOptional:
         assert is_opt is False
 
     def test_optional_annotated(self) -> None:
-        inner, is_opt = PydanticTypeMapper.unwrap_optional(
-            Optional[Annotated[int, "meta"]]
-        )
+        inner, is_opt = PydanticTypeMapper.unwrap_optional(Optional[Annotated[int, "meta"]])
         assert inner is int
         assert is_opt is True
 
@@ -89,7 +85,6 @@ class TestUnwrapOptional:
 
 
 class TestGetLiteralValues:
-
     def test_string_literal(self) -> None:
         result = PydanticTypeMapper.get_literal_values(Literal["a", "b", "c"])
         assert result == ("a", "b", "c")
@@ -109,9 +104,7 @@ class TestGetLiteralValues:
         assert PydanticTypeMapper.get_literal_values(Optional[int]) is None
 
     def test_annotated_literal(self) -> None:
-        result = PydanticTypeMapper.get_literal_values(
-            Annotated[Literal["x", "y"], "meta"]
-        )
+        result = PydanticTypeMapper.get_literal_values(Annotated[Literal["x", "y"], "meta"])
         assert result == ("x", "y")
 
 
@@ -121,7 +114,6 @@ class TestGetLiteralValues:
 
 
 class TestMapAnnotationPrimitives:
-
     def test_str(self) -> None:
         assert PydanticTypeMapper.map_annotation(str) is FieldType.STRING
 
@@ -156,7 +148,6 @@ class TestMapAnnotationPrimitives:
 
 
 class TestMapAnnotationOptional:
-
     def test_optional_float_maps_to_float(self) -> None:
         assert PydanticTypeMapper.map_annotation(Optional[float]) is FieldType.FLOAT
 
@@ -192,7 +183,6 @@ class TestMapAnnotationOptional:
 
 
 class TestMapAnnotationContainers:
-
     def test_bare_list(self) -> None:
         assert PydanticTypeMapper.map_annotation(list) is FieldType.ARRAY
 
@@ -215,7 +205,6 @@ class TestMapAnnotationContainers:
 
 
 class TestMapAnnotationAnnotated:
-
     def test_annotated_int(self) -> None:
         assert PydanticTypeMapper.map_annotation(Annotated[int, "meta"]) is FieldType.INTEGER
 
@@ -230,7 +219,6 @@ class TestMapAnnotationAnnotated:
 
 
 class TestMapAnnotationLiteral:
-
     def test_string_literal_maps_to_string(self) -> None:
         assert PydanticTypeMapper.map_annotation(Literal["a", "b"]) is FieldType.STRING
 
@@ -273,7 +261,6 @@ class TestMapAnnotationLiteral:
 
 
 class TestMapAnnotationBaseModel:
-
     def test_basemodel_maps_to_object(self) -> None:
         class M(BaseModel):
             x: int
@@ -293,7 +280,6 @@ class TestMapAnnotationBaseModel:
 
 
 class TestGetItemType:
-
     def test_list_of_str(self) -> None:
         assert PydanticTypeMapper.get_item_type(List[str]) is FieldType.STRING
 
@@ -329,7 +315,6 @@ class TestGetItemType:
 
 
 class TestGetNestedModel:
-
     def test_basemodel_returns_itself(self) -> None:
         class M(BaseModel):
             x: int
@@ -350,6 +335,7 @@ class TestGetNestedModel:
 
     def test_list_of_basemodel_returns_none(self) -> None:
         """Per V1 scope: List[Model] does not produce a nested_spec."""
+
         class M(BaseModel):
             x: int
 

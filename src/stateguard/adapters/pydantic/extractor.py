@@ -189,32 +189,20 @@ class PydanticContractExtractor:
 
         for meta in field_info.metadata:
             if hasattr(meta, "ge"):
-                constraints.append(
-                    FieldConstraint(FieldConstraintType.MINIMUM, meta.ge)
-                )
+                constraints.append(FieldConstraint(FieldConstraintType.MINIMUM, meta.ge))
             elif hasattr(meta, "le"):
-                constraints.append(
-                    FieldConstraint(FieldConstraintType.MAXIMUM, meta.le)
-                )
+                constraints.append(FieldConstraint(FieldConstraintType.MAXIMUM, meta.le))
             elif hasattr(meta, "min_length"):
-                constraints.append(
-                    FieldConstraint(FieldConstraintType.MIN_LENGTH, meta.min_length)
-                )
+                constraints.append(FieldConstraint(FieldConstraintType.MIN_LENGTH, meta.min_length))
             elif hasattr(meta, "max_length"):
-                constraints.append(
-                    FieldConstraint(FieldConstraintType.MAX_LENGTH, meta.max_length)
-                )
+                constraints.append(FieldConstraint(FieldConstraintType.MAX_LENGTH, meta.max_length))
             elif hasattr(meta, "pattern") and meta.pattern is not None:
-                constraints.append(
-                    FieldConstraint(FieldConstraintType.PATTERN, meta.pattern)
-                )
+                constraints.append(FieldConstraint(FieldConstraintType.PATTERN, meta.pattern))
             # Gt / Lt (strict inequality) intentionally not extracted --
             # no corresponding FieldConstraintType in V1.
 
         literal_values = PydanticTypeMapper.get_literal_values(annotation)
         if literal_values is not None:
-            constraints.append(
-                FieldConstraint(FieldConstraintType.ENUM_VALUES, literal_values)
-            )
+            constraints.append(FieldConstraint(FieldConstraintType.ENUM_VALUES, literal_values))
 
         return constraints

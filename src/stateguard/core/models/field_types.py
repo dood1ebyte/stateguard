@@ -52,10 +52,10 @@ class FieldType(StrEnum):
     INTEGER = "integer"
     FLOAT = "float"
     BOOLEAN = "boolean"
-    OBJECT = "object"   # nested dict / sub-schema
-    ARRAY = "array"     # list of items (item type tracked separately)
-    ANY = "any"         # explicitly untyped; validator skips type checks
-    NULL = "null"       # field's declared type is null
+    OBJECT = "object"  # nested dict / sub-schema
+    ARRAY = "array"  # list of items (item type tracked separately)
+    ANY = "any"  # explicitly untyped; validator skips type checks
+    NULL = "null"  # field's declared type is null
 
 
 # ---------------------------------------------------------------------------
@@ -72,13 +72,13 @@ class FieldConstraintType(StrEnum):
     etc.).
     """
 
-    MINIMUM = "minimum"         # numeric lower bound (inclusive)
-    MAXIMUM = "maximum"         # numeric upper bound (inclusive)
-    MIN_LENGTH = "min_length"   # minimum string / array length
-    MAX_LENGTH = "max_length"   # maximum string / array length
-    PATTERN = "pattern"         # regex pattern the string must match
-    ENUM_VALUES = "enum_values" # field value must be one of a fixed set
-    NOT_NULL = "not_null"       # field must not be None
+    MINIMUM = "minimum"  # numeric lower bound (inclusive)
+    MAXIMUM = "maximum"  # numeric upper bound (inclusive)
+    MIN_LENGTH = "min_length"  # minimum string / array length
+    MAX_LENGTH = "max_length"  # maximum string / array length
+    PATTERN = "pattern"  # regex pattern the string must match
+    ENUM_VALUES = "enum_values"  # field value must be one of a fixed set
+    NOT_NULL = "not_null"  # field must not be None
 
 
 # ---------------------------------------------------------------------------

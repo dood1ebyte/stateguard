@@ -37,6 +37,7 @@ def _require_guard() -> Any:
     """
     try:
         from stateguard import ContractGuard  # noqa: PLC0415
+
         return ContractGuard
     except (ImportError, AttributeError) as exc:
         pytest.fail(
@@ -51,6 +52,7 @@ def _require_pydantic_adapter() -> Any:
     """
     try:
         from stateguard.adapters.pydantic import PydanticAdapter  # noqa: PLC0415
+
         return PydanticAdapter
     except (ImportError, AttributeError) as exc:
         pytest.fail(

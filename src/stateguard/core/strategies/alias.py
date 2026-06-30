@@ -134,9 +134,7 @@ class ExactAliasStrategy(IRepairStrategy):
 
             for alias in field_spec.known_aliases:
                 if alias in local_data:
-                    source_path = (
-                        f"{parent_path}.{alias}" if parent_path else alias
-                    )
+                    source_path = f"{parent_path}.{alias}" if parent_path else alias
                     operations.append(
                         FieldOperation(
                             op_type=FieldOpType.RENAME,

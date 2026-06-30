@@ -63,6 +63,7 @@ class PydanticAdapter(IContractAdapter):
             If *schema* is not a ``BaseModel`` subclass.
         """
         from pydantic import BaseModel  # noqa: PLC0415
+
         if not (isinstance(schema, type) and issubclass(schema, BaseModel)):
             raise TypeError(
                 "PydanticAdapter.extract_contract expects a type[BaseModel] "
@@ -100,12 +101,11 @@ class PydanticAdapter(IContractAdapter):
             model_class.model_validate(data)
         except Exception as exc:  # noqa: BLE001
             from pydantic import ValidationError  # noqa: PLC0415
+
             if not isinstance(exc, ValidationError):
                 raise
             violations = PydanticViolationMapper.map(exc, contract)
-            is_valid = not any(
-                v.severity is ViolationSeverity.ERROR for v in violations
-            )
+            is_valid = not any(v.severity is ViolationSeverity.ERROR for v in violations)
             return ValidationResult(
                 is_valid=is_valid,
                 violations=violations,
@@ -136,6 +136,7 @@ class PydanticAdapter(IContractAdapter):
             confirmed the data is valid.
         """
         from pydantic import ValidationError  # noqa: PLC0415
+
         model_class = self._model_class(contract)
 
         try:
@@ -164,6 +165,7 @@ class PydanticAdapter(IContractAdapter):
             *contract* was not produced by ``PydanticAdapter.extract_contract``.
         """
         from pydantic import BaseModel  # noqa: PLC0415
+
         source_ref = contract.source_ref
         if not (isinstance(source_ref, type) and issubclass(source_ref, BaseModel)):
             raise TypeError(

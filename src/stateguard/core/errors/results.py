@@ -100,9 +100,7 @@ class ValidationResult:
     violations: list[ContractViolation]
     raw_input: dict[str, Any]
     contract_id: str
-    validated_at: datetime = field(
-        default_factory=lambda: datetime.now(tz=UTC)
-    )
+    validated_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 # ---------------------------------------------------------------------------
@@ -161,9 +159,7 @@ class RepairAttempt:
 
     # Auto-generated fields
     attempt_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    attempted_at: datetime = field(
-        default_factory=lambda: datetime.now(tz=UTC)
-    )
+    attempted_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 # ---------------------------------------------------------------------------
@@ -227,9 +223,7 @@ class RepairResult:
 
     # Optional / auto-generated
     repaired_output: dict[str, Any] | None = None
-    repaired_at: datetime = field(
-        default_factory=lambda: datetime.now(tz=UTC)
-    )
+    repaired_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
     # ------------------------------------------------------------------
     # Convenience properties

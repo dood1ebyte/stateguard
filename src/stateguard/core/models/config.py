@@ -70,9 +70,7 @@ class RepairConfig:
 
     def __post_init__(self) -> None:
         if self.max_attempts < 1:
-            raise ValueError(
-                f"max_attempts must be >= 1, got {self.max_attempts!r}"
-            )
+            raise ValueError(f"max_attempts must be >= 1, got {self.max_attempts!r}")
         if not (0.0 < self.min_confidence_threshold <= 1.0):
             raise ValueError(
                 f"min_confidence_threshold must be in (0.0, 1.0], "
@@ -80,8 +78,7 @@ class RepairConfig:
             )
         if not (0.0 < self.score_collision_margin < 1.0):
             raise ValueError(
-                f"score_collision_margin must be in (0.0, 1.0), "
-                f"got {self.score_collision_margin!r}"
+                f"score_collision_margin must be in (0.0, 1.0), got {self.score_collision_margin!r}"
             )
 
 

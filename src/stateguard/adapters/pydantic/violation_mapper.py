@@ -78,22 +78,29 @@ _CONSTRAINT_SUFFIXES: tuple[str, ...] = (
     "too_short",
     "too_long",
 )
-_CONSTRAINT_EXACT: frozenset[str] = frozenset({
-    "greater_than",
-    "greater_than_equal",
-    "less_than",
-    "less_than_equal",
-    "string_pattern_mismatch",
-    "literal_error",
-    "value_error",
-})
+_CONSTRAINT_EXACT: frozenset[str] = frozenset(
+    {
+        "greater_than",
+        "greater_than_equal",
+        "less_than",
+        "less_than_equal",
+        "string_pattern_mismatch",
+        "literal_error",
+        "value_error",
+    }
+)
 
 # Keys in a Pydantic error's `ctx` dict that represent a constraint boundary,
 # checked in priority order.
 _CTX_BOUND_KEYS: tuple[str, ...] = (
-    "ge", "le", "gt", "lt",
-    "min_length", "max_length",
-    "pattern", "expected",
+    "ge",
+    "le",
+    "gt",
+    "lt",
+    "min_length",
+    "max_length",
+    "pattern",
+    "expected",
 )
 
 

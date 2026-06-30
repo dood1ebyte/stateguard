@@ -26,7 +26,6 @@ from stateguard.core.models.field_types import (
 
 
 class TestMissingSentinel:
-
     # --- Identity and singleton -----------------------------------------------
 
     def test_missing_is_not_none(self) -> None:
@@ -42,6 +41,7 @@ class TestMissingSentinel:
 
     def test_missing_is_same_object_every_reference(self) -> None:
         from stateguard.core.models.contract import MISSING as M2
+
         assert MISSING is M2
 
     # --- Truthiness -----------------------------------------------------------
@@ -114,7 +114,6 @@ class TestMissingSentinel:
 
 
 class TestFieldSpec:
-
     # --- Minimal construction -------------------------------------------------
 
     def test_minimal_construction(self) -> None:
@@ -237,7 +236,6 @@ class TestFieldSpec:
 
 
 class TestContractSpec:
-
     # --- Basic construction ---------------------------------------------------
 
     def test_minimal_construction(self) -> None:
@@ -265,6 +263,7 @@ class TestContractSpec:
     def test_source_ref_stores_class(self) -> None:
         class FakeModel:
             pass
+
         c = ContractSpec(fields=[], source_ref=FakeModel)
         assert c.source_ref is FakeModel
 
@@ -302,14 +301,18 @@ class TestContractSpec:
         assert c1.contract_id == c2.contract_id
 
     def test_contract_id_is_deterministic_reconstructed_fields(self) -> None:
-        c1 = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT),
-            FieldSpec("humidity", FieldType.INTEGER),
-        ])
-        c2 = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT),
-            FieldSpec("humidity", FieldType.INTEGER),
-        ])
+        c1 = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT),
+                FieldSpec("humidity", FieldType.INTEGER),
+            ]
+        )
+        c2 = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT),
+                FieldSpec("humidity", FieldType.INTEGER),
+            ]
+        )
         assert c1.contract_id == c2.contract_id
 
     def test_contract_id_is_insertion_order_independent(self) -> None:
@@ -359,10 +362,12 @@ class TestContractSpec:
         assert c.contract_id == expected
 
     def test_contract_id_with_multiple_fields_matches_sorted_hash(self) -> None:
-        c = ContractSpec(fields=[
-            FieldSpec("z_field", FieldType.BOOLEAN),
-            FieldSpec("a_field", FieldType.INTEGER),
-        ])
+        c = ContractSpec(
+            fields=[
+                FieldSpec("z_field", FieldType.BOOLEAN),
+                FieldSpec("a_field", FieldType.INTEGER),
+            ]
+        )
         # Fields sorted by path: a_field, z_field
         canonical = "strict=0;a_field:integer:1;z_field:boolean:1"
         expected = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
@@ -371,11 +376,13 @@ class TestContractSpec:
     # --- Multi-field contracts ------------------------------------------------
 
     def test_multiple_fields_stored(self) -> None:
-        c = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT),
-            FieldSpec("humidity", FieldType.INTEGER),
-            FieldSpec("description", FieldType.STRING, required=False),
-        ])
+        c = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT),
+                FieldSpec("humidity", FieldType.INTEGER),
+                FieldSpec("description", FieldType.STRING, required=False),
+            ]
+        )
         assert len(c.fields) == 3
 
     # --- Nested contracts -----------------------------------------------------
@@ -397,5 +404,6 @@ class TestContractSpec:
             level1.fields[0]
             .nested_spec.fields[0]  # type: ignore[union-attr]
             .nested_spec.fields[0]  # type: ignore[union-attr]
-            .path == "code"
+            .path
+            == "code"
         )

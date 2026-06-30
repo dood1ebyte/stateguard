@@ -198,9 +198,7 @@ class MockContractAdapter(IContractAdapter):
                             field_path=field_spec.path,
                             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
                             severity=ViolationSeverity.ERROR,
-                            message=(
-                                f"Required field '{field_spec.path}' is missing."
-                            ),
+                            message=(f"Required field '{field_spec.path}' is missing."),
                             expected_type=field_spec.field_type,
                         )
                     )
@@ -227,9 +225,7 @@ class MockContractAdapter(IContractAdapter):
         for key in data:
             if key not in known_paths:
                 severity = (
-                    ViolationSeverity.ERROR
-                    if contract.strict_mode
-                    else ViolationSeverity.WARNING
+                    ViolationSeverity.ERROR if contract.strict_mode else ViolationSeverity.WARNING
                 )
                 violations.append(
                     ContractViolation(
@@ -241,9 +237,7 @@ class MockContractAdapter(IContractAdapter):
                     )
                 )
 
-        is_valid = not any(
-            v.severity is ViolationSeverity.ERROR for v in violations
-        )
+        is_valid = not any(v.severity is ViolationSeverity.ERROR for v in violations)
         return ValidationResult(
             is_valid=is_valid,
             violations=violations,

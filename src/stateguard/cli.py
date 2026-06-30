@@ -43,9 +43,9 @@ __all__ = ["main"]
 # Exit codes
 # ---------------------------------------------------------------------------
 
-_EXIT_OK = 0       # SUCCESS or ALREADY_VALID
+_EXIT_OK = 0  # SUCCESS or ALREADY_VALID
 _EXIT_PARTIAL = 1  # PARTIAL
-_EXIT_FAILED = 2   # FAILED  (argparse also uses 2 for bad args, per convention)
+_EXIT_FAILED = 2  # FAILED  (argparse also uses 2 for bad args, per convention)
 
 
 # ---------------------------------------------------------------------------
@@ -129,8 +129,10 @@ def _print_human(result: Any, args: argparse.Namespace) -> None:
             print(f"      Applied: {op_count} operation(s)  Rejected: {rej_count}")
             for op in attempt.applied_operations:
                 src = f"  ← {op.source_path}" if op.source_path else ""
-                print(f"      • {op.op_type.value}  {op.target_path}{src}  "
-                      f"(confidence {op.confidence:.2f})")
+                print(
+                    f"      • {op.op_type.value}  {op.target_path}{src}  "
+                    f"(confidence {op.confidence:.2f})"
+                )
         print()
 
     if result.remaining_violations:
@@ -151,6 +153,7 @@ def _dump_output(obj: Any) -> None:
     """Print *obj* as indented JSON, handling Pydantic models via model_dump()."""
     try:
         from pydantic import BaseModel  # noqa: PLC0415
+
         if isinstance(obj, BaseModel):
             obj = obj.model_dump()
     except ImportError:
@@ -167,6 +170,7 @@ def _print_json(result: Any) -> None:
     """Print a machine-readable JSON summary to stdout."""
     try:
         from pydantic import BaseModel  # noqa: PLC0415
+
         repaired = result.repaired_output
         if isinstance(repaired, BaseModel):
             repaired = repaired.model_dump()
@@ -265,6 +269,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
     # Exit code
     from stateguard.core.errors.results import RepairStatus  # noqa: PLC0415
+
     if result.status in (RepairStatus.SUCCESS, RepairStatus.ALREADY_VALID):
         return _EXIT_OK
     if result.status is RepairStatus.PARTIAL:

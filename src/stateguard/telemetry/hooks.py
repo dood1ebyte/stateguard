@@ -84,9 +84,7 @@ class TelemetryEvent:
     event_type: TelemetryEventType
     contract_id: str
     data: dict[str, Any] = field(default_factory=dict)
-    emitted_at: datetime = field(
-        default_factory=lambda: datetime.now(tz=UTC)
-    )
+    emitted_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 # ---------------------------------------------------------------------------

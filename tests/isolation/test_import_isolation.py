@@ -147,10 +147,7 @@ class TestCoreImportIsolation:
     def test_pydantic_adapter_stub_imports_without_error(self) -> None:
         """The pydantic adapter stub must be importable (even while empty)."""
         rc, _, stderr = _run("import stateguard.adapters.pydantic")
-        assert rc == 0, (
-            "stateguard.adapters.pydantic stub failed to import:\n"
-            f"{stderr}"
-        )
+        assert rc == 0, f"stateguard.adapters.pydantic stub failed to import:\n{stderr}"
 
     def test_importing_core_does_not_import_adapter(self) -> None:
         """

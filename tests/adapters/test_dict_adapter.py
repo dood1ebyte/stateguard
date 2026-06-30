@@ -30,7 +30,6 @@ def _field(contract: Any, path: str) -> Any:
 
 
 class TestConformance:
-
     def test_implements_icontractadapter(self, adapter: DictContractAdapter) -> None:
         assert isinstance(adapter, IContractAdapter)
 
@@ -41,7 +40,6 @@ class TestConformance:
 
 
 class TestExtractContractBasic:
-
     def test_simple_schema(self, adapter: DictContractAdapter) -> None:
         schema = {"fields": [{"path": "x", "type": "string"}]}
         contract = adapter.extract_contract(schema)
@@ -73,9 +71,14 @@ class TestExtractContractBasic:
         }
         contract = adapter.extract_contract(schema)
         expected = {
-            "a": FieldType.STRING, "b": FieldType.INTEGER, "c": FieldType.FLOAT,
-            "d": FieldType.BOOLEAN, "e": FieldType.OBJECT, "f": FieldType.ARRAY,
-            "g": FieldType.ANY, "h": FieldType.NULL,
+            "a": FieldType.STRING,
+            "b": FieldType.INTEGER,
+            "c": FieldType.FLOAT,
+            "d": FieldType.BOOLEAN,
+            "e": FieldType.OBJECT,
+            "f": FieldType.ARRAY,
+            "g": FieldType.ANY,
+            "h": FieldType.NULL,
         }
         for path, ft in expected.items():
             assert _field(contract, path).field_type is ft
@@ -118,9 +121,7 @@ class TestExtractContractBasic:
         assert f.default is not MISSING
 
     def test_known_aliases(self, adapter: DictContractAdapter) -> None:
-        schema = {
-            "fields": [{"path": "zip_code", "type": "string", "known_aliases": ["zip"]}]
-        }
+        schema = {"fields": [{"path": "zip_code", "type": "string", "known_aliases": ["zip"]}]}
         contract = adapter.extract_contract(schema)
         assert _field(contract, "zip_code").known_aliases == ["zip"]
 
@@ -146,11 +147,14 @@ class TestExtractContractBasic:
 
 
 class TestExtractContractConstraints:
-
     def test_minimum_constraint(self, adapter: DictContractAdapter) -> None:
         schema = {
             "fields": [
-                {"path": "score", "type": "integer", "constraints": [{"type": "minimum", "value": 0}]}
+                {
+                    "path": "score",
+                    "type": "integer",
+                    "constraints": [{"type": "minimum", "value": 0}],
+                }
             ]
         }
         contract = adapter.extract_contract(schema)
@@ -161,7 +165,11 @@ class TestExtractContractConstraints:
     def test_maximum_constraint(self, adapter: DictContractAdapter) -> None:
         schema = {
             "fields": [
-                {"path": "score", "type": "integer", "constraints": [{"type": "maximum", "value": 100}]}
+                {
+                    "path": "score",
+                    "type": "integer",
+                    "constraints": [{"type": "maximum", "value": 100}],
+                }
             ]
         }
         contract = adapter.extract_contract(schema)
@@ -214,9 +222,7 @@ class TestExtractContractConstraints:
                 {
                     "path": "status",
                     "type": "string",
-                    "constraints": [
-                        {"type": "enum_values", "value": ["active", "inactive"]}
-                    ],
+                    "constraints": [{"type": "enum_values", "value": ["active", "inactive"]}],
                 }
             ]
         }
@@ -229,7 +235,11 @@ class TestExtractContractConstraints:
     def test_not_null_constraint(self, adapter: DictContractAdapter) -> None:
         schema = {
             "fields": [
-                {"path": "x", "type": "string", "constraints": [{"type": "not_null", "value": True}]}
+                {
+                    "path": "x",
+                    "type": "string",
+                    "constraints": [{"type": "not_null", "value": True}],
+                }
             ]
         }
         contract = adapter.extract_contract(schema)
@@ -248,7 +258,6 @@ class TestExtractContractConstraints:
 
 
 class TestExtractContractNested:
-
     def test_nested_object(self, adapter: DictContractAdapter) -> None:
         schema = {
             "fields": [
@@ -320,7 +329,6 @@ class TestExtractContractNested:
 
 
 class TestExtractContractErrors:
-
     def test_non_dict_schema_raises_type_error(self, adapter: DictContractAdapter) -> None:
         with pytest.raises(TypeError, match="expects a dict"):
             adapter.extract_contract("not a dict")
@@ -351,43 +359,47 @@ class TestExtractContractErrors:
 
     def test_invalid_nested_schema_raises_value_error(self, adapter: DictContractAdapter) -> None:
         with pytest.raises(ValueError, match="nested"):
-            adapter.extract_contract({
-                "fields": [{"path": "address", "type": "object", "nested": "not a dict"}]
-            })
+            adapter.extract_contract(
+                {"fields": [{"path": "address", "type": "object", "nested": "not a dict"}]}
+            )
 
     def test_nested_missing_fields_key_raises_value_error(
         self, adapter: DictContractAdapter
     ) -> None:
         with pytest.raises(ValueError, match="nested"):
-            adapter.extract_contract({
-                "fields": [{"path": "address", "type": "object", "nested": {}}]
-            })
+            adapter.extract_contract(
+                {"fields": [{"path": "address", "type": "object", "nested": {}}]}
+            )
 
-    def test_constraint_missing_type_raises_value_error(
-        self, adapter: DictContractAdapter
-    ) -> None:
+    def test_constraint_missing_type_raises_value_error(self, adapter: DictContractAdapter) -> None:
         with pytest.raises(ValueError, match="'type' and 'value'"):
-            adapter.extract_contract({
-                "fields": [{"path": "x", "type": "integer", "constraints": [{"value": 5}]}]
-            })
+            adapter.extract_contract(
+                {"fields": [{"path": "x", "type": "integer", "constraints": [{"value": 5}]}]}
+            )
 
     def test_constraint_missing_value_raises_value_error(
         self, adapter: DictContractAdapter
     ) -> None:
         with pytest.raises(ValueError, match="'type' and 'value'"):
-            adapter.extract_contract({
-                "fields": [{"path": "x", "type": "integer", "constraints": [{"type": "minimum"}]}]
-            })
+            adapter.extract_contract(
+                {"fields": [{"path": "x", "type": "integer", "constraints": [{"type": "minimum"}]}]}
+            )
 
     def test_unrecognized_constraint_type_raises_value_error(
         self, adapter: DictContractAdapter
     ) -> None:
         with pytest.raises(ValueError, match="unrecognized constraint type"):
-            adapter.extract_contract({
-                "fields": [
-                    {"path": "x", "type": "integer", "constraints": [{"type": "not_real", "value": 1}]}
-                ]
-            })
+            adapter.extract_contract(
+                {
+                    "fields": [
+                        {
+                            "path": "x",
+                            "type": "integer",
+                            "constraints": [{"type": "not_real", "value": 1}],
+                        }
+                    ]
+                }
+            )
 
 
 # ===========================================================================
@@ -396,7 +408,6 @@ class TestExtractContractErrors:
 
 
 class TestValidate:
-
     def test_valid_data(self, adapter: DictContractAdapter) -> None:
         contract = adapter.extract_contract({"fields": [{"path": "x", "type": "string"}]})
         result = adapter.validate(contract, {"x": "hello"})
@@ -410,12 +421,14 @@ class TestValidate:
     def test_delegates_to_contractvalidator(self, adapter: DictContractAdapter) -> None:
         """Sanity check that validate() produces the same violation types
         ContractValidator itself would (it's a pure delegation)."""
-        contract = adapter.extract_contract({
-            "fields": [
-                {"path": "temperature", "type": "float"},
-                {"path": "humidity", "type": "integer"},
-            ]
-        })
+        contract = adapter.extract_contract(
+            {
+                "fields": [
+                    {"path": "temperature", "type": "float"},
+                    {"path": "humidity", "type": "integer"},
+                ]
+            }
+        )
         result = adapter.validate(contract, {"temp_celsius": 31.5, "humidity": 80})
         types = {v.violation_type.value for v in result.violations}
         assert "missing_required_field" in types
@@ -428,7 +441,6 @@ class TestValidate:
 
 
 class TestWrap:
-
     def test_returns_dict_copy(self, adapter: DictContractAdapter) -> None:
         contract = adapter.extract_contract({"fields": [{"path": "x", "type": "string"}]})
         data = {"x": "hello"}
@@ -450,7 +462,6 @@ class TestWrap:
 
 
 class TestRoundTrip:
-
     def test_full_weather_schema_round_trip(self, adapter: DictContractAdapter) -> None:
         schema = {
             "strict_mode": False,

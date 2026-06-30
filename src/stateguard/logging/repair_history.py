@@ -254,13 +254,9 @@ class RepairHistoryRecorder:
         field_before = _get_nested_value(attempt.data_before, before_path)
         field_after = _get_nested_value(attempt.data_after, op.target_path)
 
-        violation_type = _violation_type_for_path(
-            result.initial_violations, op.target_path
-        )
+        violation_type = _violation_type_for_path(result.initial_violations, op.target_path)
         if violation_type is None and op.source_path is not None:
-            violation_type = _violation_type_for_path(
-                result.initial_violations, op.source_path
-            )
+            violation_type = _violation_type_for_path(result.initial_violations, op.source_path)
 
         return {
             **base,

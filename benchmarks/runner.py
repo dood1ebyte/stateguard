@@ -157,9 +157,7 @@ def run_case(case: dict[str, Any]) -> CaseOutcome:
 
         min_confidence = expected.get("min_confidence")
         confidences = [
-            op.confidence
-            for attempt in result.attempts
-            for op in attempt.applied_operations
+            op.confidence for attempt in result.attempts for op in attempt.applied_operations
         ]
         if passed and min_confidence is not None and confidences:
             if min(confidences) < min_confidence:
@@ -200,9 +198,7 @@ def run_benchmark(cases: list[dict[str, Any]]) -> BenchmarkSummary:
     repair_rate = repaired / total if total else 0.0
 
     all_confidences = [c for o in outcomes for c in o.confidences]
-    average_confidence = (
-        sum(all_confidences) / len(all_confidences) if all_confidences else None
-    )
+    average_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else None
 
     return BenchmarkSummary(
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -263,9 +259,7 @@ def write_results(summary: BenchmarkSummary, results_dir: Path) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Run the StateGuard benchmark suite."
-    )
+    parser = argparse.ArgumentParser(description="Run the StateGuard benchmark suite.")
     parser.add_argument(
         "--cases-dir",
         type=Path,

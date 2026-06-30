@@ -25,7 +25,6 @@ def _field(spec: ContractSpec, path: str) -> FieldSpec:
 
 
 class TestBasicExtraction:
-
     def test_simple_model_field_count(self) -> None:
         class Weather(BaseModel):
             temperature: float
@@ -81,7 +80,6 @@ class TestBasicExtraction:
 
 
 class TestRequiredFields:
-
     def test_field_without_default_is_required(self) -> None:
         class Weather(BaseModel):
             temperature: float
@@ -113,7 +111,6 @@ class TestRequiredFields:
 
 
 class TestDefaults:
-
     def test_no_default_is_missing_sentinel(self) -> None:
         class Weather(BaseModel):
             temperature: float
@@ -163,6 +160,7 @@ class TestDefaults:
 
     def test_default_factory_called_once_per_extraction(self) -> None:
         """Each extraction call invokes the factory independently."""
+
         class M(BaseModel):
             tags: List[str] = Field(default_factory=list)
 
@@ -180,7 +178,6 @@ class TestDefaults:
 
 
 class TestAliasResolution:
-
     def test_field_with_alias_path_is_alias(self) -> None:
         class WeatherAliased(BaseModel):
             temperature: float = Field(alias="temp_c")
@@ -222,6 +219,7 @@ class TestAliasResolution:
 
     def test_validation_alias_equal_to_field_name(self) -> None:
         """If validation_alias == field_name, no alias treatment is needed."""
+
         class M(BaseModel):
             x: int = Field(validation_alias="x")
 
@@ -236,7 +234,6 @@ class TestAliasResolution:
 
 
 class TestConstraints:
-
     def test_ge_constraint(self) -> None:
         class M(BaseModel):
             value: int = Field(ge=0)
@@ -315,6 +312,7 @@ class TestConstraints:
 
     def test_gt_lt_not_extracted(self) -> None:
         """Gt/Lt have no corresponding FieldConstraintType in V1."""
+
         class M(BaseModel):
             value: int = Field(gt=0, lt=10)
 
@@ -331,7 +329,6 @@ class TestConstraints:
 
 
 class TestLiteralConstraints:
-
     def test_string_literal_produces_enum_values(self) -> None:
         class M(BaseModel):
             status: Literal["active", "inactive", "pending"]
@@ -370,7 +367,6 @@ class TestLiteralConstraints:
 
 
 class TestNestedModels:
-
     def test_nested_model_produces_object_field(self) -> None:
         class Address(BaseModel):
             city: str
@@ -460,7 +456,6 @@ class TestNestedModels:
 
 
 class TestArrays:
-
     def test_list_of_str_item_type(self) -> None:
         class M(BaseModel):
             tags: List[str] = []
@@ -480,6 +475,7 @@ class TestArrays:
 
     def test_list_of_basemodel_no_nested_spec(self) -> None:
         """Per V1 scope: List[Model] does not get a nested_spec."""
+
         class Item(BaseModel):
             name: str
 
@@ -506,7 +502,6 @@ class TestArrays:
 
 
 class TestComplexModel:
-
     def test_full_weather_model(self) -> None:
         class Address(BaseModel):
             city: str
@@ -551,7 +546,6 @@ class TestComplexModel:
 
 
 class TestDeterminism:
-
     def test_same_model_same_contract_id(self) -> None:
         class Weather(BaseModel):
             temperature: float

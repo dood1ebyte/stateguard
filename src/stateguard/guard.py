@@ -94,19 +94,19 @@ class ContractGuard:
     ) -> None:
         self._adapter = adapter
         self._config = config if config is not None else GuardConfig()
-        self._telemetry: ITelemetryHook = (
-            telemetry if telemetry is not None else NoopTelemetry()
-        )
+        self._telemetry: ITelemetryHook = telemetry if telemetry is not None else NoopTelemetry()
         self._history = history
-        self._registry = StrategyRegistry([
-            ExactAliasStrategy(),
-            FuzzyFieldMatchStrategy(
-                min_confidence_threshold=self._config.repair.min_confidence_threshold,
-                score_collision_margin=self._config.repair.score_collision_margin,
-            ),
-            TypeCoercionStrategy(),
-            DefaultValueFillStrategy(),
-        ])
+        self._registry = StrategyRegistry(
+            [
+                ExactAliasStrategy(),
+                FuzzyFieldMatchStrategy(
+                    min_confidence_threshold=self._config.repair.min_confidence_threshold,
+                    score_collision_margin=self._config.repair.score_collision_margin,
+                ),
+                TypeCoercionStrategy(),
+                DefaultValueFillStrategy(),
+            ]
+        )
 
     # ------------------------------------------------------------------
     # Factory methods

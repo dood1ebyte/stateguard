@@ -271,8 +271,7 @@ class RepairEngine:
             )
             self._logger.info(
                 "violation.detected",
-                f"Detected {violation.violation_type.value} at "
-                f"'{violation.field_path}'.",
+                f"Detected {violation.violation_type.value} at '{violation.field_path}'.",
                 field_path=violation.field_path,
                 violation_type=violation.violation_type.value,
                 severity=violation.severity.value,
@@ -301,18 +300,13 @@ class RepairEngine:
             )
 
         initial_violations = list(initial_result.violations)
-        initial_signatures = {
-            self._violation_signature(v) for v in initial_violations
-        }
-        initial_error_count = sum(
-            1 for v in initial_violations if v.severity.value == "error"
-        )
+        initial_signatures = {self._violation_signature(v) for v in initial_violations}
+        initial_error_count = sum(1 for v in initial_violations if v.severity.value == "error")
 
         self._emit(contract, TelemetryEventType.REPAIR_STARTED)
         self._logger.info(
             "repair.started",
-            f"Starting repair loop with {len(initial_violations)} "
-            f"violation(s) detected.",
+            f"Starting repair loop with {len(initial_violations)} violation(s) detected.",
             violation_count=len(initial_violations),
         )
 
@@ -326,14 +320,11 @@ class RepairEngine:
         for attempt_number in range(1, self._config.max_attempts + 1):
             correlated = self._correlate_violations(current_violations)
 
-            applicable = self._registry.get_applicable(
-                correlated, contract, working_data
-            )
+            applicable = self._registry.get_applicable(correlated, contract, working_data)
             if not applicable:
                 self._logger.warning(
                     "strategy.none_applicable",
-                    "No registered strategy can handle the remaining "
-                    "violations.",
+                    "No registered strategy can handle the remaining violations.",
                     attempt_number=attempt_number,
                 )
                 remaining_violations = correlated
@@ -348,8 +339,7 @@ class RepairEngine:
             )
             self._logger.info(
                 "strategy.selected",
-                f"Selected strategy '{strategy.name}' for attempt "
-                f"{attempt_number}.",
+                f"Selected strategy '{strategy.name}' for attempt {attempt_number}.",
                 strategy=strategy.name,
                 attempt_number=attempt_number,
             )
@@ -444,9 +434,7 @@ class RepairEngine:
                 break
 
             # --- Regression check --------------------------------------------
-            new_signatures = {
-                self._violation_signature(v) for v in revalidation.violations
-            }
+            new_signatures = {self._violation_signature(v) for v in revalidation.violations}
             if not new_signatures.issubset(initial_signatures):
                 self._logger.error(
                     "repair.regression_detected",
@@ -483,8 +471,7 @@ class RepairEngine:
             # for/else: loop exhausted max_attempts without break.
             self._logger.warning(
                 "repair.max_attempts_exhausted",
-                f"Reached max_attempts ({self._config.max_attempts}) "
-                f"without full repair.",
+                f"Reached max_attempts ({self._config.max_attempts}) without full repair.",
                 max_attempts=self._config.max_attempts,
             )
 
@@ -574,9 +561,7 @@ class RepairEngine:
         adapter_result = adapter.validate(contract, data)
         core_result = self._core_validator.validate(contract, data)
 
-        adapter_signatures = {
-            self._violation_signature(v) for v in adapter_result.violations
-        }
+        adapter_signatures = {self._violation_signature(v) for v in adapter_result.violations}
 
         merged_violations = list(adapter_result.violations)
         core_only_error = False
@@ -635,13 +620,9 @@ class RepairEngine:
         during this repair iteration.
         """
         missing = [
-            v for v in violations
-            if v.violation_type is ViolationType.MISSING_REQUIRED_FIELD
+            v for v in violations if v.violation_type is ViolationType.MISSING_REQUIRED_FIELD
         ]
-        unexpected = [
-            v for v in violations
-            if v.violation_type is ViolationType.UNEXPECTED_FIELD
-        ]
+        unexpected = [v for v in violations if v.violation_type is ViolationType.UNEXPECTED_FIELD]
 
         for m in missing:
             for u in unexpected:
@@ -672,8 +653,7 @@ class RepairEngine:
         terminates.
         """
         signatures = sorted(
-            (v.field_path, v.violation_type.value, v.severity.value)
-            for v in violations
+            (v.field_path, v.violation_type.value, v.severity.value) for v in violations
         )
         return hashlib.sha256(repr(signatures).encode("utf-8")).hexdigest()
 

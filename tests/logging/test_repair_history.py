@@ -118,7 +118,6 @@ def _make_result(
 
 
 class TestConstruction:
-
     def test_default_path(self) -> None:
         recorder = RepairHistoryRecorder()
         assert recorder.path == DEFAULT_HISTORY_PATH
@@ -149,7 +148,6 @@ class TestConstruction:
 
 
 class TestRecordDisabled:
-
     def test_disabled_returns_true_without_writing(self, history_path: Path) -> None:
         recorder = RepairHistoryRecorder(path=history_path, enabled=False)
         result = _make_result()
@@ -163,7 +161,6 @@ class TestRecordDisabled:
 
 
 class TestRecordBasic:
-
     def test_record_creates_parent_directories(
         self, recorder: RepairHistoryRecorder, history_path: Path
     ) -> None:
@@ -174,9 +171,7 @@ class TestRecordBasic:
         assert recorder.record(result) is True
         assert history_path.exists()
 
-    def test_record_returns_true_on_success(
-        self, recorder: RepairHistoryRecorder
-    ) -> None:
+    def test_record_returns_true_on_success(self, recorder: RepairHistoryRecorder) -> None:
         op = _make_operation()
         attempt = _make_attempt(applied_operations=[op])
         result = _make_result(attempts=[attempt])
@@ -225,10 +220,7 @@ class TestRecordBasic:
 
 
 class TestRecordFieldContent:
-
-    def test_record_contains_required_fields(
-        self, recorder: RepairHistoryRecorder
-    ) -> None:
+    def test_record_contains_required_fields(self, recorder: RepairHistoryRecorder) -> None:
         op = _make_operation()
         attempt = _make_attempt(applied_operations=[op])
         result = _make_result(attempts=[attempt])
@@ -237,9 +229,18 @@ class TestRecordFieldContent:
         records = recorder.read_all()
         record = records[0]
         for key in (
-            "timestamp", "contract_id", "status", "strategy",
-            "violation_type", "field_path", "field_before", "field_after",
-            "confidence", "success", "attempt_number", "op_type",
+            "timestamp",
+            "contract_id",
+            "status",
+            "strategy",
+            "violation_type",
+            "field_path",
+            "field_before",
+            "field_after",
+            "confidence",
+            "success",
+            "attempt_number",
+            "op_type",
         ):
             assert key in record
 
@@ -285,9 +286,7 @@ class TestRecordFieldContent:
         recorder.record(result)
         assert recorder.read_all()[0]["attempt_number"] == 3
 
-    def test_success_matches_attempt_succeeded(
-        self, recorder: RepairHistoryRecorder
-    ) -> None:
+    def test_success_matches_attempt_succeeded(self, recorder: RepairHistoryRecorder) -> None:
         op = _make_operation()
         attempt = _make_attempt(applied_operations=[op], succeeded=False)
         result = _make_result(attempts=[attempt])
@@ -335,9 +334,7 @@ class TestRecordFieldContent:
         assert record["field_before"] == "5"
         assert record["field_after"] == 5
 
-    def test_field_before_none_when_not_found(
-        self, recorder: RepairHistoryRecorder
-    ) -> None:
+    def test_field_before_none_when_not_found(self, recorder: RepairHistoryRecorder) -> None:
         op = _make_operation(
             op_type=FieldOpType.SET_DEFAULT, target_path="humidity", source_path=None
         )
@@ -378,9 +375,7 @@ class TestRecordFieldContent:
         recorder.record(result)
         assert recorder.read_all()[0]["violation_type"] == "unexpected_field"
 
-    def test_violation_type_none_when_unresolvable(
-        self, recorder: RepairHistoryRecorder
-    ) -> None:
+    def test_violation_type_none_when_unresolvable(self, recorder: RepairHistoryRecorder) -> None:
         op = _make_operation(target_path="unrelated_field", source_path="also_unrelated")
         attempt = _make_attempt(applied_operations=[op])
         result = _make_result(attempts=[attempt], initial_violations=[])
@@ -405,18 +400,13 @@ class TestRecordFieldContent:
 
 
 class TestRecordNoAttempts:
-
-    def test_already_valid_writes_one_summary_record(
-        self, recorder: RepairHistoryRecorder
-    ) -> None:
+    def test_already_valid_writes_one_summary_record(self, recorder: RepairHistoryRecorder) -> None:
         result = _make_result(status=RepairStatus.ALREADY_VALID, attempts=[])
         recorder.record(result)
         records = recorder.read_all()
         assert len(records) == 1
 
-    def test_already_valid_summary_fields_are_none(
-        self, recorder: RepairHistoryRecorder
-    ) -> None:
+    def test_already_valid_summary_fields_are_none(self, recorder: RepairHistoryRecorder) -> None:
         result = _make_result(status=RepairStatus.ALREADY_VALID, attempts=[])
         recorder.record(result)
         record = recorder.read_all()[0]
@@ -429,9 +419,7 @@ class TestRecordNoAttempts:
         assert record["attempt_number"] is None
         assert record["op_type"] is None
 
-    def test_already_valid_summary_success_is_true(
-        self, recorder: RepairHistoryRecorder
-    ) -> None:
+    def test_already_valid_summary_success_is_true(self, recorder: RepairHistoryRecorder) -> None:
         result = _make_result(status=RepairStatus.ALREADY_VALID, attempts=[])
         recorder.record(result)
         assert recorder.read_all()[0]["success"] is True
@@ -443,9 +431,7 @@ class TestRecordNoAttempts:
         recorder.record(result)
         assert recorder.read_all()[0]["success"] is False
 
-    def test_failed_with_no_attempts_status_recorded(
-        self, recorder: RepairHistoryRecorder
-    ) -> None:
+    def test_failed_with_no_attempts_status_recorded(self, recorder: RepairHistoryRecorder) -> None:
         result = _make_result(status=RepairStatus.FAILED, attempts=[])
         recorder.record(result)
         assert recorder.read_all()[0]["status"] == "failed"
@@ -457,7 +443,6 @@ class TestRecordNoAttempts:
 
 
 class TestRecordAttemptsWithNoAppliedOps:
-
     def test_attempt_with_zero_applied_operations_writes_nothing(
         self, recorder: RepairHistoryRecorder
     ) -> None:
@@ -477,17 +462,20 @@ class TestRecordAttemptsWithNoAppliedOps:
 
 
 class TestRecordMultipleAttempts:
-
-    def test_two_attempts_two_operations_total(
-        self, recorder: RepairHistoryRecorder
-    ) -> None:
+    def test_two_attempts_two_operations_total(self, recorder: RepairHistoryRecorder) -> None:
         op1 = _make_operation(target_path="address.zip_code", source_path="address.zipcode")
         op2 = _make_operation(
-            op_type=FieldOpType.COERCE, target_path="address.country.population",
-            source_path=None, confidence=0.95,
+            op_type=FieldOpType.COERCE,
+            target_path="address.country.population",
+            source_path=None,
+            confidence=0.95,
         )
-        attempt1 = _make_attempt(strategy_name="FuzzyFieldMatchStrategy", applied_operations=[op1], attempt_number=1)
-        attempt2 = _make_attempt(strategy_name="TypeCoercionStrategy", applied_operations=[op2], attempt_number=2)
+        attempt1 = _make_attempt(
+            strategy_name="FuzzyFieldMatchStrategy", applied_operations=[op1], attempt_number=1
+        )
+        attempt2 = _make_attempt(
+            strategy_name="TypeCoercionStrategy", applied_operations=[op2], attempt_number=2
+        )
         result = _make_result(attempts=[attempt1, attempt2])
         recorder.record(result)
 
@@ -503,7 +491,6 @@ class TestRecordMultipleAttempts:
 
 
 class TestRecordFailureResilience:
-
     def test_unwritable_parent_path_returns_false(self, tmp_path: Path) -> None:
         """A path component that is a FILE (not a directory) cannot have
         children created under it -- record() must return False, not raise."""
@@ -562,10 +549,7 @@ class TestRecordFailureResilience:
 
 
 class TestReadAll:
-
-    def test_read_all_nonexistent_file_returns_empty(
-        self, history_path: Path
-    ) -> None:
+    def test_read_all_nonexistent_file_returns_empty(self, history_path: Path) -> None:
         recorder = RepairHistoryRecorder(path=history_path)
         assert recorder.read_all() == []
 
@@ -584,9 +568,7 @@ class TestReadAll:
         records = recorder.read_all()
         assert len(records) == 1
 
-    def test_read_all_returns_empty_on_unreadable_path(
-        self, tmp_path: Path
-    ) -> None:
+    def test_read_all_returns_empty_on_unreadable_path(self, tmp_path: Path) -> None:
         directory_as_file = tmp_path / "a_directory"
         directory_as_file.mkdir()
         recorder = RepairHistoryRecorder(path=directory_as_file)
@@ -601,7 +583,6 @@ class TestReadAll:
 
 
 class TestGetNestedValueHelper:
-
     def test_top_level(self) -> None:
         assert _get_nested_value({"a": 1}, "a") == 1
 
@@ -624,7 +605,6 @@ class TestGetNestedValueHelper:
 
 
 class TestViolationTypeForPathHelper:
-
     def test_match_found(self) -> None:
         v = _make_violation("temperature", ViolationType.TYPE_MISMATCH)
         result = _violation_type_for_path([v], "temperature")

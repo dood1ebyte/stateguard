@@ -21,7 +21,6 @@ from stateguard.core.models.field_types import FieldType
 
 
 class TestViolationType:
-
     def test_all_expected_values_present(self) -> None:
         expected = {
             "missing_required_field",
@@ -69,7 +68,6 @@ class TestViolationType:
 
 
 class TestViolationSeverity:
-
     def test_all_expected_values_present(self) -> None:
         assert {vs.value for vs in ViolationSeverity} == {"error", "warning"}
 
@@ -83,9 +81,7 @@ class TestViolationSeverity:
         assert ViolationSeverity.WARNING == "warning"
 
     @pytest.mark.parametrize("member", list(ViolationSeverity))
-    def test_every_member_round_trips_via_value(
-        self, member: ViolationSeverity
-    ) -> None:
+    def test_every_member_round_trips_via_value(self, member: ViolationSeverity) -> None:
         assert ViolationSeverity(member.value) is member
 
     def test_error_and_warning_are_not_equal(self) -> None:
@@ -125,7 +121,6 @@ _UUID4_RE = re.compile(
 
 
 class TestContractViolation:
-
     # --- Minimal construction -------------------------------------------------
 
     def test_required_fields_are_stored(self) -> None:
@@ -291,27 +286,21 @@ class TestContractViolation:
     # --- Parametrised: all violation types ------------------------------------
 
     @pytest.mark.parametrize("vtype", list(ViolationType))
-    def test_every_violation_type_is_constructable(
-        self, vtype: ViolationType
-    ) -> None:
+    def test_every_violation_type_is_constructable(self, vtype: ViolationType) -> None:
         v = _make(violation_type=vtype)
         assert v.violation_type is vtype
 
     # --- Parametrised: all severities -----------------------------------------
 
     @pytest.mark.parametrize("severity", list(ViolationSeverity))
-    def test_every_severity_is_constructable(
-        self, severity: ViolationSeverity
-    ) -> None:
+    def test_every_severity_is_constructable(self, severity: ViolationSeverity) -> None:
         v = _make(severity=severity)
         assert v.severity is severity
 
     # --- Parametrised: all FieldType expected_types ---------------------------
 
     @pytest.mark.parametrize("ftype", list(FieldType))
-    def test_every_field_type_accepted_as_expected_type(
-        self, ftype: FieldType
-    ) -> None:
+    def test_every_field_type_accepted_as_expected_type(self, ftype: FieldType) -> None:
         v = _make(
             violation_type=ViolationType.TYPE_MISMATCH,
             expected_type=ftype,

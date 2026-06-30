@@ -86,7 +86,6 @@ def _run(argv: list[str], capsys: pytest.CaptureFixture) -> tuple[int, str, str]
 
 
 class TestArgParsing:
-
     def test_help_exits_zero(self, capsys: pytest.CaptureFixture) -> None:
         with pytest.raises(SystemExit) as exc_info:
             main(["--help"])
@@ -108,9 +107,7 @@ class TestArgParsing:
             main([])
         assert exc_info.value.code != 0
 
-    def test_check_requires_payload(
-        self, schema_file: Path, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_check_requires_payload(self, schema_file: Path, capsys: pytest.CaptureFixture) -> None:
         with pytest.raises(SystemExit) as exc_info:
             main(["check", "--schema", str(schema_file)])
         assert exc_info.value.code != 0
@@ -126,12 +123,17 @@ class TestArgParsing:
         self, schema_file: Path, payload_valid: Path, capsys: pytest.CaptureFixture
     ) -> None:
         with pytest.raises(SystemExit) as exc_info:
-            main([
-                "check",
-                "--schema", str(schema_file),
-                "--model", "pydantic:BaseModel",
-                "--payload", str(payload_valid),
-            ])
+            main(
+                [
+                    "check",
+                    "--schema",
+                    str(schema_file),
+                    "--model",
+                    "pydantic:BaseModel",
+                    "--payload",
+                    str(payload_valid),
+                ]
+            )
         assert exc_info.value.code != 0
 
 
@@ -141,7 +143,6 @@ class TestArgParsing:
 
 
 class TestExitCodes:
-
     def test_exit_0_on_already_valid(
         self, schema_file: Path, payload_valid: Path, capsys: pytest.CaptureFixture
     ) -> None:
@@ -169,9 +170,7 @@ class TestExitCodes:
         )
         assert code == 2
 
-    def test_exit_1_on_partial(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_exit_1_on_partial(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """One field is fuzzy-fixable, the other has no plausible
         candidate at all -- guaranteed PARTIAL, never FAILED or SUCCESS."""
         schema = {
@@ -200,7 +199,6 @@ class TestExitCodes:
 
 
 class TestHumanOutput:
-
     def test_already_valid_shows_status(
         self, schema_file: Path, payload_valid: Path, capsys: pytest.CaptureFixture
     ) -> None:
@@ -290,15 +288,16 @@ class TestHumanOutput:
 
 
 class TestJsonOutput:
-
     def _get_json(
         self, schema_file: Path, payload_file: Path, capsys: pytest.CaptureFixture
     ) -> dict[str, Any]:
         _, out, _ = _run(
             [
                 "check",
-                "--schema", str(schema_file),
-                "--payload", str(payload_file),
+                "--schema",
+                str(schema_file),
+                "--payload",
+                str(payload_file),
                 "--json",
             ],
             capsys,
@@ -395,7 +394,6 @@ class TestJsonOutput:
 
 
 class TestStrictFlag:
-
     def test_non_strict_extra_field_is_already_valid(
         self, schema_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture
     ) -> None:
@@ -417,8 +415,10 @@ class TestStrictFlag:
         code, _, _ = _run(
             [
                 "check",
-                "--schema", str(schema_file),
-                "--payload", str(payload),
+                "--schema",
+                str(schema_file),
+                "--payload",
+                str(payload),
                 "--strict",
             ],
             capsys,
@@ -432,29 +432,28 @@ class TestStrictFlag:
 
 
 class TestErrorHandling:
-
-    def test_missing_payload_file(
-        self, schema_file: Path, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_missing_payload_file(self, schema_file: Path, capsys: pytest.CaptureFixture) -> None:
         code, _, err = _run(
             [
                 "check",
-                "--schema", str(schema_file),
-                "--payload", "/no/such/file.json",
+                "--schema",
+                str(schema_file),
+                "--payload",
+                "/no/such/file.json",
             ],
             capsys,
         )
         assert code == 2
         assert "error" in err.lower() or "not found" in err.lower()
 
-    def test_missing_schema_file(
-        self, payload_valid: Path, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_missing_schema_file(self, payload_valid: Path, capsys: pytest.CaptureFixture) -> None:
         code, _, err = _run(
             [
                 "check",
-                "--schema", "/no/such/schema.json",
-                "--payload", str(payload_valid),
+                "--schema",
+                "/no/such/schema.json",
+                "--payload",
+                str(payload_valid),
             ],
             capsys,
         )
@@ -479,8 +478,10 @@ class TestErrorHandling:
         code, _, err = _run(
             [
                 "check",
-                "--model", "nocoalonthis",
-                "--payload", str(payload_valid),
+                "--model",
+                "nocoalonthis",
+                "--payload",
+                str(payload_valid),
             ],
             capsys,
         )
@@ -493,8 +494,10 @@ class TestErrorHandling:
         code, _, err = _run(
             [
                 "check",
-                "--model", "no.such.module:WeatherModel",
-                "--payload", str(payload_valid),
+                "--model",
+                "no.such.module:WeatherModel",
+                "--payload",
+                str(payload_valid),
             ],
             capsys,
         )
@@ -507,8 +510,10 @@ class TestErrorHandling:
         code, _, err = _run(
             [
                 "check",
-                "--model", "pydantic:NonExistentClass9999",
-                "--payload", str(payload_valid),
+                "--model",
+                "pydantic:NonExistentClass9999",
+                "--payload",
+                str(payload_valid),
             ],
             capsys,
         )
@@ -523,8 +528,10 @@ class TestErrorHandling:
         code, _, err = _run(
             [
                 "check",
-                "--schema", str(bad_schema),
-                "--payload", str(payload_valid),
+                "--schema",
+                str(bad_schema),
+                "--payload",
+                str(payload_valid),
             ],
             capsys,
         )
@@ -538,10 +545,7 @@ class TestErrorHandling:
 
 
 class TestModelFlag:
-
-    def test_pydantic_model_repair(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_pydantic_model_repair(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """Test --model with a real module that ships with stateguard's
         test suite; we can import from tests.conftest in test context."""
         payload = tmp_path / "payload.json"
@@ -550,8 +554,10 @@ class TestModelFlag:
         code, out, _ = _run(
             [
                 "check",
-                "--model", "tests.adapters.pydantic.conftest:Weather",
-                "--payload", str(payload),
+                "--model",
+                "tests.adapters.pydantic.conftest:Weather",
+                "--payload",
+                str(payload),
             ],
             capsys,
         )
@@ -570,8 +576,10 @@ class TestModelFlag:
         _, out, _ = _run(
             [
                 "check",
-                "--model", "tests.adapters.pydantic.conftest:Weather",
-                "--payload", str(payload),
+                "--model",
+                "tests.adapters.pydantic.conftest:Weather",
+                "--payload",
+                str(payload),
                 "--json",
             ],
             capsys,
@@ -587,16 +595,18 @@ class TestModelFlag:
 
 
 class TestPowerUserFlags:
-
     def test_max_attempts_flag_accepted(
         self, schema_file: Path, payload_drifted: Path, capsys: pytest.CaptureFixture
     ) -> None:
         code, _, _ = _run(
             [
                 "check",
-                "--schema", str(schema_file),
-                "--payload", str(payload_drifted),
-                "--max-attempts", "3",
+                "--schema",
+                str(schema_file),
+                "--payload",
+                str(payload_drifted),
+                "--max-attempts",
+                "3",
             ],
             capsys,
         )
@@ -608,9 +618,12 @@ class TestPowerUserFlags:
         code, _, _ = _run(
             [
                 "check",
-                "--schema", str(schema_file),
-                "--payload", str(payload_drifted),
-                "--confidence-threshold", "0.1",
+                "--schema",
+                str(schema_file),
+                "--payload",
+                str(payload_drifted),
+                "--confidence-threshold",
+                "0.1",
             ],
             capsys,
         )
@@ -623,7 +636,6 @@ class TestPowerUserFlags:
 
 
 class TestLoadJson:
-
     def test_valid_json_file(self, tmp_path: Path) -> None:
         p = tmp_path / "test.json"
         p.write_text('{"key": "value"}')
@@ -642,10 +654,10 @@ class TestLoadJson:
 
 
 class TestLoadModel:
-
     def test_valid_reference(self) -> None:
         model = _load_model("pydantic:BaseModel")
         from pydantic import BaseModel
+
         assert model is BaseModel
 
     def test_missing_colon_raises_system_exit(self) -> None:

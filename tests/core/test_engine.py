@@ -50,12 +50,14 @@ from tests.conftest import (
 
 def full_registry() -> StrategyRegistry:
     """The complete V1 strategy set in canonical priority order."""
-    return StrategyRegistry([
-        ExactAliasStrategy(),
-        FuzzyFieldMatchStrategy(),
-        TypeCoercionStrategy(),
-        DefaultValueFillStrategy(),
-    ])
+    return StrategyRegistry(
+        [
+            ExactAliasStrategy(),
+            FuzzyFieldMatchStrategy(),
+            TypeCoercionStrategy(),
+            DefaultValueFillStrategy(),
+        ]
+    )
 
 
 def make_engine(
@@ -77,12 +79,13 @@ def make_engine(
 
 
 class TestAlreadyValid:
-
     def test_valid_data_returns_already_valid(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("temperature", FieldType.FLOAT),
-            FieldSpec("humidity", FieldType.INTEGER),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("temperature", FieldType.FLOAT),
+                FieldSpec("humidity", FieldType.INTEGER),
+            ]
+        )
         data = {"temperature": 31.5, "humidity": 80}
         engine = make_engine()
         result = engine.repair(contract, data, MockContractAdapter())
@@ -115,9 +118,7 @@ class TestAlreadyValid:
         but the warning appears in initial/remaining violations."""
         contract = ContractSpec(fields=[FieldSpec("x", FieldType.STRING)])
         engine = make_engine()
-        result = engine.repair(
-            contract, {"x": "hello", "extra": 1}, MockContractAdapter()
-        )
+        result = engine.repair(contract, {"x": "hello", "extra": 1}, MockContractAdapter())
         assert result.status is RepairStatus.ALREADY_VALID
         assert len(result.initial_violations) == 1
         assert result.initial_violations[0].violation_type is ViolationType.UNEXPECTED_FIELD
@@ -151,13 +152,14 @@ class TestAlreadyValid:
 
 
 class TestSuccessSingleAttempt:
-
     @staticmethod
     def _contract() -> ContractSpec:
-        return ContractSpec(fields=[
-            FieldSpec("city", FieldType.STRING),
-            FieldSpec("population", FieldType.INTEGER),
-        ])
+        return ContractSpec(
+            fields=[
+                FieldSpec("city", FieldType.STRING),
+                FieldSpec("population", FieldType.INTEGER),
+            ]
+        )
 
     def test_status_is_success(self) -> None:
         engine = make_engine()
@@ -268,13 +270,14 @@ class TestSuccessSingleAttempt:
 
 
 class TestSuccessTwoAttempts:
-
     @staticmethod
     def _contract() -> ContractSpec:
-        return ContractSpec(fields=[
-            FieldSpec("city", FieldType.STRING, known_aliases=["town"]),
-            FieldSpec("count", FieldType.INTEGER),
-        ])
+        return ContractSpec(
+            fields=[
+                FieldSpec("city", FieldType.STRING, known_aliases=["town"]),
+                FieldSpec("count", FieldType.INTEGER),
+            ]
+        )
 
     def test_status_success(self) -> None:
         engine = make_engine()
@@ -338,7 +341,6 @@ class TestSuccessTwoAttempts:
 
 
 class TestNoApplicableStrategy:
-
     def test_failed_immediately(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("widget_id", FieldType.STRING)])
         engine = make_engine()
@@ -365,14 +367,14 @@ class TestNoApplicableStrategy:
         assert result.remaining_violations[0].violation_type is ViolationType.MISSING_REQUIRED_FIELD
 
     def test_empty_registry_always_fails(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("city", FieldType.STRING),
-            FieldSpec("population", FieldType.INTEGER),
-        ])
-        engine = make_engine(registry=StrategyRegistry([]))
-        result = engine.repair(
-            contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter()
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("city", FieldType.STRING),
+                FieldSpec("population", FieldType.INTEGER),
+            ]
         )
+        engine = make_engine(registry=StrategyRegistry([]))
+        result = engine.repair(contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter())
         assert result.status is RepairStatus.FAILED
         assert result.attempts == []
 
@@ -383,12 +385,11 @@ class TestNoApplicableStrategy:
 
 
 class TestNoProgressDetection:
-
     def test_strategy_proposing_nothing_yields_failed(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("widget_id", FieldType.STRING)])
-        registry = StrategyRegistry([
-            MockRepairStrategy(name="DoNothing", priority=10, handle=True, operations=[])
-        ])
+        registry = StrategyRegistry(
+            [MockRepairStrategy(name="DoNothing", priority=10, handle=True, operations=[])]
+        )
         engine = make_engine(registry=registry)
         result = engine.repair(contract, {}, MockContractAdapter())
 
@@ -400,19 +401,21 @@ class TestNoProgressDetection:
     def test_no_progress_stops_before_max_attempts(self) -> None:
         """Even with max_attempts=10, a no-op strategy stops after 1 attempt."""
         contract = ContractSpec(fields=[FieldSpec("widget_id", FieldType.STRING)])
-        registry = StrategyRegistry([
-            MockRepairStrategy(name="DoNothing", priority=10, handle=True, operations=[])
-        ])
+        registry = StrategyRegistry(
+            [MockRepairStrategy(name="DoNothing", priority=10, handle=True, operations=[])]
+        )
         engine = make_engine(registry=registry, config=RepairConfig(max_attempts=10))
         result = engine.repair(contract, {}, MockContractAdapter())
         assert len(result.attempts) == 1
 
     def test_operation_with_no_effect_yields_no_progress(self) -> None:
         """A SET_VALUE on an already-correct value changes nothing -> no progress."""
-        contract = ContractSpec(fields=[
-            FieldSpec("x", FieldType.STRING),
-            FieldSpec("y", FieldType.INTEGER),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("x", FieldType.STRING),
+                FieldSpec("y", FieldType.INTEGER),
+            ]
+        )
         # 'y' is missing; the mock strategy "fixes" 'x' (already correct,
         # so SET_VALUE has no effect) instead of 'y'.
         noop_op = FieldOperation(
@@ -422,9 +425,9 @@ class TestNoProgressDetection:
             rationale="no-op",
             value="hello",
         )
-        registry = StrategyRegistry([
-            MockRepairStrategy(name="Noop", priority=10, handle=True, operations=[noop_op])
-        ])
+        registry = StrategyRegistry(
+            [MockRepairStrategy(name="Noop", priority=10, handle=True, operations=[noop_op])]
+        )
         engine = make_engine(registry=registry)
         result = engine.repair(contract, {"x": "hello"}, MockContractAdapter())
 
@@ -439,12 +442,13 @@ class TestNoProgressDetection:
 
 
 class TestRegressionDetection:
-
     def test_new_violation_type_triggers_failed(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("a", FieldType.INTEGER, required=True),
-            FieldSpec("b", FieldType.INTEGER, required=False),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("a", FieldType.INTEGER, required=True),
+                FieldSpec("b", FieldType.INTEGER, required=False),
+            ]
+        )
         bad_op = FieldOperation(
             op_type=FieldOpType.SET_VALUE,
             target_path="b",
@@ -452,9 +456,9 @@ class TestRegressionDetection:
             rationale="introduces a type mismatch on b",
             value="oops",
         )
-        registry = StrategyRegistry([
-            MockRepairStrategy(name="Regress", priority=10, handle=True, operations=[bad_op])
-        ])
+        registry = StrategyRegistry(
+            [MockRepairStrategy(name="Regress", priority=10, handle=True, operations=[bad_op])]
+        )
         engine = make_engine(registry=registry)
         result = engine.repair(contract, {}, MockContractAdapter())
 
@@ -462,10 +466,12 @@ class TestRegressionDetection:
         assert result.repaired_output is None
 
     def test_regression_stops_after_one_attempt(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("a", FieldType.INTEGER, required=True),
-            FieldSpec("b", FieldType.INTEGER, required=False),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("a", FieldType.INTEGER, required=True),
+                FieldSpec("b", FieldType.INTEGER, required=False),
+            ]
+        )
         bad_op = FieldOperation(
             op_type=FieldOpType.SET_VALUE,
             target_path="b",
@@ -473,18 +479,20 @@ class TestRegressionDetection:
             rationale="introduces a type mismatch on b",
             value="oops",
         )
-        registry = StrategyRegistry([
-            MockRepairStrategy(name="Regress", priority=10, handle=True, operations=[bad_op])
-        ])
+        registry = StrategyRegistry(
+            [MockRepairStrategy(name="Regress", priority=10, handle=True, operations=[bad_op])]
+        )
         engine = make_engine(registry=registry, config=RepairConfig(max_attempts=10))
         result = engine.repair(contract, {}, MockContractAdapter())
         assert len(result.attempts) == 1
 
     def test_regression_attempt_marked_unsuccessful(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("a", FieldType.INTEGER, required=True),
-            FieldSpec("b", FieldType.INTEGER, required=False),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("a", FieldType.INTEGER, required=True),
+                FieldSpec("b", FieldType.INTEGER, required=False),
+            ]
+        )
         bad_op = FieldOperation(
             op_type=FieldOpType.SET_VALUE,
             target_path="b",
@@ -492,9 +500,9 @@ class TestRegressionDetection:
             rationale="introduces a type mismatch on b",
             value="oops",
         )
-        registry = StrategyRegistry([
-            MockRepairStrategy(name="Regress", priority=10, handle=True, operations=[bad_op])
-        ])
+        registry = StrategyRegistry(
+            [MockRepairStrategy(name="Regress", priority=10, handle=True, operations=[bad_op])]
+        )
         engine = make_engine(registry=registry)
         result = engine.repair(contract, {}, MockContractAdapter())
         assert result.attempts[0].succeeded is False
@@ -506,13 +514,14 @@ class TestRegressionDetection:
 
 
 class TestPartialRepair:
-
     @staticmethod
     def _contract() -> ContractSpec:
-        return ContractSpec(fields=[
-            FieldSpec("a", FieldType.INTEGER, required=True),
-            FieldSpec("b", FieldType.INTEGER, required=True),
-        ])
+        return ContractSpec(
+            fields=[
+                FieldSpec("a", FieldType.INTEGER, required=True),
+                FieldSpec("b", FieldType.INTEGER, required=True),
+            ]
+        )
 
     @staticmethod
     def _registry() -> StrategyRegistry:
@@ -523,9 +532,9 @@ class TestPartialRepair:
             rationale="fix a only",
             value=1,
         )
-        return StrategyRegistry([
-            MockRepairStrategy(name="FixA", priority=10, handle=True, operations=[fix_a])
-        ])
+        return StrategyRegistry(
+            [MockRepairStrategy(name="FixA", priority=10, handle=True, operations=[fix_a])]
+        )
 
     def test_allow_partial_repair_true_yields_partial(self) -> None:
         engine = make_engine(
@@ -584,13 +593,14 @@ class TestPartialRepair:
 
 
 class TestMaxAttemptsExhaustion:
-
     @staticmethod
     def _contract() -> ContractSpec:
-        return ContractSpec(fields=[
-            FieldSpec("a", FieldType.INTEGER, required=True),
-            FieldSpec("b", FieldType.INTEGER, required=True),
-        ])
+        return ContractSpec(
+            fields=[
+                FieldSpec("a", FieldType.INTEGER, required=True),
+                FieldSpec("b", FieldType.INTEGER, required=True),
+            ]
+        )
 
     @staticmethod
     def _registry() -> StrategyRegistry:
@@ -601,14 +611,12 @@ class TestMaxAttemptsExhaustion:
             rationale="fix a only",
             value=1,
         )
-        return StrategyRegistry([
-            MockRepairStrategy(name="FixA", priority=10, handle=True, operations=[fix_a])
-        ])
+        return StrategyRegistry(
+            [MockRepairStrategy(name="FixA", priority=10, handle=True, operations=[fix_a])]
+        )
 
     def test_max_attempts_one_exhausted_with_progress(self) -> None:
-        engine = make_engine(
-            registry=self._registry(), config=RepairConfig(max_attempts=1)
-        )
+        engine = make_engine(registry=self._registry(), config=RepairConfig(max_attempts=1))
         result = engine.repair(self._contract(), {}, MockContractAdapter())
         assert len(result.attempts) == 1
         assert result.status is RepairStatus.PARTIAL
@@ -623,9 +631,7 @@ class TestMaxAttemptsExhaustion:
             assert len(result.attempts) <= max_attempts
 
     def test_max_attempts_exhaustion_logged(self) -> None:
-        engine = make_engine(
-            registry=self._registry(), config=RepairConfig(max_attempts=1)
-        )
+        engine = make_engine(registry=self._registry(), config=RepairConfig(max_attempts=1))
         result = engine.repair(self._contract(), {}, MockContractAdapter())
         events = [e.event for e in result.repair_log]
         assert "repair.max_attempts_exhausted" in events
@@ -637,7 +643,6 @@ class TestMaxAttemptsExhaustion:
 
 
 class TestConfidenceThresholdFiltering:
-
     def test_low_confidence_operation_rejected(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("a", FieldType.INTEGER)])
         high = FieldOperation(
@@ -653,9 +658,9 @@ class TestConfidenceThresholdFiltering:
             confidence=0.3,
             rationale="low confidence",
         )
-        registry = StrategyRegistry([
-            MockRepairStrategy(name="Mixed", priority=10, handle=True, operations=[high, low])
-        ])
+        registry = StrategyRegistry(
+            [MockRepairStrategy(name="Mixed", priority=10, handle=True, operations=[high, low])]
+        )
         engine = make_engine(registry=registry, config=RepairConfig(min_confidence_threshold=0.7))
         result = engine.repair(contract, {}, MockContractAdapter())
 
@@ -665,10 +670,12 @@ class TestConfidenceThresholdFiltering:
         assert rejected == [low]
 
     def test_rejected_operation_not_applied_to_data(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("a", FieldType.INTEGER),
-            FieldSpec("b", FieldType.STRING, required=False),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("a", FieldType.INTEGER),
+                FieldSpec("b", FieldType.STRING, required=False),
+            ]
+        )
         high = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="a",
@@ -683,9 +690,9 @@ class TestConfidenceThresholdFiltering:
             rationale="low confidence",
             value="should not be applied",
         )
-        registry = StrategyRegistry([
-            MockRepairStrategy(name="Mixed", priority=10, handle=True, operations=[high, low])
-        ])
+        registry = StrategyRegistry(
+            [MockRepairStrategy(name="Mixed", priority=10, handle=True, operations=[high, low])]
+        )
         engine = make_engine(registry=registry, config=RepairConfig(min_confidence_threshold=0.7))
         result = engine.repair(contract, {}, MockContractAdapter())
 
@@ -701,9 +708,9 @@ class TestConfidenceThresholdFiltering:
             rationale="exactly at threshold",
             value=1,
         )
-        registry = StrategyRegistry([
-            MockRepairStrategy(name="Exact", priority=10, handle=True, operations=[op])
-        ])
+        registry = StrategyRegistry(
+            [MockRepairStrategy(name="Exact", priority=10, handle=True, operations=[op])]
+        )
         engine = make_engine(registry=registry, config=RepairConfig(min_confidence_threshold=0.7))
         result = engine.repair(contract, {}, MockContractAdapter())
         assert result.attempts[0].applied_operations == [op]
@@ -718,9 +725,9 @@ class TestConfidenceThresholdFiltering:
             rationale="too low",
             value=1,
         )
-        registry = StrategyRegistry([
-            MockRepairStrategy(name="AllLow", priority=10, handle=True, operations=[low])
-        ])
+        registry = StrategyRegistry(
+            [MockRepairStrategy(name="AllLow", priority=10, handle=True, operations=[low])]
+        )
         engine = make_engine(registry=registry, config=RepairConfig(min_confidence_threshold=0.7))
         result = engine.repair(contract, {}, MockContractAdapter())
 
@@ -735,7 +742,6 @@ class TestConfidenceThresholdFiltering:
 
 
 class TestViolationCorrelation:
-
     def test_correlate_links_missing_and_unexpected(self) -> None:
         missing = make_violation(
             field_path="city", violation_type=ViolationType.MISSING_REQUIRED_FIELD
@@ -752,9 +758,7 @@ class TestViolationCorrelation:
         assert result is not None
 
     def test_correlate_full_cross_product(self) -> None:
-        m1 = make_violation(
-            field_path="city", violation_type=ViolationType.MISSING_REQUIRED_FIELD
-        )
+        m1 = make_violation(field_path="city", violation_type=ViolationType.MISSING_REQUIRED_FIELD)
         m2 = make_violation(
             field_path="zip_code",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -822,14 +826,14 @@ class TestViolationCorrelation:
 
     def test_end_to_end_correlation_visible_in_attempt(self) -> None:
         """In a real repair, violations_targeted include correlated IDs."""
-        contract = ContractSpec(fields=[
-            FieldSpec("city", FieldType.STRING),
-            FieldSpec("population", FieldType.INTEGER),
-        ])
-        engine = make_engine()
-        result = engine.repair(
-            contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter()
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("city", FieldType.STRING),
+                FieldSpec("population", FieldType.INTEGER),
+            ]
         )
+        engine = make_engine()
+        result = engine.repair(contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter())
         # Both the MISSING and UNEXPECTED violation_ids should be present
         # in violations_targeted for the single attempt.
         targeted = result.attempts[0].violations_targeted
@@ -842,60 +846,71 @@ class TestViolationCorrelation:
 
 
 class TestHashingAndSignatures:
-
     def test_violation_signature(self) -> None:
-        v = make_violation(
-            field_path="city", violation_type=ViolationType.MISSING_REQUIRED_FIELD
-        )
+        v = make_violation(field_path="city", violation_type=ViolationType.MISSING_REQUIRED_FIELD)
         assert RepairEngine._violation_signature(v) == ("city", "missing_required_field")
 
     def test_hash_same_for_same_violations(self) -> None:
         v1 = make_violation(field_path="a", violation_type=ViolationType.MISSING_REQUIRED_FIELD)
         v2 = make_violation(field_path="a", violation_type=ViolationType.MISSING_REQUIRED_FIELD)
-        assert RepairEngine._compute_violation_hash([v1]) == RepairEngine._compute_violation_hash([v2])
+        assert RepairEngine._compute_violation_hash([v1]) == RepairEngine._compute_violation_hash(
+            [v2]
+        )
 
     def test_hash_order_independent(self) -> None:
         v1 = make_violation(field_path="a", violation_type=ViolationType.MISSING_REQUIRED_FIELD)
         v2 = make_violation(field_path="b", violation_type=ViolationType.MISSING_REQUIRED_FIELD)
-        assert (
-            RepairEngine._compute_violation_hash([v1, v2])
-            == RepairEngine._compute_violation_hash([v2, v1])
-        )
+        assert RepairEngine._compute_violation_hash(
+            [v1, v2]
+        ) == RepairEngine._compute_violation_hash([v2, v1])
 
     def test_hash_differs_for_different_field_path(self) -> None:
         v1 = make_violation(field_path="a", violation_type=ViolationType.MISSING_REQUIRED_FIELD)
         v2 = make_violation(field_path="b", violation_type=ViolationType.MISSING_REQUIRED_FIELD)
-        assert RepairEngine._compute_violation_hash([v1]) != RepairEngine._compute_violation_hash([v2])
+        assert RepairEngine._compute_violation_hash([v1]) != RepairEngine._compute_violation_hash(
+            [v2]
+        )
 
     def test_hash_differs_for_different_violation_type(self) -> None:
         v1 = make_violation(field_path="a", violation_type=ViolationType.MISSING_REQUIRED_FIELD)
         v2 = make_violation(
-            field_path="a", violation_type=ViolationType.TYPE_MISMATCH,
+            field_path="a",
+            violation_type=ViolationType.TYPE_MISMATCH,
             severity=ViolationSeverity.ERROR,
         )
-        assert RepairEngine._compute_violation_hash([v1]) != RepairEngine._compute_violation_hash([v2])
+        assert RepairEngine._compute_violation_hash([v1]) != RepairEngine._compute_violation_hash(
+            [v2]
+        )
 
     def test_hash_differs_for_different_severity(self) -> None:
         v1 = make_violation(
-            field_path="a", violation_type=ViolationType.UNEXPECTED_FIELD,
+            field_path="a",
+            violation_type=ViolationType.UNEXPECTED_FIELD,
             severity=ViolationSeverity.WARNING,
         )
         v2 = make_violation(
-            field_path="a", violation_type=ViolationType.UNEXPECTED_FIELD,
+            field_path="a",
+            violation_type=ViolationType.UNEXPECTED_FIELD,
             severity=ViolationSeverity.ERROR,
         )
-        assert RepairEngine._compute_violation_hash([v1]) != RepairEngine._compute_violation_hash([v2])
+        assert RepairEngine._compute_violation_hash([v1]) != RepairEngine._compute_violation_hash(
+            [v2]
+        )
 
     def test_hash_empty_list(self) -> None:
         assert RepairEngine._compute_violation_hash([]) == RepairEngine._compute_violation_hash([])
 
     def test_hash_ignores_violation_id(self) -> None:
         """Two violations with different UUIDs but same signature hash the same."""
-        v1 = make_violation(field_path="a", violation_type=ViolationType.MISSING_REQUIRED_FIELD,
-                             violation_id="id-1")
-        v2 = make_violation(field_path="a", violation_type=ViolationType.MISSING_REQUIRED_FIELD,
-                             violation_id="id-2")
-        assert RepairEngine._compute_violation_hash([v1]) == RepairEngine._compute_violation_hash([v2])
+        v1 = make_violation(
+            field_path="a", violation_type=ViolationType.MISSING_REQUIRED_FIELD, violation_id="id-1"
+        )
+        v2 = make_violation(
+            field_path="a", violation_type=ViolationType.MISSING_REQUIRED_FIELD, violation_id="id-2"
+        )
+        assert RepairEngine._compute_violation_hash([v1]) == RepairEngine._compute_violation_hash(
+            [v2]
+        )
 
 
 # ===========================================================================
@@ -904,7 +919,6 @@ class TestHashingAndSignatures:
 
 
 class TestGetSetDeleteNested:
-
     def test_get_top_level(self) -> None:
         assert _get_nested({"a": 1}, "a") == 1
 
@@ -976,7 +990,6 @@ class TestGetSetDeleteNested:
 
 
 class TestFindFieldSpecEngine:
-
     def test_top_level(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("a", FieldType.INTEGER)])
         spec = _find_field_spec(contract, "a")
@@ -985,9 +998,11 @@ class TestFindFieldSpecEngine:
 
     def test_nested(self) -> None:
         inner = ContractSpec(fields=[FieldSpec("zip_code", FieldType.INTEGER)])
-        contract = ContractSpec(fields=[
-            FieldSpec("address", FieldType.OBJECT, nested_spec=inner),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("address", FieldType.OBJECT, nested_spec=inner),
+            ]
+        )
         spec = _find_field_spec(contract, "address.zip_code")
         assert spec is not None
         assert spec.field_type is FieldType.INTEGER
@@ -1003,7 +1018,6 @@ class TestFindFieldSpecEngine:
 
 
 class TestCoerceValue:
-
     def test_str_to_int(self) -> None:
         assert _coerce_value("5", FieldType.INTEGER) == 5
 
@@ -1057,7 +1071,6 @@ class TestCoerceValue:
 
 
 class TestApplyOperationDirect:
-
     def _engine(self) -> RepairEngine:
         return make_engine()
 
@@ -1065,8 +1078,11 @@ class TestApplyOperationDirect:
         contract = ContractSpec(fields=[FieldSpec("temperature", FieldType.FLOAT)])
         data: dict[str, Any] = {"temp_celsius": 31.5}
         op = FieldOperation(
-            op_type=FieldOpType.RENAME, target_path="temperature",
-            confidence=1.0, rationale="r", source_path="temp_celsius",
+            op_type=FieldOpType.RENAME,
+            target_path="temperature",
+            confidence=1.0,
+            rationale="r",
+            source_path="temp_celsius",
         )
         self._engine()._apply_operation(data, op, contract)
         assert data == {"temperature": 31.5}
@@ -1075,8 +1091,11 @@ class TestApplyOperationDirect:
         contract = ContractSpec(fields=[FieldSpec("address", FieldType.OBJECT)])
         data: dict[str, Any] = {"address": {"zip": "400001"}}
         op = FieldOperation(
-            op_type=FieldOpType.RENAME, target_path="address.zip_code",
-            confidence=1.0, rationale="r", source_path="address.zip",
+            op_type=FieldOpType.RENAME,
+            target_path="address.zip_code",
+            confidence=1.0,
+            rationale="r",
+            source_path="address.zip",
         )
         self._engine()._apply_operation(data, op, contract)
         assert data == {"address": {"zip_code": "400001"}}
@@ -1085,8 +1104,11 @@ class TestApplyOperationDirect:
         contract = ContractSpec(fields=[FieldSpec("temperature", FieldType.FLOAT)])
         data: dict[str, Any] = {"other": 1}
         op = FieldOperation(
-            op_type=FieldOpType.RENAME, target_path="temperature",
-            confidence=1.0, rationale="r", source_path="missing_source",
+            op_type=FieldOpType.RENAME,
+            target_path="temperature",
+            confidence=1.0,
+            rationale="r",
+            source_path="missing_source",
         )
         self._engine()._apply_operation(data, op, contract)
         assert data == {"other": 1}
@@ -1095,8 +1117,10 @@ class TestApplyOperationDirect:
         contract = ContractSpec(fields=[FieldSpec("count", FieldType.INTEGER)])
         data: dict[str, Any] = {"count": "5"}
         op = FieldOperation(
-            op_type=FieldOpType.COERCE, target_path="count",
-            confidence=0.95, rationale="r",
+            op_type=FieldOpType.COERCE,
+            target_path="count",
+            confidence=0.95,
+            rationale="r",
         )
         self._engine()._apply_operation(data, op, contract)
         assert data == {"count": 5}
@@ -1106,8 +1130,10 @@ class TestApplyOperationDirect:
         contract = ContractSpec(fields=[FieldSpec("count", FieldType.INTEGER)])
         data: dict[str, Any] = {}
         op = FieldOperation(
-            op_type=FieldOpType.COERCE, target_path="count",
-            confidence=0.95, rationale="r",
+            op_type=FieldOpType.COERCE,
+            target_path="count",
+            confidence=0.95,
+            rationale="r",
         )
         self._engine()._apply_operation(data, op, contract)
         assert data == {}
@@ -1116,8 +1142,10 @@ class TestApplyOperationDirect:
         contract = ContractSpec(fields=[FieldSpec("count", FieldType.INTEGER)])
         data: dict[str, Any] = {"other": "5"}
         op = FieldOperation(
-            op_type=FieldOpType.COERCE, target_path="other",
-            confidence=0.95, rationale="r",
+            op_type=FieldOpType.COERCE,
+            target_path="other",
+            confidence=0.95,
+            rationale="r",
         )
         self._engine()._apply_operation(data, op, contract)
         assert data == {"other": "5"}
@@ -1126,8 +1154,10 @@ class TestApplyOperationDirect:
         contract = ContractSpec(fields=[FieldSpec("count", FieldType.INTEGER)])
         data: dict[str, Any] = {"count": "not a number"}
         op = FieldOperation(
-            op_type=FieldOpType.COERCE, target_path="count",
-            confidence=0.95, rationale="r",
+            op_type=FieldOpType.COERCE,
+            target_path="count",
+            confidence=0.95,
+            rationale="r",
         )
         self._engine()._apply_operation(data, op, contract)
         assert data == {"count": "not a number"}
@@ -1136,8 +1166,11 @@ class TestApplyOperationDirect:
         contract = ContractSpec(fields=[FieldSpec("humidity", FieldType.INTEGER, default=60)])
         data: dict[str, Any] = {}
         op = FieldOperation(
-            op_type=FieldOpType.SET_DEFAULT, target_path="humidity",
-            confidence=1.0, rationale="r", value=60,
+            op_type=FieldOpType.SET_DEFAULT,
+            target_path="humidity",
+            confidence=1.0,
+            rationale="r",
+            value=60,
         )
         self._engine()._apply_operation(data, op, contract)
         assert data == {"humidity": 60}
@@ -1146,8 +1179,10 @@ class TestApplyOperationDirect:
         contract = ContractSpec(fields=[FieldSpec("x", FieldType.STRING)], strict_mode=True)
         data: dict[str, Any] = {"x": "ok", "extra": "remove me"}
         op = FieldOperation(
-            op_type=FieldOpType.REMOVE, target_path="extra",
-            confidence=1.0, rationale="r",
+            op_type=FieldOpType.REMOVE,
+            target_path="extra",
+            confidence=1.0,
+            rationale="r",
         )
         self._engine()._apply_operation(data, op, contract)
         assert data == {"x": "ok"}
@@ -1156,8 +1191,11 @@ class TestApplyOperationDirect:
         contract = ContractSpec(fields=[FieldSpec("status", FieldType.STRING)])
         data: dict[str, Any] = {}
         op = FieldOperation(
-            op_type=FieldOpType.SET_VALUE, target_path="status",
-            confidence=0.5, rationale="r", value="forced",
+            op_type=FieldOpType.SET_VALUE,
+            target_path="status",
+            confidence=0.5,
+            rationale="r",
+            value="forced",
         )
         self._engine()._apply_operation(data, op, contract)
         assert data == {"status": "forced"}
@@ -1169,7 +1207,6 @@ class TestApplyOperationDirect:
 
 
 class TestTelemetryEmission:
-
     def test_already_valid_sequence(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("x", FieldType.STRING)])
         hook = CapturingTelemetryHook()
@@ -1179,15 +1216,15 @@ class TestTelemetryEmission:
         assert hook.event_types() == ["validation_started", "repair_completed"]
 
     def test_success_sequence(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("city", FieldType.STRING),
-            FieldSpec("population", FieldType.INTEGER),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("city", FieldType.STRING),
+                FieldSpec("population", FieldType.INTEGER),
+            ]
+        )
         hook = CapturingTelemetryHook()
         engine = make_engine(telemetry=hook)
-        engine.repair(
-            contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter()
-        )
+        engine.repair(contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter())
 
         types = hook.event_types()
         assert types[0] == "validation_started"
@@ -1200,15 +1237,15 @@ class TestTelemetryEmission:
         assert types[-1] == "repair_completed"
 
     def test_success_sequence_order(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("city", FieldType.STRING),
-            FieldSpec("population", FieldType.INTEGER),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("city", FieldType.STRING),
+                FieldSpec("population", FieldType.INTEGER),
+            ]
+        )
         hook = CapturingTelemetryHook()
         engine = make_engine(telemetry=hook)
-        engine.repair(
-            contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter()
-        )
+        engine.repair(contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter())
         types = hook.event_types()
 
         idx_validation = types.index("validation_started")
@@ -1242,14 +1279,19 @@ class TestTelemetryEmission:
     def test_operation_rejected_emitted(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("a", FieldType.INTEGER)])
         low = FieldOperation(
-            op_type=FieldOpType.SET_DEFAULT, target_path="a",
-            confidence=0.1, rationale="too low", value=1,
+            op_type=FieldOpType.SET_DEFAULT,
+            target_path="a",
+            confidence=0.1,
+            rationale="too low",
+            value=1,
         )
-        registry = StrategyRegistry([
-            MockRepairStrategy(name="AllLow", priority=10, handle=True, operations=[low])
-        ])
+        registry = StrategyRegistry(
+            [MockRepairStrategy(name="AllLow", priority=10, handle=True, operations=[low])]
+        )
         hook = CapturingTelemetryHook()
-        engine = make_engine(registry=registry, config=RepairConfig(min_confidence_threshold=0.7), telemetry=hook)
+        engine = make_engine(
+            registry=registry, config=RepairConfig(min_confidence_threshold=0.7), telemetry=hook
+        )
         engine.repair(contract, {}, MockContractAdapter())
 
         assert "operation_rejected" in hook.event_types()
@@ -1278,16 +1320,15 @@ class TestTelemetryEmission:
 
 
 class TestRepairResultConstruction:
-
     def test_repair_log_non_empty_on_success(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("city", FieldType.STRING),
-            FieldSpec("population", FieldType.INTEGER),
-        ])
-        engine = make_engine()
-        result = engine.repair(
-            contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter()
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("city", FieldType.STRING),
+                FieldSpec("population", FieldType.INTEGER),
+            ]
         )
+        engine = make_engine()
+        result = engine.repair(contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter())
         assert len(result.repair_log) > 0
 
     def test_repair_log_non_empty_on_failed(self) -> None:
@@ -1303,14 +1344,14 @@ class TestRepairResultConstruction:
         assert len(result.repair_log) > 0
 
     def test_log_entries_have_required_fields(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("city", FieldType.STRING),
-            FieldSpec("population", FieldType.INTEGER),
-        ])
-        engine = make_engine()
-        result = engine.repair(
-            contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter()
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("city", FieldType.STRING),
+                FieldSpec("population", FieldType.INTEGER),
+            ]
         )
+        engine = make_engine()
+        result = engine.repair(contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter())
         for entry in result.repair_log:
             assert entry.timestamp is not None
             assert entry.level is not None
@@ -1318,14 +1359,14 @@ class TestRepairResultConstruction:
             assert entry.message
 
     def test_contract_id_matches_input_contract(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("city", FieldType.STRING),
-            FieldSpec("population", FieldType.INTEGER),
-        ])
-        engine = make_engine()
-        result = engine.repair(
-            contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter()
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("city", FieldType.STRING),
+                FieldSpec("population", FieldType.INTEGER),
+            ]
         )
+        engine = make_engine()
+        result = engine.repair(contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter())
         assert result.contract_id == contract.contract_id
 
     def test_repaired_at_is_set(self) -> None:
@@ -1336,10 +1377,12 @@ class TestRepairResultConstruction:
 
     def test_deep_copy_mutation_safety(self) -> None:
         """Mutating the returned repaired_output must not affect original_input."""
-        contract = ContractSpec(fields=[
-            FieldSpec("city", FieldType.STRING),
-            FieldSpec("population", FieldType.INTEGER),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("city", FieldType.STRING),
+                FieldSpec("population", FieldType.INTEGER),
+            ]
+        )
         data = {"cty": "Mumbai", "population": 1}
         engine = make_engine()
         result = engine.repair(contract, data, MockContractAdapter())
@@ -1350,14 +1393,14 @@ class TestRepairResultConstruction:
         assert data == {"cty": "Mumbai", "population": 1}
 
     def test_attempt_data_snapshots_are_independent_copies(self) -> None:
-        contract = ContractSpec(fields=[
-            FieldSpec("city", FieldType.STRING),
-            FieldSpec("population", FieldType.INTEGER),
-        ])
-        engine = make_engine()
-        result = engine.repair(
-            contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter()
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("city", FieldType.STRING),
+                FieldSpec("population", FieldType.INTEGER),
+            ]
         )
+        engine = make_engine()
+        result = engine.repair(contract, {"cty": "Mumbai", "population": 1}, MockContractAdapter())
         attempt = result.attempts[0]
         attempt.data_after["mutated"] = True
         assert "mutated" not in result.repaired_output  # type: ignore[operator]
@@ -1384,8 +1427,7 @@ class _StripUnexpectedAdapter(IContractAdapter):
     def validate(self, contract: ContractSpec, data: dict[str, Any]) -> ValidationResult:
         result = self._inner.validate(contract, data)
         filtered = [
-            v for v in result.violations
-            if v.violation_type is not ViolationType.UNEXPECTED_FIELD
+            v for v in result.violations if v.violation_type is not ViolationType.UNEXPECTED_FIELD
         ]
         is_valid = not any(v.severity is ViolationSeverity.ERROR for v in filtered)
         return ValidationResult(
@@ -1400,16 +1442,17 @@ class _StripUnexpectedAdapter(IContractAdapter):
 
 
 class TestMergedValidation:
-
     def test_adapter_without_unexpected_field_still_repairs(self) -> None:
         """
         Even when the adapter never reports UNEXPECTED_FIELD,
         ContractValidator fills the gap so FuzzyFieldMatchStrategy can fire.
         """
-        contract = ContractSpec(fields=[
-            FieldSpec("city", FieldType.STRING),
-            FieldSpec("population", FieldType.INTEGER),
-        ])
+        contract = ContractSpec(
+            fields=[
+                FieldSpec("city", FieldType.STRING),
+                FieldSpec("population", FieldType.INTEGER),
+            ]
+        )
         engine = make_engine()
         result = engine.repair(
             contract, {"cty": "Mumbai", "population": 1}, _StripUnexpectedAdapter()
@@ -1440,8 +1483,7 @@ class TestMergedValidation:
         engine = make_engine()
         merged = engine._validate(contract, {"city": "Mumbai", "extra": 1}, MockContractAdapter())
         unexpected = [
-            v for v in merged.violations
-            if v.violation_type is ViolationType.UNEXPECTED_FIELD
+            v for v in merged.violations if v.violation_type is ViolationType.UNEXPECTED_FIELD
         ]
         assert len(unexpected) == 1
 
@@ -1451,16 +1493,13 @@ class TestMergedValidation:
         If the adapter doesn't know about strict_mode and says is_valid=True,
         the merged result must still be invalid.
         """
-        contract = ContractSpec(
-            fields=[FieldSpec("city", FieldType.STRING)], strict_mode=True
-        )
+        contract = ContractSpec(fields=[FieldSpec("city", FieldType.STRING)], strict_mode=True)
         engine = make_engine()
         merged = engine._validate(
             contract, {"city": "Mumbai", "extra": 1}, _StripUnexpectedAdapter()
         )
         assert merged.is_valid is False
         unexpected = [
-            v for v in merged.violations
-            if v.violation_type is ViolationType.UNEXPECTED_FIELD
+            v for v in merged.violations if v.violation_type is ViolationType.UNEXPECTED_FIELD
         ]
         assert unexpected[0].severity is ViolationSeverity.ERROR
