@@ -1,0 +1,146 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# ---------------------------------------------------------------------------
+# Project metadata
+# ---------------------------------------------------------------------------
+
+[project]
+name = "stateguard"
+version = "0.1.0"
+description = "Runtime contract reliability SDK for AI system components."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["ai", "agents", "contract", "validation", "repair", "schema", "pydantic"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+# Core has ZERO runtime dependencies.  The pydantic extra is the only
+# supported adapter in V1 and is strictly optional.
+dependencies = []
+
+[project.scripts]
+stateguard = "stateguard.cli:main"
+
+[project.optional-dependencies]
+pydantic = ["pydantic>=2.0,<3.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "mypy>=1.10",
+    "ruff>=0.4",
+    "hypothesis>=6.100",
+]
+all = ["stateguard[pydantic,dev]"]
+
+# ---------------------------------------------------------------------------
+# Build
+# ---------------------------------------------------------------------------
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stateguard"]
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths   = ["tests"]
+addopts     = "--strict-markers -q"
+markers = [
+    "unit: Unit tests for individual components",
+    "integration: Integration tests across components",
+    "isolation: Import isolation tests (run in subprocess)",
+]
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+
+[tool.coverage.run]
+source   = ["stateguard"]
+branch   = true
+omit     = ["*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+# Threshold starts low; raised each milestone.
+fail_under   = 80
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.coverage.paths]
+source = ["src/stateguard", "*/site-packages/stateguard"]
+
+# ---------------------------------------------------------------------------
+# Mypy  (strict — no exceptions)
+# ---------------------------------------------------------------------------
+
+[tool.mypy]
+python_version         = "3.11"
+strict                 = true
+warn_return_any        = true
+warn_unused_configs    = true
+no_implicit_reexport   = true
+# Pydantic generates dynamic attributes; ignore missing stubs only in adapter.
+[[tool.mypy.overrides]]
+module                 = "stateguard.adapters.pydantic.*"
+warn_return_any        = false
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py311"
+line-length    = 100
+src            = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "ANN", # flake8-annotations (subset for type completeness)
+]
+ignore = [
+    "ANN401",  # allow Any in explicit Any-typed fields
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["stateguard"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "F401",   # unused imports — common in test fixtures and type-hint-only imports
+    "I001",   # import sorting — not enforced in test files
+    "N806",   # variable-in-function uppercase — intentional pattern in integration tests
+    "E501",   # line too long — long assertion messages and docstrings in tests
+    "UP006",  # use `list` not `List` — old typing syntax preserved in test files
+    "UP007",  # use `X | Y` not `Union[X, Y]`
+    "UP017",  # use `datetime.UTC` — existing style in tests
+    "UP035",  # import from deprecated typing module
+    "UP045",  # use `X | None` not `Optional[X]`
+    "SIM101", # use set literal — minor simplification in test helper
+    "SIM300", # yoda condition — test assertion style
+]

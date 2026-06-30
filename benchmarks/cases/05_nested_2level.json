@@ -1,0 +1,30 @@
+{
+  "name": "nested_2level_zip_code_fuzzy",
+  "description": "A depth-2 nested field (root.address.zip_code) is returned under a slightly different name; proves FuzzyFieldMatchStrategy works correctly through one level of OBJECT nesting.",
+  "expected_schema": {
+    "fields": [
+      {"path": "name", "type": "string"},
+      {
+        "path": "address",
+        "type": "object",
+        "nested": {
+          "fields": [
+            {"path": "city", "type": "string"},
+            {"path": "zip_code", "type": "string"}
+          ]
+        }
+      }
+    ]
+  },
+  "broken_payload": {
+    "name": "Alice",
+    "address": {
+      "city": "Mumbai",
+      "zipcode": "400001"
+    }
+  },
+  "expected_result": {
+    "status": "success",
+    "min_confidence": 0.7
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "default_value_fill_humidity",
+  "description": "A required-with-default field is entirely absent; DefaultValueFillStrategy should fill it from the contract's declared default.",
+  "expected_schema": {
+    "fields": [
+      {"path": "temperature", "type": "float"},
+      {"path": "humidity", "type": "integer", "default": 60}
+    ]
+  },
+  "broken_payload": {
+    "temperature": 31.5
+  },
+  "expected_result": {
+    "status": "success",
+    "min_confidence": 1.0
+  }
+}

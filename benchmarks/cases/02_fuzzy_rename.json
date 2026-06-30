@@ -1,0 +1,18 @@
+{
+  "name": "fuzzy_rename_temp_celsius",
+  "description": "The canonical schema-drift scenario: a tool returns 'temp_celsius' where the contract expects 'temperature'. FuzzyFieldMatchStrategy should repair this via its combined Levenshtein + token-prefix-boost scoring.",
+  "expected_schema": {
+    "fields": [
+      {"path": "temperature", "type": "float"},
+      {"path": "humidity", "type": "integer"}
+    ]
+  },
+  "broken_payload": {
+    "temp_celsius": 31.5,
+    "humidity": 80
+  },
+  "expected_result": {
+    "status": "success",
+    "min_confidence": 0.7
+  }
+}

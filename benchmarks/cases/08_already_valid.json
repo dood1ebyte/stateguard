@@ -1,0 +1,17 @@
+{
+  "name": "already_valid_baseline",
+  "description": "A clean, fully conformant payload. Baseline case proving StateGuard adds zero overhead/false-positive repairs when nothing is broken.",
+  "expected_schema": {
+    "fields": [
+      {"path": "temperature", "type": "float"},
+      {"path": "humidity", "type": "integer"}
+    ]
+  },
+  "broken_payload": {
+    "temperature": 31.5,
+    "humidity": 80
+  },
+  "expected_result": {
+    "status": "already_valid"
+  }
+}
