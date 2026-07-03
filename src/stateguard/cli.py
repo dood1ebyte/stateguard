@@ -31,6 +31,7 @@ Exit codes
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
 import json
 import sys
@@ -59,7 +60,9 @@ def _load_json(path_str: str) -> dict[str, Any]:
     if not path.exists():
         _die(f"File not found: {path}")
     try:
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig tolerates (and strips) a leading BOM -- e.g. files written
+        # by PowerShell's `Out-File -Encoding utf8` or Notepad's "UTF-8" save.
+        with open(path, encoding="utf-8-sig") as f:
             return cast(dict[str, Any], json.load(f))
     except json.JSONDecodeError as exc:
         _die(f"Could not parse JSON in {path}: {exc}")
@@ -384,6 +387,15 @@ def main(argv: list[str] | None = None) -> None:
         Argument list, defaults to ``sys.argv[1:]``.  Separated out to
         make the function testable without subprocess overhead.
     """
+    # Windows consoles often default to a legacy codepage (e.g. cp1252) that
+    # can't encode the Unicode icons/bullets used in human-readable output.
+    # Force UTF-8 on stdout/stderr where possible rather than crashing.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            with contextlib.suppress(ValueError, OSError):
+                reconfigure(encoding="utf-8")
+
     parser = _build_parser()
     args = parser.parse_args(argv)
 
