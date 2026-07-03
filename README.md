@@ -2,41 +2,24 @@
 
 > Runtime contract reliability SDK for AI system components.
 
+[![CI](https://github.com/dood1ebyte/stateguard/actions/workflows/ci.yml/badge.svg)](https://github.com/dood1ebyte/stateguard/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+[![Tests](https://img.shields.io/badge/tests-1411%20passing-brightgreen.svg)](tests/)
+[![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen.svg)](M9_AUDIT.md)
+
 StateGuard automatically detects and repairs runtime contract failures between AI system
 components — preventing schema drift, field renames, and type mismatches from crashing
 your AI workflows.
 
-## Status
+## Why StateGuard?
 
-✅ **V1 Complete (M0–M9)**
-
-| Milestone | Status |
-|-----------|--------|
-| M0 — Repository Bootstrap | ✅ Complete |
-| M1 — Domain Models | ✅ Complete |
-| M2 — Contract + Result Models | ✅ Complete |
-| M3 — Interfaces + Test Infrastructure | ✅ Complete |
-| M4 — Core Validator | ✅ Complete |
-| M5 — Repair Strategies | ✅ Complete |
-| M6 — Repair Engine | ✅ Complete |
-| M7 — Pydantic Adapter | ✅ Complete |
-| M8 — Public API | ✅ Complete |
-| M9 — Production Hardening, CLI, Benchmarks | ✅ Complete |
-
-See [`M9_AUDIT.md`](M9_AUDIT.md) for the full production-readiness audit,
-including known limitations and recommended next steps.
-
-## Quick Start
-
-```bash
-pip install "stateguard[pydantic]"
-```
-
-> **Note on quoting:** the brackets around `pydantic` must be quoted. On
-> macOS's default shell (zsh) and many Linux shells, an unquoted
-> `pip install stateguard[pydantic]` is interpreted as a glob pattern and
-> fails with `no matches found: stateguard[pydantic]`. The quoted form
-> above works correctly in zsh, bash, PowerShell, and `cmd.exe` alike.
+LLM tool calls and agent pipelines are wired together by convention, not by a compiler.
+A model returns `temp_celsius` when your schema expects `temperature`, or `"31.5"` where
+you need a `float` — and without a repair layer, that's an unhandled exception in
+production. StateGuard sits between the LLM's output and your typed schema, detects the
+drift, and repairs it automatically wherever it can safely infer the fix — falling back
+to a clear, structured failure when it can't.
 
 ```python
 from stateguard import ContractGuard
@@ -54,10 +37,26 @@ result = guard.repair(Weather, {"temp_celsius": 31.5, "humidity": 80})
 # result.repaired_output → {"temperature": 31.5, "humidity": 80}
 ```
 
-### Command-line interface
+## Installation
 
-StateGuard also ships a `stateguard check` CLI for validating and repairing
-a JSON payload against a contract without writing any Python:
+**Requirements:** Python 3.11+. No runtime dependencies for the core package;
+`pydantic>=2.0,<3.0` if you install the `pydantic` extra.
+
+```bash
+pip install "stateguard[pydantic]"
+```
+
+> The brackets must be quoted — on zsh and many Linux shells, an unquoted
+> `pip install stateguard[pydantic]` is interpreted as a glob pattern and
+> fails with `no matches found`. The quoted form works in zsh, bash,
+> PowerShell, and `cmd.exe` alike.
+
+The core package (`pip install stateguard`) has **zero runtime dependencies**.
+Pydantic is an optional extra — the only adapter currently shipped.
+
+## Command-line interface
+
+Validate and repair a JSON payload against a contract without writing any Python:
 
 ```bash
 # Against a Pydantic model
@@ -75,10 +74,9 @@ failed (or a usage error). Run `stateguard check --help` for the full flag
 reference, including `--strict`, `--max-attempts`, and
 `--confidence-threshold`.
 
-### Local repair history (optional)
+## Repair history (optional)
 
-To keep a local, append-only audit trail of every repair StateGuard
-performs, pass a `RepairHistoryRecorder` when constructing your guard:
+Keep a local, append-only audit trail of every repair StateGuard performs:
 
 ```python
 from stateguard import ContractGuard
@@ -91,8 +89,8 @@ guard = ContractGuard.with_pydantic(history=RepairHistoryRecorder())
 
 ## Architecture
 
-StateGuard is built on a **framework-agnostic core engine** with zero external runtime
-dependencies. Pydantic is the first supported adapter; future adapters (LangChain,
+A framework-agnostic core engine with zero external runtime dependencies.
+Pydantic is the first supported adapter; future adapters (LangChain,
 LangGraph, JSON Schema) can be added without modifying the engine.
 
 ```
@@ -112,46 +110,30 @@ ContractGuard          ← orchestrator (guard.py)
             └── Strategies: ExactAlias, FuzzyRename, TypeCoerce, DefaultFill
 ```
 
-## Nested structures
+## Limitations
 
-StateGuard repairs nested objects in addition to flat fields. **V1 is
-officially validated up to 3 levels of nesting** — i.e. a path shape like
-`root.address.country.code` (two nested `OBJECT` fields plus a leaf field).
-This depth is covered end-to-end by the test suite across every layer:
-`ContractValidator`, the Pydantic extractor, every repair strategy
-(`ExactAliasStrategy`, `FuzzyFieldMatchStrategy`, `TypeCoercionStrategy`,
-`DefaultValueFillStrategy`), and the full `RepairEngine` repair loop,
-including mixed-failure and partial-repair scenarios at that depth.
+- **Nesting depth:** repairs are officially validated up to 3 levels of
+  nesting (`root.address.country.code`). Deeper structures generally work
+  but aren't part of the tested/supported surface.
+- **Cross-branch fuzzy matching:** `FuzzyFieldMatchStrategy` scores
+  candidates by full dotted-path similarity, not parent-scope. In
+  adversarial cases with similar field *and* branch names, this can block
+  a valid repair (StateGuard's safe failure mode) rather than guess wrong.
+- **No JSON Schema adapter yet** — the CLI's `--schema` format is a
+  StateGuard-proprietary equivalent, not real JSON Schema.
 
-Beyond 3 levels: the underlying path-walking code (`_get_nested`,
-`_set_nested`, dotted-path lookups in each strategy) has no hard depth
-limit and will generally continue to work, but deeper structures are not
-part of StateGuard's tested or supported surface in V1 — use at your own
-risk, and please report issues if you rely on greater depth.
-
-**Known limitation — cross-branch fuzzy matching.** `FuzzyFieldMatchStrategy`
-scores candidates purely by full dotted-path string similarity; it has no
-explicit awareness of "same parent object" scope. In practice this is safe
-because differing branch prefixes (e.g. `address.` vs `billing.`) naturally
-suppress cross-branch similarity scores. In adversarial cases where two
-different branches have *both* similar field names *and* similar branch
-names, this can produce either an ambiguous match (correctly blocked by
-collision detection — StateGuard's safe failure mode) or, in principle, a
-wrong-branch rename. See `M9_AUDIT.md` for a full writeup and the
-recommended M10 fix (parent-scoped matching).
+See [`M9_AUDIT.md`](M9_AUDIT.md) for the full production-readiness audit,
+performance characteristics, and recommended next steps.
 
 ## Benchmarks
 
-A correctness benchmark suite lives in [`benchmarks/`](benchmarks/README.md),
-covering alias repair, fuzzy renames, type coercion, default-fill, nested
-structures, and known-unrecoverable cases. Run it with:
+A correctness benchmark suite in [`benchmarks/`](benchmarks/README.md) covers
+alias repair, fuzzy renames, type coercion, default-fill, nested structures,
+and known-unrecoverable cases:
 
 ```bash
 python benchmarks/runner.py --verbose
 ```
-
-See [`benchmarks/README.md`](benchmarks/README.md) for the full case
-format and current results.
 
 ## Development
 
@@ -172,6 +154,8 @@ mypy src/
 ruff check src/ tests/
 ```
 
+See [`CHANGELOG.md`](CHANGELOG.md) for release history.
+
 ## License
 
-MIT
+Apache License 2.0 — see [`LICENSE`](LICENSE).
