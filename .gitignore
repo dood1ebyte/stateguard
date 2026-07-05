@@ -15,6 +15,7 @@ MANIFEST
 
 # Virtual environments
 .venv/
+.testenv/
 venv/
 env/
 ENV/
