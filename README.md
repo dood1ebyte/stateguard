@@ -5,8 +5,6 @@
 [![CI](https://github.com/dood1ebyte/stateguard/actions/workflows/ci.yml/badge.svg)](https://github.com/dood1ebyte/stateguard/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-1411%20passing-brightgreen.svg)](tests/)
-[![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen.svg)](M9_AUDIT.md)
 
 StateGuard automatically detects and repairs runtime contract failures between AI system
 components — preventing schema drift, field renames, and type mismatches from crashing
