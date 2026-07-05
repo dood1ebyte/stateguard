@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 # ---------------------------------------------------------------------------
 
 [project]
-name = "stateguard"
+name = "sguard"
 version = "0.1.0"
 description = "Runtime contract reliability SDK for AI system components."
 readme = "README.md"

@@ -41,15 +41,15 @@ result = guard.repair(Weather, {"temp_celsius": 31.5, "humidity": 80})
 `pydantic>=2.0,<3.0` if you install the `pydantic` extra.
 
 ```bash
-pip install "stateguard[pydantic]"
+pip install "sguard[pydantic]"
 ```
 
 > The brackets must be quoted — on zsh and many Linux shells, an unquoted
-> `pip install stateguard[pydantic]` is interpreted as a glob pattern and
+> `pip install sguard[pydantic]` is interpreted as a glob pattern and
 > fails with `no matches found`. The quoted form works in zsh, bash,
 > PowerShell, and `cmd.exe` alike.
 
-The core package (`pip install stateguard`) has **zero runtime dependencies**.
+The core package (`pip install sguard`) has **zero runtime dependencies**.
 Pydantic is an optional extra — the only adapter currently shipped.
 
 ## Command-line interface
