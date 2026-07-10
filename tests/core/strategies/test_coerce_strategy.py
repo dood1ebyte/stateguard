@@ -9,7 +9,7 @@ import pytest
 from stateguard.core.errors.operations import FieldOpType
 from stateguard.core.errors.violations import ViolationSeverity, ViolationType
 from stateguard.core.models.contract import ContractSpec, FieldSpec
-from stateguard.core.models.field_types import FieldType
+from stateguard.core.models.field_types import FieldType, UnionMember
 from stateguard.core.strategies.coerce import (
     TypeCoercionStrategy,
     _coercion_confidence,
@@ -17,6 +17,7 @@ from stateguard.core.strategies.coerce import (
     _is_float_string,
     _is_integer_string,
     _NOT_FOUND,
+    resolve_union_member,
 )
 from tests.conftest import make_violation
 
@@ -277,6 +278,138 @@ class TestUnsupportedCoercions:
         strategy = TypeCoercionStrategy()
         ops = strategy.propose([v], make_contract(), {"tags": "not a list"})
         assert ops == []
+
+
+# ===========================================================================
+# propose — wrap-in-list (ARRAY targets)
+# ===========================================================================
+
+
+def _array_contract(item_type: FieldType | None) -> ContractSpec:
+    return ContractSpec(fields=[FieldSpec("content", FieldType.ARRAY, item_type=item_type)])
+
+
+def _union_contract(members: tuple[UnionMember, ...] | None) -> ContractSpec:
+    return ContractSpec(fields=[FieldSpec("content", FieldType.UNION, union_members=members)])
+
+
+class TestArrayWrap:
+    def test_str_wraps_into_list_of_str(self) -> None:
+        v = _type_mismatch("content", FieldType.ARRAY, "hello")
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], _array_contract(FieldType.STRING), {"content": "hello"})
+        assert len(ops) == 1
+        assert ops[0].op_type is FieldOpType.COERCE
+        assert ops[0].target_path == "content"
+        assert ops[0].confidence == pytest.approx(0.9)
+
+    def test_item_type_mismatch_does_not_wrap(self) -> None:
+        v = _type_mismatch("content", FieldType.ARRAY, "hello")
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], _array_contract(FieldType.INTEGER), {"content": "hello"})
+        assert ops == []
+
+    def test_bare_list_does_not_wrap(self) -> None:
+        v = _type_mismatch("content", FieldType.ARRAY, "hello")
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], _array_contract(None), {"content": "hello"})
+        assert ops == []
+
+    def test_value_already_list_does_not_wrap(self) -> None:
+        v = _type_mismatch("content", FieldType.ARRAY, ["x", 1])
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], _array_contract(FieldType.STRING), {"content": ["x", 1]})
+        assert ops == []
+
+    def test_none_value_does_not_wrap(self) -> None:
+        v = _type_mismatch("content", FieldType.ARRAY, None)
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], _array_contract(FieldType.STRING), {"content": None})
+        assert ops == []
+
+    def test_bool_does_not_wrap_into_list_of_int(self) -> None:
+        """bool is a subclass of int but must not satisfy an INTEGER item type."""
+        v = _type_mismatch("content", FieldType.ARRAY, True)
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], _array_contract(FieldType.INTEGER), {"content": True})
+        assert ops == []
+
+    def test_field_spec_not_found_does_not_wrap(self) -> None:
+        v = _type_mismatch("content", FieldType.ARRAY, "hello")
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], make_contract(), {"content": "hello"})
+        assert ops == []
+
+
+# ===========================================================================
+# propose — UNION targets
+# ===========================================================================
+
+
+class TestUnionCoercion:
+    def test_dict_wraps_into_list_member(self) -> None:
+        """The graph-rag-agent #49 shape: dict against str | list[str|dict]."""
+        members = (
+            UnionMember(FieldType.STRING),
+            UnionMember(FieldType.ARRAY, item_type=FieldType.ANY),
+        )
+        payload = {"low_level": [], "high_level": []}
+        v = _type_mismatch("content", FieldType.UNION, payload)
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], _union_contract(members), {"content": payload})
+        assert len(ops) == 1
+        assert ops[0].confidence == pytest.approx(0.9)
+
+    def test_scalar_coercion_into_single_member(self) -> None:
+        members = (UnionMember(FieldType.INTEGER), UnionMember(FieldType.ARRAY, FieldType.OBJECT))
+        v = _type_mismatch("content", FieldType.UNION, "42")
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], _union_contract(members), {"content": "42"})
+        assert len(ops) == 1
+        assert ops[0].confidence == pytest.approx(0.95)
+
+    def test_ambiguous_tie_between_members_refused(self) -> None:
+        """'42' coerces to both int and float at equal confidence -> refuse."""
+        members = (UnionMember(FieldType.INTEGER), UnionMember(FieldType.FLOAT))
+        v = _type_mismatch("content", FieldType.UNION, "42")
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], _union_contract(members), {"content": "42"})
+        assert ops == []
+
+    def test_no_coercible_member_refused(self) -> None:
+        members = (UnionMember(FieldType.STRING), UnionMember(FieldType.OBJECT))
+        v = _type_mismatch("content", FieldType.UNION, 3.5)
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], _union_contract(members), {"content": 3.5})
+        assert ops == []
+
+    def test_union_without_members_refused(self) -> None:
+        v = _type_mismatch("content", FieldType.UNION, {"a": 1})
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], _union_contract(None), {"content": {"a": 1}})
+        assert ops == []
+
+
+# ===========================================================================
+# resolve_union_member
+# ===========================================================================
+
+
+class TestResolveUnionMember:
+    def test_picks_unique_highest_confidence_member(self) -> None:
+        members = (
+            UnionMember(FieldType.BOOLEAN),  # "1" -> bool at 0.85
+            UnionMember(FieldType.INTEGER),  # "1" -> int at 0.95
+        )
+        resolved = resolve_union_member("1", members)
+        assert resolved is not None
+        member, confidence = resolved
+        assert member.field_type is FieldType.INTEGER
+        assert confidence == pytest.approx(0.95)
+
+    def test_none_members_returns_none(self) -> None:
+        assert resolve_union_member("1", None) is None
+        assert resolve_union_member("1", ()) is None
 
 
 # ===========================================================================

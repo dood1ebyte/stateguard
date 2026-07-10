@@ -16,7 +16,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Final
 
-from stateguard.core.models.field_types import FieldConstraint, FieldType
+from stateguard.core.models.field_types import FieldConstraint, FieldType, UnionMember
 
 __all__ = [
     "MISSING",
@@ -120,6 +120,11 @@ class FieldSpec:
     nested_spec:
         For ``FieldType.OBJECT`` fields, the sub-``ContractSpec`` describing
         the nested structure.  ``None`` for non-object fields.
+    union_members:
+        For ``FieldType.UNION`` fields, the accepted member types.
+        ``None`` for non-union fields.  A ``UNION`` field with ``None``
+        members is validated like ``ANY`` (no member information to check
+        against).
     """
 
     # Required
@@ -133,6 +138,7 @@ class FieldSpec:
     known_aliases: list[str] = field(default_factory=list)
     item_type: FieldType | None = None
     nested_spec: ContractSpec | None = None
+    union_members: tuple[UnionMember, ...] | None = None
 
     def __post_init__(self) -> None:
         if not self.path:

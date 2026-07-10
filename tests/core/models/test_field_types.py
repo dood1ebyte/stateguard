@@ -29,11 +29,12 @@ class TestFieldType:
             "array",
             "any",
             "null",
+            "union",
         }
         assert {ft.value for ft in FieldType} == expected
 
     def test_member_count(self) -> None:
-        assert len(FieldType) == 8
+        assert len(FieldType) == 9
 
     def test_string_equality_string(self) -> None:
         assert FieldType.STRING == "string"
@@ -73,9 +74,12 @@ class TestFieldType:
         assert FieldType.STRING is FieldType.STRING
         assert FieldType.FLOAT is FieldType.FLOAT
 
+    def test_string_equality_union(self) -> None:
+        assert FieldType.UNION == "union"
+
     def test_is_iterable(self) -> None:
         members = list(FieldType)
-        assert len(members) == 8
+        assert len(members) == 9
 
     def test_is_not_equal_to_other_member(self) -> None:
         assert FieldType.STRING != FieldType.INTEGER

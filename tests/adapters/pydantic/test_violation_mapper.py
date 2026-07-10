@@ -15,6 +15,7 @@ from stateguard.adapters.pydantic.violation_mapper import (
     _loc_to_field_path,
 )
 from stateguard.core.errors.violations import ViolationSeverity, ViolationType
+from stateguard.core.models.contract import ContractSpec
 from stateguard.core.models.field_types import FieldType
 
 
@@ -37,21 +38,57 @@ def _raise_and_map(model_class: type[BaseModel], data: dict) -> list:
 # ===========================================================================
 
 
+def _contract_of(model_class: type[BaseModel]) -> ContractSpec:
+    return PydanticContractExtractor.extract(model_class)
+
+
 class TestLocToFieldPath:
     def test_single_segment(self) -> None:
-        assert _loc_to_field_path(("temperature",)) == "temperature"
+        class M(BaseModel):
+            temperature: float
+
+        assert _loc_to_field_path(("temperature",), _contract_of(M)) == "temperature"
 
     def test_nested_segments(self) -> None:
-        assert _loc_to_field_path(("address", "zip_code")) == "address.zip_code"
+        class Address(BaseModel):
+            zip_code: str
 
-    def test_list_index_segment(self) -> None:
-        assert _loc_to_field_path(("tags", 1)) == "tags.1"
+        class M(BaseModel):
+            address: Address
+
+        assert _loc_to_field_path(("address", "zip_code"), _contract_of(M)) == "address.zip_code"
+
+    def test_list_index_segment_truncates_to_array_field(self) -> None:
+        class M(BaseModel):
+            tags: List[str]
+
+        assert _loc_to_field_path(("tags", 1), _contract_of(M)) == "tags"
+
+    def test_union_branch_segment_truncates_to_field(self) -> None:
+        class M(BaseModel):
+            content: str | List[str]
+
+        contract = _contract_of(M)
+        assert _loc_to_field_path(("content", "str"), contract) == "content"
+        assert _loc_to_field_path(("content", "list[str]"), contract) == "content"
 
     def test_empty_loc(self) -> None:
-        assert _loc_to_field_path(()) == ""
+        class M(BaseModel):
+            a: int
 
-    def test_deeply_nested(self) -> None:
-        assert _loc_to_field_path(("a", "b", "c")) == "a.b.c"
+        assert _loc_to_field_path((), _contract_of(M)) == ""
+
+    def test_unknown_field_falls_back_to_verbatim_join(self) -> None:
+        class M(BaseModel):
+            a: int
+
+        assert _loc_to_field_path(("b", "c"), _contract_of(M)) == "b.c"
+
+    def test_trailing_unknown_segment_truncated(self) -> None:
+        class M(BaseModel):
+            a: int
+
+        assert _loc_to_field_path(("a", "b", "c"), _contract_of(M)) == "a"
 
 
 # ===========================================================================
@@ -244,7 +281,9 @@ class TestMapTypeMismatch:
 
         violations = _raise_and_map(WithList, {"tags": [1, "two", 3]})
         v = violations[0]
-        assert v.field_path == "tags.1"
+        # Index segments are truncated so the violation targets the array
+        # field itself (repair strategies cannot address individual items).
+        assert v.field_path == "tags"
         assert v.violation_type is ViolationType.TYPE_MISMATCH
         assert v.received_value == "two"
 

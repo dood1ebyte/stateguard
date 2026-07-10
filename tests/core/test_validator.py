@@ -12,6 +12,7 @@ from stateguard.core.models.field_types import (
     FieldConstraint,
     FieldConstraintType,
     FieldType,
+    UnionMember,
 )
 from stateguard.core.validator import ContractValidator
 
@@ -1058,3 +1059,48 @@ class TestIsValidSemantics:
         severities = {v.severity for v in result.violations}
         assert ViolationSeverity.ERROR in severities
         assert ViolationSeverity.WARNING in severities
+
+
+# ===========================================================================
+# UNION fields
+# ===========================================================================
+
+
+class TestUnionFields:
+    def _contract(self) -> ContractSpec:
+        members = (
+            UnionMember(FieldType.STRING),
+            UnionMember(FieldType.ARRAY, item_type=FieldType.ANY),
+        )
+        return ContractSpec(fields=[FieldSpec("content", FieldType.UNION, union_members=members)])
+
+    def test_matching_scalar_member_is_valid(self) -> None:
+        result = ContractValidator().validate(self._contract(), {"content": "hello"})
+        assert result.is_valid is True
+
+    def test_matching_array_member_is_valid(self) -> None:
+        result = ContractValidator().validate(self._contract(), {"content": ["a", {"b": 1}]})
+        assert result.is_valid is True
+
+    def test_no_matching_member_is_type_mismatch(self) -> None:
+        result = ContractValidator().validate(self._contract(), {"content": {"a": 1}})
+        assert result.is_valid is False
+        assert len(result.violations) == 1
+        v = result.violations[0]
+        assert v.field_path == "content"
+        assert v.violation_type is ViolationType.TYPE_MISMATCH
+        assert v.expected_type is FieldType.UNION
+
+    def test_array_member_item_type_enforced(self) -> None:
+        members = (
+            UnionMember(FieldType.INTEGER),
+            UnionMember(FieldType.ARRAY, item_type=FieldType.INTEGER),
+        )
+        contract = ContractSpec(fields=[FieldSpec("nums", FieldType.UNION, union_members=members)])
+        assert ContractValidator().validate(contract, {"nums": [1, 2]}).is_valid is True
+        assert ContractValidator().validate(contract, {"nums": [1, "x"]}).is_valid is False
+
+    def test_union_without_members_validates_like_any(self) -> None:
+        contract = ContractSpec(fields=[FieldSpec("content", FieldType.UNION)])
+        result = ContractValidator().validate(contract, {"content": {"anything": 1}})
+        assert result.is_valid is True

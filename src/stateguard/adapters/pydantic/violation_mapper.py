@@ -28,8 +28,19 @@ Pydantic v2's ``ValidationError.errors()`` returns a list of dicts with a
 All Pydantic ``ValidationError`` entries are treated as
 ``ViolationSeverity.ERROR`` -- Pydantic has no concept of a "warning".
 
-``field_path`` is built by joining the error's ``loc`` tuple with ``"."``,
-converting non-string segments (e.g. list indices) to strings.
+``field_path`` is derived from the error's ``loc`` tuple, normalised
+against the contract: the longest prefix of the ``loc`` that resolves to
+declared fields is used, and trailing segments that are not fields are
+dropped.  Pydantic appends non-field segments for union branches
+(``('content', 'str')`` for a failed ``str | list`` branch) and list
+indices (``('tags', 0)``); both collapse to the owning field's path so
+that ``expected_type`` lookup and repair-strategy targeting work.  When
+*no* prefix resolves (e.g. an ``extra_forbidden`` error on an undeclared
+key), the full dot-joined ``loc`` is kept verbatim.
+
+Because several union branches produce one Pydantic error each for the
+same underlying mismatch, mapped violations are de-duplicated by
+``(field_path, violation_type)`` -- the first occurrence wins.
 
 ``expected_type`` is looked up from the ``ContractSpec`` by ``field_path``
 (via the same ``FieldSpec`` recursion pattern used by the repair
@@ -130,9 +141,37 @@ def _classify(error_type: str) -> ViolationType:
 # ---------------------------------------------------------------------------
 
 
-def _loc_to_field_path(loc: tuple[Any, ...]) -> str:
-    """Convert a Pydantic error ``loc`` tuple to a dot-notation field path."""
-    return ".".join(str(part) for part in loc)
+def _loc_to_field_path(loc: tuple[Any, ...], contract: ContractSpec) -> str:
+    """
+    Convert a Pydantic error ``loc`` tuple to a dot-notation field path,
+    normalised against *contract*.
+
+    Walks the ``loc`` segments through the contract's fields, descending
+    into ``nested_spec`` for object fields, and keeps the longest prefix
+    that resolves to declared fields.  Trailing non-field segments --
+    union branch markers (``'str'``, ``'list[union[str,dict[any,any]]]'``)
+    and list indices -- are dropped, so the path points at the field a
+    repair strategy can actually target.
+
+    If not even the first segment resolves, the full dot-joined ``loc``
+    is returned verbatim (e.g. ``extra_forbidden`` errors on keys the
+    contract does not declare).
+    """
+    resolved_parts: list[str] = []
+    current: ContractSpec | None = contract
+    for part in loc:
+        part_str = str(part)
+        spec = None
+        if current is not None and isinstance(part, str):
+            spec = next((f for f in current.fields if f.path.rsplit(".", 1)[-1] == part_str), None)
+        if spec is None:
+            break
+        resolved_parts.append(part_str)
+        current = spec.nested_spec
+
+    if not resolved_parts:
+        return ".".join(str(part) for part in loc)
+    return ".".join(resolved_parts)
 
 
 def _find_field_spec(contract: ContractSpec, full_path: str) -> FieldSpec | None:
@@ -182,12 +221,21 @@ class PydanticViolationMapper:
         Returns
         -------
         list[ContractViolation]
-            One violation per entry in ``error.errors()``, in the same
-            order.  All entries have ``severity = ViolationSeverity.ERROR``.
+            One violation per *distinct* ``(field_path, violation_type)``
+            in ``error.errors()``, in first-occurrence order.  Duplicates
+            arise when a union field fails: Pydantic emits one error per
+            union branch, all of which normalise to the same field path.
+            All entries have ``severity = ViolationSeverity.ERROR``.
         """
         violations: list[ContractViolation] = []
+        seen: set[tuple[str, ViolationType]] = set()
         for err in error.errors():
-            violations.append(cls._map_single(err, contract))
+            violation = cls._map_single(err, contract)
+            signature = (violation.field_path, violation.violation_type)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            violations.append(violation)
         return violations
 
     @classmethod
@@ -198,7 +246,7 @@ class PydanticViolationMapper:
     ) -> ContractViolation:
         error_type: str = err.get("type", "")
         loc: tuple[Any, ...] = err.get("loc", ())
-        field_path = _loc_to_field_path(loc)
+        field_path = _loc_to_field_path(loc, contract)
         violation_type = _classify(error_type)
 
         field_spec = _find_field_spec(contract, field_path)

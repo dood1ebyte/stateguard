@@ -26,6 +26,8 @@ from stateguard.core.models.field_types import (
     FieldConstraint,
     FieldConstraintType,
     FieldType,
+    type_matches,
+    union_member_matches,
 )
 
 __all__ = ["ContractValidator"]
@@ -224,6 +226,30 @@ class ContractValidator:
             self._check_constraints(field_spec, value, full_path, violations)
             return
 
+        # --- UNION fields -------------------------------------------------------
+        if field_spec.field_type is FieldType.UNION:
+            members = field_spec.union_members
+            # No member information: nothing to check against (ANY-like).
+            if members and not any(union_member_matches(value, m) for m in members):
+                accepted = ", ".join(m.field_type.value for m in members)
+                violations.append(
+                    ContractViolation(
+                        field_path=full_path,
+                        violation_type=ViolationType.TYPE_MISMATCH,
+                        severity=ViolationSeverity.ERROR,
+                        message=(
+                            f"Field '{full_path}' type mismatch: expected one "
+                            f"of ({accepted}), got {type(value).__name__}."
+                        ),
+                        expected_type=FieldType.UNION,
+                        received_value=value,
+                    )
+                )
+                return
+
+            self._check_constraints(field_spec, value, full_path, violations)
+            return
+
         # --- Primitive / ANY / NULL fields -------------------------------------
         if not self._type_matches(value, field_spec.field_type):
             violations.append(
@@ -398,46 +424,11 @@ class ContractValidator:
     # Type checking
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _type_matches(value: Any, field_type: FieldType) -> bool:
-        """
-        Return ``True`` if *value*'s Python type is compatible with *field_type*.
-
-        Rules
-        -----
-        * ``ANY``     — always ``True``.
-        * ``NULL``    — only ``None``.
-        * ``BOOLEAN`` — only ``bool`` (checked before INTEGER since
-          ``bool`` is a subclass of ``int``).
-        * ``INTEGER`` — ``int`` but not ``bool``.
-        * ``FLOAT``   — ``int`` or ``float`` but not ``bool``
-          (an int value is an acceptable float).
-        * ``STRING``  — only ``str``.
-        * ``OBJECT``  — only ``dict``  (handled separately in
-          ``_validate_field`` for structural-mismatch reporting; retained
-          here for completeness / direct callers).
-        * ``ARRAY``   — only ``list`` (handled separately in
-          ``_validate_field``; retained here for item-type checks).
-        """
-        if field_type is FieldType.ANY:
-            return True
-        if field_type is FieldType.NULL:
-            return value is None
-        if value is None:
-            return False
-        if field_type is FieldType.BOOLEAN:
-            return isinstance(value, bool)
-        if field_type is FieldType.INTEGER:
-            return isinstance(value, int) and not isinstance(value, bool)
-        if field_type is FieldType.FLOAT:
-            return isinstance(value, (int, float)) and not isinstance(value, bool)
-        if field_type is FieldType.STRING:
-            return isinstance(value, str)
-        if field_type is FieldType.OBJECT:
-            return isinstance(value, dict)
-        if field_type is FieldType.ARRAY:
-            return isinstance(value, list)
-        return True
+    # Shared implementation lives in stateguard.core.models.field_types so
+    # that TypeCoercionStrategy and the engine's coercion applier use the
+    # exact same compatibility rules. Kept as a static method for backward
+    # compatibility with existing callers and tests.
+    _type_matches = staticmethod(type_matches)
 
     # ------------------------------------------------------------------
     # Path helpers

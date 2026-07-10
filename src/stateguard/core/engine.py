@@ -52,7 +52,8 @@ from stateguard.core.errors.violations import (
 from stateguard.core.interfaces.adapter import IContractAdapter
 from stateguard.core.models.config import RepairConfig
 from stateguard.core.models.contract import ContractSpec, FieldSpec
-from stateguard.core.models.field_types import FieldType
+from stateguard.core.models.field_types import FieldType, UnionMember
+from stateguard.core.strategies.coerce import _array_wrap_is_safe, resolve_union_member
 from stateguard.core.strategies.registry import StrategyRegistry
 from stateguard.core.validator import ContractValidator
 from stateguard.logging.logger import RepairLogger
@@ -147,14 +148,23 @@ def _find_field_spec(contract: ContractSpec, full_path: str) -> FieldSpec | None
     return None
 
 
-def _coerce_value(value: Any, target_type: FieldType) -> Any:
+def _coerce_value(
+    value: Any,
+    target_type: FieldType,
+    item_type: FieldType | None = None,
+    union_members: tuple[UnionMember, ...] | None = None,
+) -> Any:
     """
     Cast *value* to *target_type*, returning ``_COERCE_FAILED`` if no
     supported cast applies.
 
     Mirrors the feasibility checks in
     ``stateguard.core.strategies.coerce``: only the casts that
-    ``TypeCoercionStrategy`` proposes are performed here.
+    ``TypeCoercionStrategy`` proposes are performed here.  ``ARRAY``
+    targets wrap the value in a single-element list; ``UNION`` targets
+    delegate member selection to ``resolve_union_member`` so that
+    application picks the same member the strategy's feasibility check
+    did.
     """
     if target_type is FieldType.INTEGER:
         if isinstance(value, str) and not isinstance(value, bool):
@@ -182,6 +192,18 @@ def _coerce_value(value: Any, target_type: FieldType) -> Any:
             if lowered in ("false", "0"):
                 return False
         return _COERCE_FAILED
+
+    if target_type is FieldType.ARRAY:
+        if _array_wrap_is_safe(value, item_type):
+            return [value]
+        return _COERCE_FAILED
+
+    if target_type is FieldType.UNION:
+        resolved = resolve_union_member(value, union_members)
+        if resolved is None:
+            return _COERCE_FAILED
+        member, _confidence = resolved
+        return _coerce_value(value, member.field_type, item_type=member.item_type)
 
     return _COERCE_FAILED
 
@@ -705,7 +727,12 @@ class RepairEngine:
         if field_spec is None:
             return
 
-        coerced = _coerce_value(value, field_spec.field_type)
+        coerced = _coerce_value(
+            value,
+            field_spec.field_type,
+            item_type=field_spec.item_type,
+            union_members=field_spec.union_members,
+        )
         if coerced is _COERCE_FAILED:
             return
 

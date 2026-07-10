@@ -10,13 +10,21 @@ represents a value of the target type:
 * ``int`` → ``float``  — always safe.
 * ``str`` → ``bool``   — only for the exact strings (case-insensitive)
   ``"true"``, ``"false"``, ``"1"``, ``"0"``.
+* value → ``list``     — wrap-in-list, only when the target is an ``ARRAY``
+  with a declared ``item_type`` that the value already satisfies as a
+  single element (lossless: ``"x"`` → ``["x"]``).  Bare/untyped arrays and
+  values that are already lists are never wrapped.
+* value → union        — for ``UNION`` targets, each member is tried with
+  the rules above; the coercion is proposed only when exactly one member
+  yields the highest-confidence candidate (ties are ambiguous and refused).
 
 All other combinations are left unrepaired by this strategy (no operation
 is proposed; ``confidence`` is never fabricated for unsafe casts).
 
 This strategy determines *feasibility and confidence* only.  The actual
 cast is performed by the engine when applying the ``COERCE`` operation,
-using ``ContractSpec`` to look up the target ``FieldType``.
+using ``ContractSpec`` to look up the target ``FieldType`` (and, for
+``ARRAY``/``UNION`` targets, the ``item_type`` / ``union_members``).
 """
 
 from __future__ import annotations
@@ -26,8 +34,8 @@ from typing import Any
 from stateguard.core.errors.operations import FieldOperation, FieldOpType
 from stateguard.core.errors.violations import ContractViolation, ViolationType
 from stateguard.core.interfaces.strategy import IRepairStrategy
-from stateguard.core.models.contract import ContractSpec
-from stateguard.core.models.field_types import FieldType
+from stateguard.core.models.contract import ContractSpec, FieldSpec
+from stateguard.core.models.field_types import FieldType, UnionMember, type_matches
 
 __all__ = ["TypeCoercionStrategy"]
 
@@ -38,6 +46,7 @@ __all__ = ["TypeCoercionStrategy"]
 
 _NUMERIC_COERCION_CONFIDENCE = 0.95
 _BOOL_COERCION_CONFIDENCE = 0.85
+_ARRAY_WRAP_CONFIDENCE = 0.9
 
 # Strings accepted for str -> bool coercion (case-insensitive).
 _BOOL_STRINGS = {"true", "false", "1", "0"}
@@ -74,15 +83,43 @@ def _get_nested_value(data: dict[str, Any], path: str) -> Any:
     return current
 
 
+def _find_field_spec(contract: ContractSpec, full_path: str) -> FieldSpec | None:
+    """
+    Locate the ``FieldSpec`` for a dot-notation *full_path* within *contract*,
+    recursing into ``nested_spec`` for nested paths.
+
+    Used to look up ``item_type`` / ``union_members`` for ``ARRAY`` and
+    ``UNION`` coercion targets (the violation only carries the
+    ``expected_type``).
+    """
+    local, _, rest = full_path.partition(".")
+    for field_spec in contract.fields:
+        if field_spec.path == local:
+            if not rest:
+                return field_spec
+            if field_spec.nested_spec is not None:
+                return _find_field_spec(field_spec.nested_spec, rest)
+            return None
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Coercion feasibility
 # ---------------------------------------------------------------------------
 
 
-def _coercion_confidence(value: Any, target_type: FieldType) -> float | None:
+def _coercion_confidence(
+    value: Any,
+    target_type: FieldType,
+    item_type: FieldType | None = None,
+    union_members: tuple[UnionMember, ...] | None = None,
+) -> float | None:
     """
     Return the confidence for coercing *value* to *target_type*, or
     ``None`` if no safe coercion is defined for this (value, target) pair.
+
+    *item_type* is consulted only for ``ARRAY`` targets and *union_members*
+    only for ``UNION`` targets; both come from the field's ``FieldSpec``.
     """
     if target_type is FieldType.INTEGER:
         if isinstance(value, str) and not isinstance(value, bool) and _is_integer_string(value):
@@ -104,7 +141,70 @@ def _coercion_confidence(value: Any, target_type: FieldType) -> float | None:
             return _BOOL_COERCION_CONFIDENCE
         return None
 
+    if target_type is FieldType.ARRAY:
+        if _array_wrap_is_safe(value, item_type):
+            return _ARRAY_WRAP_CONFIDENCE
+        return None
+
+    if target_type is FieldType.UNION:
+        resolved = resolve_union_member(value, union_members)
+        if resolved is None:
+            return None
+        member, confidence = resolved
+        return confidence
+
     return None
+
+
+def _array_wrap_is_safe(value: Any, item_type: FieldType | None) -> bool:
+    """
+    ``True`` if wrapping *value* as a single-element list is a safe repair
+    for an ``ARRAY`` target.
+
+    Refused when the value is already a list (that is an item-level
+    problem, not a wrapping problem) and when *item_type* is unknown
+    (wrapping into an untyped array would be a guess).
+    """
+    if isinstance(value, list):
+        return False
+    if item_type is None:
+        return False
+    return type_matches(value, item_type)
+
+
+def resolve_union_member(
+    value: Any,
+    union_members: tuple[UnionMember, ...] | None,
+) -> tuple[UnionMember, float] | None:
+    """
+    Pick the union member *value* can be safely coerced to.
+
+    Evaluates every member with the same rules as ``_coercion_confidence``
+    (scalar casts; wrap-in-list for ``ARRAY`` members) and returns the
+    single member with the strictly highest confidence, together with that
+    confidence.  Returns ``None`` when no member is coercible or when two
+    or more members tie at the top (ambiguous — refusing is the safe
+    default).
+
+    Shared with the engine's ``_coerce_value`` so that feasibility and
+    application always resolve to the same member.
+    """
+    if not union_members:
+        return None
+
+    candidates: list[tuple[UnionMember, float]] = []
+    for member in union_members:
+        confidence = _coercion_confidence(value, member.field_type, item_type=member.item_type)
+        if confidence is not None:
+            candidates.append((member, confidence))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda c: c[1], reverse=True)
+    if len(candidates) > 1 and candidates[0][1] == candidates[1][1]:
+        return None
+    return candidates[0]
 
 
 def _is_integer_string(value: str) -> bool:
@@ -169,7 +269,20 @@ class TypeCoercionStrategy(IRepairStrategy):
             if value is _NOT_FOUND:
                 continue
 
-            confidence = _coercion_confidence(value, violation.expected_type)
+            item_type: FieldType | None = None
+            union_members: tuple[UnionMember, ...] | None = None
+            if violation.expected_type in (FieldType.ARRAY, FieldType.UNION):
+                field_spec = _find_field_spec(contract, violation.field_path)
+                if field_spec is not None:
+                    item_type = field_spec.item_type
+                    union_members = field_spec.union_members
+
+            confidence = _coercion_confidence(
+                value,
+                violation.expected_type,
+                item_type=item_type,
+                union_members=union_members,
+            )
             if confidence is None:
                 continue
 
