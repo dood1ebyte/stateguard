@@ -26,7 +26,7 @@ from stateguard.core.errors.violations import (
 from stateguard.core.interfaces.adapter import IContractAdapter
 from stateguard.core.models.config import RepairConfig
 from stateguard.core.models.contract import ContractSpec, FieldSpec
-from stateguard.core.models.field_types import FieldType
+from stateguard.core.models.field_types import FieldType, UnionMember
 from stateguard.core.strategies import (
     DefaultValueFillStrategy,
     ExactAliasStrategy,
@@ -1053,7 +1053,38 @@ class TestCoerceValue:
     def test_unsupported_target_type_fails(self) -> None:
         assert _coerce_value("x", FieldType.STRING) is _COERCE_FAILED
         assert _coerce_value("x", FieldType.OBJECT) is _COERCE_FAILED
+        # ARRAY without a declared item_type: wrap is refused.
         assert _coerce_value("x", FieldType.ARRAY) is _COERCE_FAILED
+
+    def test_array_wrap_with_matching_item_type(self) -> None:
+        assert _coerce_value("x", FieldType.ARRAY, item_type=FieldType.STRING) == ["x"]
+
+    def test_array_wrap_with_mismatched_item_type_fails(self) -> None:
+        assert _coerce_value("x", FieldType.ARRAY, item_type=FieldType.INTEGER) is _COERCE_FAILED
+
+    def test_array_wrap_of_list_value_fails(self) -> None:
+        """Never double-wrap: a value that is already a list is refused."""
+        result = _coerce_value(["x"], FieldType.ARRAY, item_type=FieldType.STRING)
+        assert result is _COERCE_FAILED
+
+    def test_union_resolves_to_array_member_and_wraps(self) -> None:
+        members = (
+            UnionMember(FieldType.STRING),
+            UnionMember(FieldType.ARRAY, item_type=FieldType.ANY),
+        )
+        value = {"low_level": [], "high_level": []}
+        assert _coerce_value(value, FieldType.UNION, union_members=members) == [value]
+
+    def test_union_resolves_to_scalar_member(self) -> None:
+        members = (UnionMember(FieldType.INTEGER), UnionMember(FieldType.OBJECT))
+        assert _coerce_value("42", FieldType.UNION, union_members=members) == 42
+
+    def test_union_ambiguous_tie_fails(self) -> None:
+        members = (UnionMember(FieldType.INTEGER), UnionMember(FieldType.FLOAT))
+        assert _coerce_value("42", FieldType.UNION, union_members=members) is _COERCE_FAILED
+
+    def test_union_without_members_fails(self) -> None:
+        assert _coerce_value("42", FieldType.UNION) is _COERCE_FAILED
 
     def test_non_string_non_bool_to_integer_fails(self) -> None:
         """A float (not str) value to INTEGER is not a supported cast."""

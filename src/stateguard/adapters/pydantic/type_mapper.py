@@ -25,11 +25,17 @@ Supported annotation shapes:
   for the extractor to build an ``ENUM_VALUES`` constraint.
 * ``Annotated[X, ...]`` -> unwrapped to ``X`` before any of the above.
 * ``Any`` -> ``FieldType.ANY``
+* ``Union`` of multiple non-``None`` types (e.g. ``Union[int, str]``,
+  ``str | list``) -> ``FieldType.UNION``; the accepted member types are
+  surfaced via ``get_union_members`` for the extractor to place on
+  ``FieldSpec.union_members``.  Both ``typing.Union`` and PEP 604
+  (``X | Y``) unions are recognised.  A member that is itself a container
+  of a union (e.g. ``list[str | dict]``) is reported as ``ARRAY`` with
+  ``item_type=ANY`` (per-element union checking is out of scope; the
+  framework-native revalidation remains the source of truth).
 
 Explicitly NOT supported in V1 (per finalized scope):
 
-* ``Union`` of multiple non-``None`` types (e.g. ``Union[int, str]``) ->
-  falls back to ``FieldType.ANY``.
 * ``List[BaseModel]`` (arrays of nested models) -> the array's
   ``item_type`` is reported as ``FieldType.OBJECT``, but no per-item
   ``nested_spec`` is produced; item-level field validation does not occur.
@@ -41,13 +47,18 @@ Explicitly NOT supported in V1 (per finalized scope):
 from __future__ import annotations
 
 import datetime
+import types
 import typing
 import uuid
 from typing import Annotated, Any, Union
 
-from stateguard.core.models.field_types import FieldType
+from stateguard.core.models.field_types import FieldType, UnionMember
 
 __all__ = ["PydanticTypeMapper"]
+
+# typing.Union[X, Y] and PEP 604 ``X | Y`` report different origins from
+# ``typing.get_origin``; both must be treated as unions.
+_UNION_ORIGINS = (Union, types.UnionType)
 
 
 # ---------------------------------------------------------------------------
@@ -111,12 +122,12 @@ class PydanticTypeMapper:
 
         A ``Union`` with more than one non-``None`` member (e.g.
         ``Union[int, str, None]``) is NOT unwrapped -- it is returned as-is
-        with ``is_optional=False``, since V1 does not support general
-        unions; ``map_annotation`` will report such annotations as
-        ``FieldType.ANY``.
+        with ``is_optional=False``; ``map_annotation`` reports such
+        annotations as ``FieldType.UNION`` and ``get_union_members``
+        surfaces the accepted member types.
         """
         annotation = cls.strip_annotated(annotation)
-        if typing.get_origin(annotation) is Union:
+        if typing.get_origin(annotation) in _UNION_ORIGINS:
             args = typing.get_args(annotation)
             non_none = [a for a in args if a is not type(None)]
             if len(non_none) == 1 and len(args) == 2:
@@ -165,9 +176,9 @@ class PydanticTypeMapper:
 
         origin = typing.get_origin(inner)
 
-        if origin is Union:
-            # General (multi-type) union: not supported in V1.
-            return FieldType.ANY
+        if origin in _UNION_ORIGINS:
+            # General (multi-type) union; members via get_union_members.
+            return FieldType.UNION
 
         if origin in (list, list):
             return FieldType.ARRAY
@@ -210,7 +221,49 @@ class PydanticTypeMapper:
         if not args:
             return None
 
-        return cls.map_annotation(args[0])
+        item_type = cls.map_annotation(args[0])
+        if item_type is FieldType.UNION:
+            # Per-element union checking is out of scope; ANY defers to the
+            # framework-native revalidation (see module docstring).
+            return FieldType.ANY
+        return item_type
+
+    # ------------------------------------------------------------------
+    # Union member extraction
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def get_union_members(cls, annotation: Any) -> tuple[UnionMember, ...] | None:
+        """
+        Return the ``UnionMember`` tuple for a multi-type union annotation,
+        or ``None`` if *annotation* (after unwrapping ``Annotated``) is not
+        one -- i.e. exactly when ``map_annotation`` reports ``UNION``.
+
+        ``None``-type members are dropped (optionality is Pydantic's
+        concern via ``FieldInfo.is_required``; a ``None`` value is handled
+        separately by the validator).  Each remaining member is mapped with
+        ``map_annotation``; ``ARRAY`` members carry their element type via
+        ``get_item_type`` (union element types collapse to ``ANY``).
+        """
+        inner = cls.strip_annotated(annotation)
+        if typing.get_origin(inner) not in _UNION_ORIGINS:
+            return None
+        args = typing.get_args(inner)
+        non_none = [a for a in args if a is not type(None)]
+        if len(non_none) < 2:
+            # Optional[X] -- not a multi-type union; unwrap_optional handles it.
+            return None
+
+        members: list[UnionMember] = []
+        for arg in non_none:
+            member_type = cls.map_annotation(arg)
+            members.append(
+                UnionMember(
+                    field_type=member_type,
+                    item_type=cls.get_item_type(arg),
+                )
+            )
+        return tuple(members)
 
     # ------------------------------------------------------------------
     # Nested model detection

@@ -11,7 +11,7 @@ import pytest
 from pydantic import BaseModel
 
 from stateguard.adapters.pydantic.type_mapper import PydanticTypeMapper
-from stateguard.core.models.field_types import FieldType
+from stateguard.core.models.field_types import FieldType, UnionMember
 
 
 # ===========================================================================
@@ -157,11 +157,17 @@ class TestMapAnnotationOptional:
     def test_union_int_none_maps_to_integer(self) -> None:
         assert PydanticTypeMapper.map_annotation(Union[int, None]) is FieldType.INTEGER
 
-    def test_multi_type_union_maps_to_any(self) -> None:
-        assert PydanticTypeMapper.map_annotation(Union[int, str]) is FieldType.ANY
+    def test_multi_type_union_maps_to_union(self) -> None:
+        assert PydanticTypeMapper.map_annotation(Union[int, str]) is FieldType.UNION
 
-    def test_three_way_union_with_none_maps_to_any(self) -> None:
-        assert PydanticTypeMapper.map_annotation(Union[int, str, None]) is FieldType.ANY
+    def test_three_way_union_with_none_maps_to_union(self) -> None:
+        assert PydanticTypeMapper.map_annotation(Union[int, str, None]) is FieldType.UNION
+
+    def test_pep604_union_maps_to_union(self) -> None:
+        assert PydanticTypeMapper.map_annotation(int | str) is FieldType.UNION
+
+    def test_pep604_optional_maps_to_inner_type(self) -> None:
+        assert PydanticTypeMapper.map_annotation(str | None) is FieldType.STRING
 
     def test_set_maps_to_any(self) -> None:
         """set is not list or dict; falls back to ANY."""
@@ -376,3 +382,62 @@ class TestFieldTypeCompleteness:
 
     def test_null(self) -> None:
         assert PydanticTypeMapper.map_annotation(type(None)) is FieldType.NULL
+
+
+# ===========================================================================
+# get_union_members
+# ===========================================================================
+
+
+class TestGetUnionMembers:
+    def test_non_union_returns_none(self) -> None:
+        assert PydanticTypeMapper.get_union_members(int) is None
+        assert PydanticTypeMapper.get_union_members(List[str]) is None
+
+    def test_optional_returns_none(self) -> None:
+        """Optional[X] is unwrap_optional's job, not a multi-type union."""
+        assert PydanticTypeMapper.get_union_members(Optional[str]) is None
+
+    def test_typing_union_members(self) -> None:
+        members = PydanticTypeMapper.get_union_members(Union[int, str])
+        assert members == (
+            UnionMember(FieldType.INTEGER),
+            UnionMember(FieldType.STRING),
+        )
+
+    def test_pep604_union_members(self) -> None:
+        members = PydanticTypeMapper.get_union_members(int | str)
+        assert members == (
+            UnionMember(FieldType.INTEGER),
+            UnionMember(FieldType.STRING),
+        )
+
+    def test_none_member_dropped(self) -> None:
+        members = PydanticTypeMapper.get_union_members(Union[int, str, None])
+        assert members == (
+            UnionMember(FieldType.INTEGER),
+            UnionMember(FieldType.STRING),
+        )
+
+    def test_array_member_carries_item_type(self) -> None:
+        members = PydanticTypeMapper.get_union_members(Union[str, List[int]])
+        assert members == (
+            UnionMember(FieldType.STRING),
+            UnionMember(FieldType.ARRAY, item_type=FieldType.INTEGER),
+        )
+
+    def test_union_item_type_collapses_to_any(self) -> None:
+        """The AIMessage.content shape: str | list[str | dict]."""
+        annotation = Union[str, List[Union[str, Dict[str, Any]]]]
+        members = PydanticTypeMapper.get_union_members(annotation)
+        assert members == (
+            UnionMember(FieldType.STRING),
+            UnionMember(FieldType.ARRAY, item_type=FieldType.ANY),
+        )
+
+    def test_bare_list_member_has_no_item_type(self) -> None:
+        members = PydanticTypeMapper.get_union_members(Union[str, list])
+        assert members == (
+            UnionMember(FieldType.STRING),
+            UnionMember(FieldType.ARRAY, item_type=None),
+        )

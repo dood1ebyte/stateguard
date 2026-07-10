@@ -125,6 +125,7 @@ class PydanticContractExtractor:
             known_aliases=known_aliases,
             item_type=item_type,
             nested_spec=nested_spec,
+            union_members=PydanticTypeMapper.get_union_members(annotation),
         )
 
     # ------------------------------------------------------------------

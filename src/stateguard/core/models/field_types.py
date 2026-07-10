@@ -20,6 +20,9 @@ __all__ = [
     "FieldConstraint",
     "FieldConstraintType",
     "FieldType",
+    "UnionMember",
+    "type_matches",
+    "union_member_matches",
 ]
 
 
@@ -46,6 +49,10 @@ class FieldType(StrEnum):
 
     ``ANY`` means the field is explicitly untyped.  The validator skips
     type-checking for ``ANY`` fields; strategies still apply.
+
+    ``UNION`` means the field accepts more than one type; the accepted
+    member types are tracked separately via ``FieldSpec.union_members``.
+    A ``UNION`` field with no ``union_members`` behaves like ``ANY``.
     """
 
     STRING = "string"
@@ -56,6 +63,7 @@ class FieldType(StrEnum):
     ARRAY = "array"  # list of items (item type tracked separately)
     ANY = "any"  # explicitly untyped; validator skips type checks
     NULL = "null"  # field's declared type is null
+    UNION = "union"  # multiple accepted types (see FieldSpec.union_members)
 
 
 # ---------------------------------------------------------------------------
@@ -114,3 +122,97 @@ class FieldConstraint:
 
     constraint_type: FieldConstraintType
     value: Any
+
+
+# ---------------------------------------------------------------------------
+# UnionMember
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UnionMember:
+    """
+    One accepted type of a ``FieldType.UNION`` field.
+
+    Attributes
+    ----------
+    field_type:
+        The abstract type this member accepts.  ``UNION`` itself is not a
+        valid member type — adapters must flatten nested unions.
+    item_type:
+        For ``ARRAY`` members, the element type.  A member whose elements
+        are themselves a union collapses to ``item_type=ANY`` (per-element
+        union checking is not supported; the framework-native revalidation
+        remains the source of truth).  ``None`` for non-array members.
+    """
+
+    field_type: FieldType
+    item_type: FieldType | None = None
+
+
+# ---------------------------------------------------------------------------
+# Value/type compatibility
+# ---------------------------------------------------------------------------
+
+
+def type_matches(value: Any, field_type: FieldType) -> bool:
+    """
+    Return ``True`` if *value*'s Python type is compatible with *field_type*.
+
+    Shared by ``ContractValidator``, ``TypeCoercionStrategy``, and the
+    engine's coercion applier so that feasibility checks, application, and
+    revalidation always agree on type compatibility.
+
+    Rules
+    -----
+    * ``ANY``     — always ``True``.
+    * ``NULL``    — only ``None``.
+    * ``BOOLEAN`` — only ``bool`` (checked before INTEGER since
+      ``bool`` is a subclass of ``int``).
+    * ``INTEGER`` — ``int`` but not ``bool``.
+    * ``FLOAT``   — ``int`` or ``float`` but not ``bool``
+      (an int value is an acceptable float).
+    * ``STRING``  — only ``str``.
+    * ``OBJECT``  — only ``dict``.
+    * ``ARRAY``   — only ``list``.
+    * ``UNION``   — always ``True``.  Members are not available here;
+      callers with access to the ``FieldSpec`` should use
+      ``union_member_matches`` per member instead.
+    """
+    if field_type is FieldType.ANY:
+        return True
+    if field_type is FieldType.NULL:
+        return value is None
+    if value is None:
+        return False
+    if field_type is FieldType.BOOLEAN:
+        return isinstance(value, bool)
+    if field_type is FieldType.INTEGER:
+        return isinstance(value, int) and not isinstance(value, bool)
+    if field_type is FieldType.FLOAT:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if field_type is FieldType.STRING:
+        return isinstance(value, str)
+    if field_type is FieldType.OBJECT:
+        return isinstance(value, dict)
+    if field_type is FieldType.ARRAY:
+        return isinstance(value, list)
+    return True
+
+
+def union_member_matches(value: Any, member: UnionMember) -> bool:
+    """
+    Return ``True`` if *value* is acceptable for *member*.
+
+    For ``ARRAY`` members the value must be a list whose every element
+    matches ``member.item_type`` (an unset ``item_type`` accepts any
+    element).  For all other members this is ``type_matches`` on the
+    member's ``field_type``.
+    """
+    if member.field_type is FieldType.ARRAY:
+        if not isinstance(value, list):
+            return False
+        if member.item_type is None:
+            return True
+        return all(type_matches(item, member.item_type) for item in value)
+    return type_matches(value, member.field_type)

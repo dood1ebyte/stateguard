@@ -383,3 +383,91 @@ def test_contract_id_is_set_on_result() -> None:
 
     assert result.contract_id
     assert isinstance(result.contract_id, str)
+
+
+# ===========================================================================
+# Wrap-in-list coercion (autoclip_mvp #17 shape)
+# ===========================================================================
+
+
+class TestWrapInListRepair:
+    """str where List[str] is expected -> wrapped as a one-element list."""
+
+    def test_str_content_wrapped_into_list(self) -> None:
+        ContractGuard = _require_guard()
+        from typing import List, Optional
+
+        from pydantic import BaseModel
+
+        class Clip(BaseModel):
+            id: str
+            outline: str
+            content: List[str]
+            title: Optional[str] = None
+
+        guard = ContractGuard.with_pydantic()
+        data = {"id": "c1", "outline": "o", "content": "a single sentence"}
+        result = guard.repair(Clip, data)
+
+        assert result.status is RepairStatus.SUCCESS
+        assert isinstance(result.repaired_output, Clip)
+        assert result.repaired_output.content == ["a single sentence"]
+
+    def test_wrap_refused_when_item_type_mismatches(self) -> None:
+        ContractGuard = _require_guard()
+        from typing import List
+
+        from pydantic import BaseModel
+
+        class M(BaseModel):
+            nums: List[int]
+
+        guard = ContractGuard.with_pydantic()
+        result = guard.repair(M, {"nums": "not a number"})
+        assert result.status is RepairStatus.FAILED
+
+
+# ===========================================================================
+# Union coercion (graph-rag-agent #49 shape)
+# ===========================================================================
+
+
+class TestUnionRepair:
+    """dict where str | list[str | dict] is expected -> wrapped into the
+    list member (the LangChain AIMessage.content shape)."""
+
+    def test_dict_content_wrapped_into_list_member(self) -> None:
+        ContractGuard = _require_guard()
+        from typing import Any, Dict, List, Union
+
+        from pydantic import BaseModel
+
+        class Message(BaseModel):
+            content: Union[str, List[Union[str, Dict[str, Any]]]]
+            type: str = "ai"
+
+        guard = ContractGuard.with_pydantic()
+        payload = {"low_level": ["kw1"], "high_level": []}
+        result = guard.repair(Message, {"content": payload})
+
+        assert result.status is RepairStatus.SUCCESS
+        assert isinstance(result.repaired_output, Message)
+        assert result.repaired_output.content == [payload]
+
+    def test_union_branch_errors_collapse_to_single_violation(self) -> None:
+        ContractGuard = _require_guard()
+        from typing import Any, Dict, List, Union
+
+        from pydantic import BaseModel
+
+        class Message(BaseModel):
+            content: Union[str, List[Union[str, Dict[str, Any]]]]
+
+        guard = ContractGuard.with_pydantic()
+        validation = guard.validate(Message, {"content": {"a": 1}})
+
+        assert validation.is_valid is False
+        content_violations = [v for v in validation.violations if v.field_path == "content"]
+        assert len(content_violations) == 1
+        # No polluted union-branch paths like "content.str" survive.
+        assert all("." not in v.field_path for v in validation.violations)
