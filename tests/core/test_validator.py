@@ -1072,9 +1072,7 @@ class TestUnionFields:
             UnionMember(FieldType.STRING),
             UnionMember(FieldType.ARRAY, item_type=FieldType.ANY),
         )
-        return ContractSpec(
-            fields=[FieldSpec("content", FieldType.UNION, union_members=members)]
-        )
+        return ContractSpec(fields=[FieldSpec("content", FieldType.UNION, union_members=members)])
 
     def test_matching_scalar_member_is_valid(self) -> None:
         result = ContractValidator().validate(self._contract(), {"content": "hello"})
@@ -1098,9 +1096,7 @@ class TestUnionFields:
             UnionMember(FieldType.INTEGER),
             UnionMember(FieldType.ARRAY, item_type=FieldType.INTEGER),
         )
-        contract = ContractSpec(
-            fields=[FieldSpec("nums", FieldType.UNION, union_members=members)]
-        )
+        contract = ContractSpec(fields=[FieldSpec("nums", FieldType.UNION, union_members=members)])
         assert ContractValidator().validate(contract, {"nums": [1, 2]}).is_valid is True
         assert ContractValidator().validate(contract, {"nums": [1, "x"]}).is_valid is False
 

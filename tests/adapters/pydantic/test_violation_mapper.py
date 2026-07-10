@@ -15,6 +15,7 @@ from stateguard.adapters.pydantic.violation_mapper import (
     _loc_to_field_path,
 )
 from stateguard.core.errors.violations import ViolationSeverity, ViolationType
+from stateguard.core.models.contract import ContractSpec
 from stateguard.core.models.field_types import FieldType
 
 
@@ -37,7 +38,7 @@ def _raise_and_map(model_class: type[BaseModel], data: dict) -> list:
 # ===========================================================================
 
 
-def _contract_of(model_class: type[BaseModel]):
+def _contract_of(model_class: type[BaseModel]) -> ContractSpec:
     return PydanticContractExtractor.extract(model_class)
 
 
