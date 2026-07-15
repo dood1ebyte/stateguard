@@ -1051,10 +1051,29 @@ class TestCoerceValue:
         assert _coerce_value("maybe", FieldType.BOOLEAN) is _COERCE_FAILED
 
     def test_unsupported_target_type_fails(self) -> None:
+        # A str value for a STRING target is not a repair (scalars are
+        # refused by the JSON-serialise rule; only containers qualify).
         assert _coerce_value("x", FieldType.STRING) is _COERCE_FAILED
         assert _coerce_value("x", FieldType.OBJECT) is _COERCE_FAILED
         # ARRAY without a declared item_type: wrap is refused.
         assert _coerce_value("x", FieldType.ARRAY) is _COERCE_FAILED
+
+    def test_dict_to_string_serializes(self) -> None:
+        assert _coerce_value({"a": 1}, FieldType.STRING) == '{"a": 1}'
+
+    def test_list_to_string_serializes(self) -> None:
+        assert _coerce_value([1, "x"], FieldType.STRING) == '[1, "x"]'
+
+    def test_dict_to_bytes_serializes_to_str(self) -> None:
+        """BYTES yields a str; the framework's native validation encodes it."""
+        assert _coerce_value({"a": 1}, FieldType.BYTES) == '{"a": 1}'
+
+    def test_non_serializable_dict_to_string_fails(self) -> None:
+        assert _coerce_value({"x": object()}, FieldType.STRING) is _COERCE_FAILED
+
+    def test_union_resolves_to_string_member_and_serializes(self) -> None:
+        members = (UnionMember(FieldType.STRING), UnionMember(FieldType.INTEGER))
+        assert _coerce_value({"a": 1}, FieldType.UNION, union_members=members) == '{"a": 1}'
 
     def test_array_wrap_with_matching_item_type(self) -> None:
         assert _coerce_value("x", FieldType.ARRAY, item_type=FieldType.STRING) == ["x"]

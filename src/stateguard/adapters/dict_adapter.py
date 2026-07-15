@@ -70,8 +70,9 @@ Top-level keys: ``"strict_mode"`` (bool, default ``false``) and
 ``"fields"`` (required, list of field dicts).
 
 Per-field keys: ``"path"`` (required), ``"type"`` (required; one of the
-``FieldType`` values: ``string``, ``integer``, ``float``, ``boolean``,
-``object``, ``array``, ``any``, ``null``), ``"required"`` (bool, default
+``FieldType`` values: ``string``, ``bytes``, ``integer``, ``float``,
+``boolean``, ``object``, ``array``, ``any``, ``null``), ``"required"``
+(bool, default
 ``true``), ``"default"`` (any JSON value; absent means no default),
 ``"known_aliases"`` (list of strings), ``"item_type"`` (a ``FieldType``
 string, for ``"type": "array"`` fields), ``"nested"`` (a recursive schema

@@ -117,6 +117,13 @@ class TestMapAnnotationPrimitives:
     def test_str(self) -> None:
         assert PydanticTypeMapper.map_annotation(str) is FieldType.STRING
 
+    def test_bytes(self) -> None:
+        assert PydanticTypeMapper.map_annotation(bytes) is FieldType.BYTES
+
+    def test_bytearray_falls_through_to_any(self) -> None:
+        """Per V1 scope: only ``bytes`` is mapped; ``bytearray`` stays ANY."""
+        assert PydanticTypeMapper.map_annotation(bytearray) is FieldType.ANY
+
     def test_int(self) -> None:
         assert PydanticTypeMapper.map_annotation(int) is FieldType.INTEGER
 

@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `FieldType.BYTES` — declared binary fields (e.g. Pydantic `bytes`
+  annotations, previously extracted as `ANY`) are now a first-class
+  contract type accepting `str | bytes` values, mirroring the lax
+  wire-format rule of the frameworks that declare them. The dict-schema
+  adapter accepts `"type": "bytes"`.
+- `dict`/`list` → string JSON-serialise coercion: `TypeCoercionStrategy`
+  now repairs a `TYPE_MISMATCH` on `STRING`/`BYTES` targets by
+  `json.dumps`-ing container values (confidence 0.85; refused when the
+  container holds non-JSON values). Also applies to `STRING`/`BYTES`
+  members of `UNION` targets. Repairs the failure mode of
+  openai-python#2702, where an agent harness passes a parsed JSON object
+  to a tool argument declared `str`/`bytes`.
 - Python 3.14 compatibility: added `__init__.py` to all test directories
   (`tests/`, `tests/core/`, `tests/core/models/`, `tests/core/errors/`,
   `tests/integration/`, `tests/isolation/`, `tests/logging/`). The mixed

@@ -22,6 +22,7 @@ class TestFieldType:
     def test_all_expected_values_present(self) -> None:
         expected = {
             "string",
+            "bytes",
             "integer",
             "float",
             "boolean",
@@ -34,7 +35,7 @@ class TestFieldType:
         assert {ft.value for ft in FieldType} == expected
 
     def test_member_count(self) -> None:
-        assert len(FieldType) == 9
+        assert len(FieldType) == 10
 
     def test_string_equality_string(self) -> None:
         assert FieldType.STRING == "string"
@@ -77,9 +78,12 @@ class TestFieldType:
     def test_string_equality_union(self) -> None:
         assert FieldType.UNION == "union"
 
+    def test_string_equality_bytes(self) -> None:
+        assert FieldType.BYTES == "bytes"
+
     def test_is_iterable(self) -> None:
         members = list(FieldType)
-        assert len(members) == 9
+        assert len(members) == 10
 
     def test_is_not_equal_to_other_member(self) -> None:
         assert FieldType.STRING != FieldType.INTEGER

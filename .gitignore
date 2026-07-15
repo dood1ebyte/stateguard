@@ -48,5 +48,8 @@ dmypy.json
 # Project-specific
 *.log
 
+# Local issue reproductions (not published)
+repros/
+
 # Benchmark run outputs
 benchmarks/results/*.json

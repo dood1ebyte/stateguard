@@ -471,3 +471,94 @@ class TestUnionRepair:
         assert len(content_violations) == 1
         # No polluted union-branch paths like "content.str" survive.
         assert all("." not in v.field_path for v in validation.violations)
+
+
+# ===========================================================================
+# JSON-serialise coercion (openai-python #2702 shape)
+# ===========================================================================
+
+
+class TestJsonSerializeRepair:
+    """dict where str / bytes is expected -> json.dumps'd back into a
+    string (the openai-agents @function_tool write_file shape: an agent
+    harness parses the LLM's raw JSON text argument into an object)."""
+
+    PACKAGE_JSON = {"name": "hello_world", "dependencies": {"express": "^5.1.0"}}
+
+    def test_dict_payload_for_str_field_repairs(self) -> None:
+        import json
+
+        ContractGuard = _require_guard()
+        from pydantic import BaseModel
+
+        class WriteFileArgs(BaseModel):
+            file_path: str
+            content: str
+
+        guard = ContractGuard.with_pydantic()
+        result = guard.repair(
+            WriteFileArgs, {"file_path": "package.json", "content": self.PACKAGE_JSON}
+        )
+
+        assert result.status is RepairStatus.SUCCESS
+        assert isinstance(result.repaired_output, WriteFileArgs)
+        assert result.repaired_output.content == json.dumps(self.PACKAGE_JSON)
+
+    def test_dict_payload_for_bytes_field_repairs(self) -> None:
+        import json
+
+        ContractGuard = _require_guard()
+        from pydantic import BaseModel
+
+        class WriteFileArgs(BaseModel):
+            file_path: str
+            content: bytes
+
+        guard = ContractGuard.with_pydantic()
+        result = guard.repair(
+            WriteFileArgs, {"file_path": "package.json", "content": self.PACKAGE_JSON}
+        )
+
+        # Pydantic's lax str -> bytes encoding turns the serialised str
+        # into bytes when the repaired output is rehydrated.
+        assert result.status is RepairStatus.SUCCESS
+        assert isinstance(result.repaired_output, WriteFileArgs)
+        assert result.repaired_output.content == json.dumps(self.PACKAGE_JSON).encode()
+
+    def test_genuine_bytes_value_stays_already_valid(self) -> None:
+        """Regression guard for the BYTES mapping: a real (even non-UTF-8)
+        bytes value must not be churned through the repair loop."""
+        ContractGuard = _require_guard()
+        from pydantic import BaseModel
+
+        class WriteFileArgs(BaseModel):
+            file_path: str
+            content: bytes
+
+        guard = ContractGuard.with_pydantic()
+        result = guard.repair(
+            WriteFileArgs, {"file_path": "logo.png", "content": b"\x89PNG\r\n\x1a\n"}
+        )
+
+        assert result.status is RepairStatus.ALREADY_VALID
+        assert result.attempts == []
+
+    def test_dict_schema_bytes_type_parses_and_repairs(self) -> None:
+        import json
+
+        ContractGuard = _require_guard()
+
+        guard = ContractGuard.with_dict_schema()
+        contract = {
+            "fields": [
+                {"path": "file_path", "type": "string"},
+                {"path": "content", "type": "bytes"},
+            ]
+        }
+        result = guard.repair(contract, {"file_path": "package.json", "content": self.PACKAGE_JSON})
+
+        assert result.status is RepairStatus.SUCCESS
+        assert result.repaired_output == {
+            "file_path": "package.json",
+            "content": json.dumps(self.PACKAGE_JSON),
+        }
