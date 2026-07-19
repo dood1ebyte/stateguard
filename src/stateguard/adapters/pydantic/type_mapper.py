@@ -10,6 +10,8 @@ V1 scope
 Supported annotation shapes:
 
 * Primitives: ``str``, ``int``, ``float``, ``bool``
+* ``bytes`` -> ``FieldType.BYTES`` (``bytearray`` is not mapped and
+  falls through to ``ANY``)
 * ``datetime.datetime`` / ``datetime.date`` -> ``FieldType.STRING``
 * ``uuid.UUID`` -> ``FieldType.STRING``
 * ``Optional[X]`` / ``Union[X, None]`` -> type of ``X``, with optionality
@@ -67,6 +69,7 @@ _UNION_ORIGINS = (Union, types.UnionType)
 
 _PRIMITIVE_MAP: dict[Any, FieldType] = {
     str: FieldType.STRING,
+    bytes: FieldType.BYTES,
     int: FieldType.INTEGER,
     float: FieldType.FLOAT,
     bool: FieldType.BOOLEAN,

@@ -53,7 +53,11 @@ from stateguard.core.interfaces.adapter import IContractAdapter
 from stateguard.core.models.config import RepairConfig
 from stateguard.core.models.contract import ContractSpec, FieldSpec
 from stateguard.core.models.field_types import FieldType, UnionMember
-from stateguard.core.strategies.coerce import _array_wrap_is_safe, resolve_union_member
+from stateguard.core.strategies.coerce import (
+    _array_wrap_is_safe,
+    json_serialized,
+    resolve_union_member,
+)
 from stateguard.core.strategies.registry import StrategyRegistry
 from stateguard.core.validator import ContractValidator
 from stateguard.logging.logger import RepairLogger
@@ -166,6 +170,12 @@ def _coerce_value(
     application picks the same member the strategy's feasibility check
     did.
     """
+    if target_type in (FieldType.STRING, FieldType.BYTES):
+        serialized = json_serialized(value)
+        if serialized is not None:
+            return serialized
+        return _COERCE_FAILED
+
     if target_type is FieldType.INTEGER:
         if isinstance(value, str) and not isinstance(value, bool):
             try:

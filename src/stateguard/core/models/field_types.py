@@ -56,6 +56,7 @@ class FieldType(StrEnum):
     """
 
     STRING = "string"
+    BYTES = "bytes"  # binary payloads; accepts str too (see type_matches)
     INTEGER = "integer"
     FLOAT = "float"
     BOOLEAN = "boolean"
@@ -173,6 +174,9 @@ def type_matches(value: Any, field_type: FieldType) -> bool:
     * ``FLOAT``   — ``int`` or ``float`` but not ``bool``
       (an int value is an acceptable float).
     * ``STRING``  — only ``str``.
+    * ``BYTES``   — ``str`` or ``bytes`` (a str value is an acceptable
+      bytes payload: frameworks that declare bytes fields accept string
+      input on the wire, e.g. Pydantic's lax str -> bytes encoding).
     * ``OBJECT``  — only ``dict``.
     * ``ARRAY``   — only ``list``.
     * ``UNION``   — always ``True``.  Members are not available here;
@@ -193,6 +197,8 @@ def type_matches(value: Any, field_type: FieldType) -> bool:
         return isinstance(value, (int, float)) and not isinstance(value, bool)
     if field_type is FieldType.STRING:
         return isinstance(value, str)
+    if field_type is FieldType.BYTES:
+        return isinstance(value, (str, bytes))
     if field_type is FieldType.OBJECT:
         return isinstance(value, dict)
     if field_type is FieldType.ARRAY:

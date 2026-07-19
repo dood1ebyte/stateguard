@@ -939,6 +939,15 @@ class TestTypeMatchesDirect:
         assert ContractValidator._type_matches(None, FieldType.NULL) is True
         assert ContractValidator._type_matches("x", FieldType.NULL) is False
 
+    def test_bytes_matches_str_and_bytes(self) -> None:
+        """BYTES accepts str too: frameworks that declare bytes fields
+        accept string input on the wire (e.g. Pydantic lax str -> bytes)."""
+        assert ContractValidator._type_matches(b"payload", FieldType.BYTES) is True
+        assert ContractValidator._type_matches("payload", FieldType.BYTES) is True
+        assert ContractValidator._type_matches({}, FieldType.BYTES) is False
+        assert ContractValidator._type_matches([], FieldType.BYTES) is False
+        assert ContractValidator._type_matches(1, FieldType.BYTES) is False
+
     def test_object_matches_dict_only(self) -> None:
         assert ContractValidator._type_matches({}, FieldType.OBJECT) is True
         assert ContractValidator._type_matches({"a": 1}, FieldType.OBJECT) is True
@@ -954,6 +963,7 @@ class TestTypeMatchesDirect:
     def test_none_does_not_match_non_null_non_any_types(self) -> None:
         for ft in [
             FieldType.STRING,
+            FieldType.BYTES,
             FieldType.INTEGER,
             FieldType.FLOAT,
             FieldType.BOOLEAN,

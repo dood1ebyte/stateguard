@@ -17,6 +17,7 @@ from stateguard.core.strategies.coerce import (
     _is_float_string,
     _is_integer_string,
     _NOT_FOUND,
+    json_serialized,
     resolve_union_member,
 )
 from tests.conftest import make_violation
@@ -244,6 +245,71 @@ class TestStrToBool:
 
 
 # ===========================================================================
+# propose — dict/list -> str (JSON-serialise, STRING and BYTES targets)
+# ===========================================================================
+
+
+class TestJsonSerializeCoercion:
+    def test_dict_to_string_coerces(self) -> None:
+        """The openai-python #2702 shape: JSON object where str is expected."""
+        payload = {"name": "hello_world", "dependencies": {"express": "^5.1.0"}}
+        v = _type_mismatch("content", FieldType.STRING, payload)
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], make_contract(), {"content": payload})
+        assert len(ops) == 1
+        assert ops[0].op_type is FieldOpType.COERCE
+        assert ops[0].target_path == "content"
+        assert ops[0].confidence == pytest.approx(0.85)
+
+    def test_list_to_string_coerces(self) -> None:
+        v = _type_mismatch("content", FieldType.STRING, [1, 2])
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], make_contract(), {"content": [1, 2]})
+        assert len(ops) == 1
+        assert ops[0].confidence == pytest.approx(0.85)
+
+    def test_dict_to_bytes_coerces(self) -> None:
+        """BYTES targets get the same repair; the serialised str satisfies
+        the framework's lax str -> bytes rule on revalidation."""
+        payload = {"name": "hello_world"}
+        v = _type_mismatch("content", FieldType.BYTES, payload)
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], make_contract(), {"content": payload})
+        assert len(ops) == 1
+        assert ops[0].confidence == pytest.approx(0.85)
+
+    def test_non_serializable_dict_not_coerced(self) -> None:
+        payload = {"x": object()}
+        v = _type_mismatch("content", FieldType.STRING, payload)
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], make_contract(), {"content": payload})
+        assert ops == []
+
+    def test_circular_dict_not_coerced(self) -> None:
+        payload: dict[str, Any] = {}
+        payload["self"] = payload
+        v = _type_mismatch("content", FieldType.STRING, payload)
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], make_contract(), {"content": payload})
+        assert ops == []
+
+    def test_scalar_to_string_not_coerced(self) -> None:
+        """Only containers qualify: a scalar where a string is expected is a
+        semantic mismatch, not an over-parsed JSON argument."""
+        v = _type_mismatch("content", FieldType.STRING, 3.5)
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], make_contract(), {"content": 3.5})
+        assert ops == []
+
+    def test_bytes_value_for_bytes_target_not_coerced(self) -> None:
+        """A genuine bytes value already matches BYTES; nothing to propose."""
+        v = _type_mismatch("content", FieldType.BYTES, b"\x89PNG")
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], make_contract(), {"content": b"\x89PNG"})
+        assert ops == []
+
+
+# ===========================================================================
 # propose — unsupported coercions
 # ===========================================================================
 
@@ -259,12 +325,6 @@ class TestUnsupportedCoercions:
         v = _type_mismatch("count", FieldType.INTEGER, {"a": 1})
         strategy = TypeCoercionStrategy()
         ops = strategy.propose([v], make_contract(), {"count": {"a": 1}})
-        assert ops == []
-
-    def test_list_to_string_not_coerced(self) -> None:
-        v = _type_mismatch("name", FieldType.STRING, [1, 2])
-        strategy = TypeCoercionStrategy()
-        ops = strategy.propose([v], make_contract(), {"name": [1, 2]})
         assert ops == []
 
     def test_object_target_type_not_coerced(self) -> None:
@@ -348,7 +408,11 @@ class TestArrayWrap:
 
 class TestUnionCoercion:
     def test_dict_wraps_into_list_member(self) -> None:
-        """The graph-rag-agent #49 shape: dict against str | list[str|dict]."""
+        """The graph-rag-agent #49 shape: dict against str | list[str|dict].
+
+        Also pins precedence: the dict is now coercible to the STRING
+        member too (JSON-serialise, 0.85), but array wrap (0.9) wins
+        uniquely, so the resolution stays deterministic."""
         members = (
             UnionMember(FieldType.STRING),
             UnionMember(FieldType.ARRAY, item_type=FieldType.ANY),
@@ -359,6 +423,26 @@ class TestUnionCoercion:
         ops = strategy.propose([v], _union_contract(members), {"content": payload})
         assert len(ops) == 1
         assert ops[0].confidence == pytest.approx(0.9)
+
+    def test_dict_serializes_into_string_member(self) -> None:
+        """str | <object-like> union: only the STRING member is coercible."""
+        members = (UnionMember(FieldType.STRING), UnionMember(FieldType.INTEGER))
+        payload = {"name": "hello_world"}
+        v = _type_mismatch("content", FieldType.UNION, payload)
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], _union_contract(members), {"content": payload})
+        assert len(ops) == 1
+        assert ops[0].confidence == pytest.approx(0.85)
+
+    def test_string_bytes_tie_refused(self) -> None:
+        """str | bytes members both accept the JSON serialisation at equal
+        confidence -> ambiguous tie, refused (documented limitation)."""
+        members = (UnionMember(FieldType.STRING), UnionMember(FieldType.BYTES))
+        payload = {"name": "hello_world"}
+        v = _type_mismatch("content", FieldType.UNION, payload)
+        strategy = TypeCoercionStrategy()
+        ops = strategy.propose([v], _union_contract(members), {"content": payload})
+        assert ops == []
 
     def test_scalar_coercion_into_single_member(self) -> None:
         members = (UnionMember(FieldType.INTEGER), UnionMember(FieldType.ARRAY, FieldType.OBJECT))
@@ -566,6 +650,26 @@ class TestIsFloatString:
         assert _is_float_string(value) is False
 
 
+class TestJsonSerializedDirect:
+    def test_dict_round_trips(self) -> None:
+        assert json_serialized({"a": 1}) == '{"a": 1}'
+
+    def test_list_round_trips(self) -> None:
+        assert json_serialized([1, "x"]) == '[1, "x"]'
+
+    @pytest.mark.parametrize("value", ["x", 1, 3.5, True, None, b"raw"])
+    def test_scalars_refused(self, value: Any) -> None:
+        assert json_serialized(value) is None
+
+    def test_non_json_content_refused(self) -> None:
+        assert json_serialized({"x": object()}) is None
+
+    def test_circular_reference_refused(self) -> None:
+        payload: dict[str, Any] = {}
+        payload["self"] = payload
+        assert json_serialized(payload) is None
+
+
 class TestCoercionConfidenceDirect:
     def test_str_to_integer_valid(self) -> None:
         assert _coercion_confidence("5", FieldType.INTEGER) == pytest.approx(0.95)
@@ -588,8 +692,15 @@ class TestCoercionConfidenceDirect:
     def test_str_to_bool_invalid(self) -> None:
         assert _coercion_confidence("maybe", FieldType.BOOLEAN) is None
 
+    def test_dict_to_string_valid(self) -> None:
+        assert _coercion_confidence({"a": 1}, FieldType.STRING) == pytest.approx(0.85)
+
+    def test_dict_to_bytes_valid(self) -> None:
+        assert _coercion_confidence({"a": 1}, FieldType.BYTES) == pytest.approx(0.85)
+
     def test_unsupported_target_type(self) -> None:
         assert _coercion_confidence("x", FieldType.STRING) is None
+        assert _coercion_confidence("x", FieldType.BYTES) is None
         assert _coercion_confidence("x", FieldType.OBJECT) is None
         assert _coercion_confidence("x", FieldType.ARRAY) is None
         assert _coercion_confidence("x", FieldType.ANY) is None

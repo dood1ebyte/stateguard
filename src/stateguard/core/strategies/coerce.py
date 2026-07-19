@@ -10,6 +10,11 @@ represents a value of the target type:
 * ``int`` → ``float``  — always safe.
 * ``str`` → ``bool``   — only for the exact strings (case-insensitive)
   ``"true"``, ``"false"``, ``"1"``, ``"0"``.
+* ``dict``/``list`` → ``str`` — JSON-serialise, for ``STRING`` and
+  ``BYTES`` targets, only if ``json.dumps(value)`` succeeds (deterministic
+  and round-trippable; repairs harness-side over-parsing of JSON text
+  arguments).  ``BYTES`` targets also yield a ``str`` — the framework's
+  native validation encodes it (e.g. Pydantic's lax str -> bytes).
 * value → ``list``     — wrap-in-list, only when the target is an ``ARRAY``
   with a declared ``item_type`` that the value already satisfies as a
   single element (lossless: ``"x"`` → ``["x"]``).  Bare/untyped arrays and
@@ -29,6 +34,7 @@ using ``ContractSpec`` to look up the target ``FieldType`` (and, for
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from stateguard.core.errors.operations import FieldOperation, FieldOpType
@@ -47,6 +53,7 @@ __all__ = ["TypeCoercionStrategy"]
 _NUMERIC_COERCION_CONFIDENCE = 0.95
 _BOOL_COERCION_CONFIDENCE = 0.85
 _ARRAY_WRAP_CONFIDENCE = 0.9
+_JSON_SERIALIZE_CONFIDENCE = 0.85
 
 # Strings accepted for str -> bool coercion (case-insensitive).
 _BOOL_STRINGS = {"true", "false", "1", "0"}
@@ -121,6 +128,11 @@ def _coercion_confidence(
     *item_type* is consulted only for ``ARRAY`` targets and *union_members*
     only for ``UNION`` targets; both come from the field's ``FieldSpec``.
     """
+    if target_type in (FieldType.STRING, FieldType.BYTES):
+        if json_serialized(value) is not None:
+            return _JSON_SERIALIZE_CONFIDENCE
+        return None
+
     if target_type is FieldType.INTEGER:
         if isinstance(value, str) and not isinstance(value, bool) and _is_integer_string(value):
             return _NUMERIC_COERCION_CONFIDENCE
@@ -154,6 +166,27 @@ def _coercion_confidence(
         return confidence
 
     return None
+
+
+def json_serialized(value: Any) -> str | None:
+    """
+    Return ``json.dumps(value)`` if *value* is a dict or list that
+    serialises cleanly, else ``None``.
+
+    Only containers qualify — scalars where a string is expected are a
+    semantic mismatch, not an over-parsed JSON argument.  Containers
+    holding non-JSON values (arbitrary objects, NaN under strict dumps,
+    circular references) are refused rather than approximated.
+
+    Shared with the engine's ``_coerce_value`` so that feasibility and
+    application always produce the same serialisation.
+    """
+    if not isinstance(value, (dict, list)):
+        return None
+    try:
+        return json.dumps(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _array_wrap_is_safe(value: Any, item_type: FieldType | None) -> bool:
