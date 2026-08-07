@@ -27,13 +27,47 @@ already present is appended. ``is_valid`` is
 ``adapter_result.is_valid and not <any ERROR-severity violation contributed
 only by ContractValidator>``.
 
+Termination and convergence
+---------------------------
+The repair loop is iterative by design: one strategy runs per attempt, and a
+successful repair frequently *exposes* the next problem rather than resolving
+everything at once.  Renaming ``temp_celsius`` to ``temperature`` replaces a
+MISSING_REQUIRED_FIELD with a TYPE_MISMATCH at the new path, which
+``TypeCoercionStrategy`` then fixes on the following attempt.
+
+Progress is therefore measured by magnitude, not by kind.  Each iteration
+computes ``_progress_key`` — ``(error_count, total_violation_count)`` —
+and compares it lexicographically against the state the attempt started from:
+
+* ``new_key < current_key`` — progress.  Accept the data and continue, even
+  if the *kinds* of violation changed completely.
+* ``new_key > current_key`` — regression.  The attempt made things worse, so
+  it is discarded; ``working_data`` still holds the last-good state, which
+  means earlier successful repairs in the same run are preserved rather than
+  thrown away.
+* ``new_key == current_key`` — same magnitude.  Accepted only if the violation
+  set has not been seen before in this run (``seen_hashes``); otherwise the
+  loop is cycling and stops.
+
+Because the accepted path's key is monotonically non-increasing over a
+well-founded order, and any same-magnitude state may be visited at most once,
+the loop terminates on its own.  ``RepairConfig.max_attempts`` is a safety
+bound, not the primary terminator.
+
+The final status determination uses the same ``_progress_key`` metric, so the
+loop's notion of "this attempt made progress" and the result's PARTIAL/FAILED
+verdict can never disagree.
+
 Zero external dependencies — part of Layer 5 (depends on Layers 0-4:
 models, errors, interfaces, strategies, validator).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import json
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
@@ -59,7 +93,7 @@ from stateguard.core.strategies.coerce import (
     resolve_union_member,
 )
 from stateguard.core.strategies.registry import StrategyRegistry
-from stateguard.core.validator import ContractValidator
+from stateguard.core.validator import ContractValidator, root_structural_violation
 from stateguard.logging.logger import RepairLogger
 from stateguard.telemetry.hooks import ITelemetryHook, TelemetryEvent, TelemetryEventType
 from stateguard.telemetry.noop import NoopTelemetry
@@ -90,6 +124,191 @@ class _CoerceFailed:
 
 
 _COERCE_FAILED = _CoerceFailed()
+
+
+def _safe_deepcopy(value: Any) -> Any:
+    """
+    ``deepcopy(value)``, falling back to *value* itself if it cannot be copied.
+
+    Used only for ``RepairResult.original_input``, which is an audit snapshot
+    the engine never writes to.  Some perfectly ordinary payload wrappers
+    cannot be deep-copied at all — ``types.MappingProxyType`` raises
+    ``TypeError: cannot pickle 'mappingproxy' object`` — and failing to
+    snapshot one must not become a way for ``repair()`` to raise.
+    """
+    try:
+        return deepcopy(value)
+    except Exception:
+        # Any copy failure degrades to sharing the reference. Safe here
+        # precisely because original_input is never written to.
+        return value
+
+
+def _unwrap_single_element(sequence: Sequence[Any]) -> dict[str, Any] | None:
+    """Return the sole ``dict`` inside a one-element sequence, else ``None``."""
+    if len(sequence) == 1 and isinstance(sequence[0], dict):
+        return dict(sequence[0])
+    return None
+
+
+def _pairs_to_dict(sequence: Sequence[Any]) -> dict[str, Any] | None:
+    """
+    Interpret *sequence* as a list of key/value pairs, or return ``None``.
+
+    This is the wire form of ``dict.items()`` and JavaScript's
+    ``Object.entries()`` — ``[["a", 1], ["b", "x"]]`` — which some
+    serialisers emit in place of an object.
+
+    Accepted only when the reading is unambiguous and exactly reversible:
+    every element is a 2-element sequence that is not itself a string, every
+    key is a ``str``, and no key repeats.  A duplicate key would make the
+    conversion lossy (one value silently wins), so it is refused rather than
+    resolved.
+
+    This is not a reversal of the rule that ``[("a", 1)]`` must not be fed to
+    ``dict()``.  That rule was about ``dict()`` swallowing the shape
+    *unvalidated* — accepting ``[1, 2]``-shaped garbage by accident.
+    Converting behind this guard is a different operation.
+    """
+    if not sequence:
+        return None
+
+    result: dict[str, Any] = {}
+    for item in sequence:
+        if isinstance(item, (str, bytes)) or not isinstance(item, Sequence):
+            return None
+        if len(item) != 2:
+            return None
+        key = item[0]
+        if not isinstance(key, str) or key in result:
+            return None
+        result[key] = item[1]
+    return result
+
+
+def _mapping_like_to_dict(data: Any) -> tuple[dict[str, Any] | None, str]:
+    """
+    Convert an object that already *is* a key/value structure into a ``dict``.
+
+    These are not inferences.  Each conversion is the type's own canonical
+    dict form, defined by the standard library — the keys and values are
+    already present and named:
+
+    * any ``collections.abc.Mapping`` that is not a ``dict`` subclass
+      (``MappingProxyType``, ``UserDict``, third-party mapping types);
+    * a ``dataclass`` instance, via ``dataclasses.asdict``;
+    * a ``namedtuple`` instance, via its own ``_asdict``.
+
+    ``isinstance(data, dict)`` is simply too narrow a test for "is this an
+    object".
+
+    Framework-native objects are deliberately *not* handled here.  A Pydantic
+    ``BaseModel`` instance has an equally canonical ``model_dump``, but
+    recognising it in the core engine would make Layer 5 implicitly aware of
+    an adapter's type system and break the layering rule the CI isolation job
+    exists to enforce.  That belongs behind an ``IContractAdapter``
+    normalisation hook — see ``CORE_HARDENING_PLAN.md`` §2b.1.
+    """
+    try:
+        if isinstance(data, Mapping):
+            return dict(data), f"converted a {type(data).__name__} mapping to an object"
+
+        if dataclasses.is_dataclass(data) and not isinstance(data, type):
+            return (
+                dataclasses.asdict(data),
+                f"converted the {type(data).__name__} dataclass instance to an object",
+            )
+
+        # namedtuple is a tuple subclass, so this must be checked before any
+        # generic sequence handling.
+        if isinstance(data, tuple) and hasattr(data, "_asdict") and hasattr(data, "_fields"):
+            return (
+                dict(data._asdict()),
+                f"converted the {type(data).__name__} namedtuple to an object",
+            )
+    except Exception:
+        # A conversion that raises (e.g. dataclasses.asdict deep-copying an
+        # uncopyable field) means "not recoverable", never a propagated error.
+        return None, ""
+
+    return None, ""
+
+
+def _normalise_root_payload(data: Any) -> tuple[dict[str, Any] | None, str]:
+    """
+    Attempt to recover an object root from a non-``dict`` *data*.
+
+    Returns ``(recovered_dict, description)``, or ``(None, "")`` when the
+    root cannot be recovered safely.
+
+    Two classes of root are recovered.
+
+    **Already an object, just not a ``dict``** (``_mapping_like_to_dict``) --
+    mappings that are not ``dict`` subclasses, dataclass instances,
+    namedtuples.  These carry named fields already, so converting them is the
+    type's own canonical dict form rather than an inference.
+
+    **An object that arrived mis-wrapped:**
+
+    * a JSON-encoded string or bytes -- ``'{"a": 1}'``.  Models routinely
+      return an entire tool-call payload as a string instead of an object.
+      Parsing is lossless and exactly reversible;
+    * a single-element sequence wrapping the object -- ``[{"a": 1}]``;
+    * a list of key/value pairs -- ``[["a", 1], ["b", "x"]]``, under the
+      strict guard in ``_pairs_to_dict``.
+
+    Everything else is refused, because every remaining reading requires
+    guessing at intent: a multi-element sequence has no principled element to
+    pick, positional values have no principled field to map onto, ``[]`` and
+    ``None`` would mean fabricating an object out of nothing, and a ``set``
+    has no key structure at all.
+
+    One case sits deliberately outside this function.  A bare scalar against
+    a single-field contract (``"Mumbai"`` for ``{city: str}``) is a plausible
+    reading, but it is an inference about *intent* rather than a re-encoding
+    of data that is already structured.  It belongs in the confidence model
+    as a scored, abstainable proposal -- see ``CORE_HARDENING_PLAN.md``
+    §2b.4 -- not here, where it would be applied unconditionally and
+    silently.
+
+    ``json.loads`` on a string is safe (no code execution).  Deeply nested
+    input raises ``RecursionError`` and invalid encodings raise
+    ``UnicodeDecodeError``; both are caught and treated as "not recoverable"
+    rather than propagated.
+    """
+    converted, note = _mapping_like_to_dict(data)
+    if converted is not None:
+        return converted, note
+
+    if isinstance(data, (str, bytes)):
+        try:
+            parsed = json.loads(data)
+        except (ValueError, RecursionError, UnicodeDecodeError):
+            return None, ""
+        if isinstance(parsed, dict):
+            return parsed, "parsed a JSON object from the string payload"
+        if isinstance(parsed, list):
+            unwrapped = _unwrap_single_element(parsed)
+            if unwrapped is not None:
+                return unwrapped, (
+                    "parsed JSON from the string payload and unwrapped a single-element array"
+                )
+            pairs = _pairs_to_dict(parsed)
+            if pairs is not None:
+                return pairs, (
+                    "parsed JSON from the string payload and read it as a key/value pair list"
+                )
+        return None, ""
+
+    if isinstance(data, (list, tuple)):
+        unwrapped = _unwrap_single_element(data)
+        if unwrapped is not None:
+            return unwrapped, "unwrapped a single-element sequence"
+        pairs = _pairs_to_dict(data)
+        if pairs is not None:
+            return pairs, "read the sequence as a key/value pair list"
+
+    return None, ""
 
 
 def _get_nested(data: dict[str, Any], path: str) -> Any:
@@ -265,7 +484,7 @@ class RepairEngine:
     def repair(
         self,
         contract: ContractSpec,
-        data: dict[str, Any],
+        data: Any,
         adapter: IContractAdapter,
     ) -> RepairResult:
         """
@@ -277,6 +496,10 @@ class RepairEngine:
             Normalised contract to repair against.
         data:
             Input data.  Never mutated — a deep copy is made immediately.
+            Normally a ``dict``; a non-object root is either normalised (a
+            JSON-encoded string, a single-element sequence wrapping the
+            object) or reported as a ``STRUCTURAL_MISMATCH`` failure.  It
+            never raises.
         adapter:
             Framework adapter.  Used together with ``ContractValidator``
             for both initial validation and revalidation — see the module
@@ -286,8 +509,34 @@ class RepairEngine:
         -------
         RepairResult
         """
-        original_input = deepcopy(data)
-        working_data = deepcopy(data)
+        original_input = _safe_deepcopy(data)
+
+        # --- Root shape normalisation -----------------------------------------
+        # Field-level repair cannot begin until the root is an object -- there
+        # is nothing to look field paths up in otherwise. Two non-dict roots
+        # are recoverable (see ``_normalise_root_payload``); anything else is
+        # a structural failure the engine reports rather than guesses at.
+        root_note = ""
+        if isinstance(data, dict):
+            source: Any = data
+        else:
+            recovered, root_note = _normalise_root_payload(data)
+            if recovered is None:
+                return self._root_failure(contract, original_input)
+            source = recovered
+            self._logger.info(
+                "root.normalised",
+                f"Payload root was {type(data).__name__}, not an object; {root_note}.",
+                received_type=type(data).__name__,
+                action=root_note,
+            )
+
+        # Copied *after* normalisation, for two reasons: a root that cannot be
+        # deep-copied at all (``MappingProxyType``) is converted to a plain
+        # dict first, and the recovery helpers return shallow copies, so
+        # nested values would otherwise still be shared with the caller's
+        # object and mutated in place by the repair loop.
+        working_data: dict[str, Any] = deepcopy(source)
 
         # --- Initial validation ----------------------------------------------
         self._emit(contract, TelemetryEventType.VALIDATION_STARTED)
@@ -310,30 +559,38 @@ class RepairEngine:
             )
 
         if initial_result.is_valid:
+            # A normalised root means a repair *did* happen, even though no
+            # field-level strategy ran -- so this is SUCCESS, not
+            # ALREADY_VALID ("the input needed no repair").
+            valid_status = RepairStatus.SUCCESS if root_note else RepairStatus.ALREADY_VALID
             self._logger.info(
                 "validation.already_valid",
-                "Input data already satisfies the contract; no repair needed.",
+                (
+                    f"Payload satisfies the contract once the root was normalised "
+                    f"({root_note}); no field-level repair needed."
+                    if root_note
+                    else "Input data already satisfies the contract; no repair needed."
+                ),
             )
             self._emit(
                 contract,
                 TelemetryEventType.REPAIR_COMPLETED,
-                status=RepairStatus.ALREADY_VALID.value,
+                status=valid_status.value,
                 attempts=0,
             )
             return RepairResult(
-                status=RepairStatus.ALREADY_VALID,
+                status=valid_status,
                 original_input=original_input,
                 initial_violations=list(initial_result.violations),
                 remaining_violations=list(initial_result.violations),
                 attempts=[],
                 repair_log=self._logger.entries,
                 contract_id=contract.contract_id,
-                repaired_output=deepcopy(original_input),
+                repaired_output=deepcopy(working_data),
             )
 
         initial_violations = list(initial_result.violations)
-        initial_signatures = {self._violation_signature(v) for v in initial_violations}
-        initial_error_count = sum(1 for v in initial_violations if v.severity.value == "error")
+        initial_key = self._progress_key(initial_violations)
 
         self._emit(contract, TelemetryEventType.REPAIR_STARTED)
         self._logger.info(
@@ -343,7 +600,8 @@ class RepairEngine:
         )
 
         current_violations = initial_violations
-        previous_hash = self._compute_violation_hash(current_violations)
+        current_key = initial_key
+        seen_hashes: set[str] = {self._compute_violation_hash(current_violations)}
         attempts: list[RepairAttempt] = []
 
         status: RepairStatus | None = None
@@ -465,28 +723,38 @@ class RepairEngine:
                 )
                 break
 
+            # --- Convergence bookkeeping -----------------------------------------
+            # See "Termination and convergence" in the module docstring for why
+            # progress is measured by (error_count, total_count) rather than by
+            # comparing violation *kinds* against the initial set.
+            new_key = self._progress_key(revalidation.violations)
+            new_hash = self._compute_violation_hash(revalidation.violations)
+
             # --- Regression check --------------------------------------------
-            new_signatures = {self._violation_signature(v) for v in revalidation.violations}
-            if not new_signatures.issubset(initial_signatures):
+            if new_key > current_key:
+                # Strictly worse than the state this attempt started from.
+                # ``working_data`` and ``current_violations`` still hold the
+                # last-good state, so simply stopping here discards the bad
+                # attempt while keeping every repair that came before it.
                 self._logger.error(
                     "repair.regression_detected",
-                    f"Attempt {attempt_number} ('{strategy.name}') "
-                    f"introduced new violations not present in the "
-                    f"original input. Aborting repair.",
+                    f"Attempt {attempt_number} ('{strategy.name}') made the "
+                    f"violation set worse "
+                    f"(errors {current_key[0]}->{new_key[0]}, "
+                    f"total {current_key[1]}->{new_key[1]}). "
+                    f"Reverting to the last-good state and aborting repair.",
                     attempt_number=attempt_number,
                     strategy=strategy.name,
                 )
-                remaining_violations = revalidation.violations
-                status = RepairStatus.FAILED
+                remaining_violations = current_violations
                 break
 
-            # --- No-progress check ---------------------------------------------
-            new_hash = self._compute_violation_hash(revalidation.violations)
-            if new_hash == previous_hash:
+            # --- No-progress / cycle check ---------------------------------------
+            if new_key == current_key and new_hash in seen_hashes:
                 self._logger.warning(
                     "repair.no_progress",
                     f"Attempt {attempt_number} ('{strategy.name}') made "
-                    f"no progress; violation set unchanged.",
+                    f"no progress; violation set already seen.",
                     attempt_number=attempt_number,
                     strategy=strategy.name,
                 )
@@ -496,8 +764,9 @@ class RepairEngine:
             # --- Progress made; continue looping --------------------------------
             working_data = new_data
             current_violations = revalidation.violations
+            current_key = new_key
             remaining_violations = current_violations
-            previous_hash = new_hash
+            seen_hashes.add(new_hash)
 
         else:
             # for/else: loop exhausted max_attempts without break.
@@ -509,12 +778,13 @@ class RepairEngine:
 
         # --- Determine final status if not already SUCCESS/FAILED -------------
         if status is None:
-            remaining_error_count = sum(
-                1 for v in remaining_violations if v.severity.value == "error"
-            )
-            if remaining_error_count == 0:
+            # Uses the same progress metric as the loop above, so "the loop
+            # thought it was making progress" and "the result is PARTIAL" can
+            # never disagree.
+            remaining_key = self._progress_key(remaining_violations)
+            if remaining_key[0] == 0:
                 status = RepairStatus.SUCCESS
-            elif remaining_error_count < initial_error_count:
+            elif remaining_key < initial_key:
                 status = (
                     RepairStatus.PARTIAL
                     if self._config.allow_partial_repair
@@ -562,13 +832,62 @@ class RepairEngine:
         )
 
     # ------------------------------------------------------------------
+    # Root failure
+    # ------------------------------------------------------------------
+
+    def _root_failure(self, contract: ContractSpec, original_input: Any) -> RepairResult:
+        """
+        Build the terminal ``FAILED`` result for a payload root that is not an
+        object and could not be normalised into one.
+
+        No adapter is consulted and no strategy runs: with no object to look
+        field paths up in there is nothing for either to act on.
+        """
+        violation = root_structural_violation(original_input)
+
+        self._emit(contract, TelemetryEventType.VALIDATION_STARTED)
+        self._emit(
+            contract,
+            TelemetryEventType.VIOLATION_DETECTED,
+            field_path=violation.field_path,
+            violation_type=violation.violation_type.value,
+            severity=violation.severity.value,
+        )
+        self._logger.error(
+            "root.unsupported_type",
+            (
+                f"Payload root is {type(original_input).__name__}, not an "
+                f"object, and could not be normalised into one. No repair is "
+                f"possible."
+            ),
+            received_type=type(original_input).__name__,
+        )
+        self._emit(
+            contract,
+            TelemetryEventType.REPAIR_FAILED,
+            status=RepairStatus.FAILED.value,
+            attempts=0,
+        )
+
+        return RepairResult(
+            status=RepairStatus.FAILED,
+            original_input=original_input,
+            initial_violations=[violation],
+            remaining_violations=[violation],
+            attempts=[],
+            repair_log=self._logger.entries,
+            contract_id=contract.contract_id,
+            repaired_output=None,
+        )
+
+    # ------------------------------------------------------------------
     # Merged validation
     # ------------------------------------------------------------------
 
     def _validate(
         self,
         contract: ContractSpec,
-        data: dict[str, Any],
+        data: Any,
         adapter: IContractAdapter,
     ) -> ValidationResult:
         """
@@ -590,6 +909,18 @@ class RepairEngine:
         * ``is_valid`` is ``True`` iff the adapter considers the data valid
           AND no core-only addition has ``ViolationSeverity.ERROR``.
         """
+        # Adapters are entitled to assume an object root (``IContractAdapter``
+        # types ``data`` as a dict). ``repair`` normalises or rejects a
+        # non-object root before the loop starts, but this method is also
+        # reached directly via ``ContractGuard.validate``, which does not.
+        if not isinstance(data, dict):
+            return ValidationResult(
+                is_valid=False,
+                violations=[root_structural_violation(data)],
+                raw_input=data,
+                contract_id=contract.contract_id,
+            )
+
         adapter_result = adapter.validate(contract, data)
         core_result = self._core_validator.validate(contract, data)
 
@@ -673,6 +1004,31 @@ class RepairEngine:
     def _violation_signature(violation: ContractViolation) -> tuple[str, str]:
         """A (field_path, violation_type) pair identifying a violation's kind."""
         return (violation.field_path, violation.violation_type.value)
+
+    @staticmethod
+    def _progress_key(violations: list[ContractViolation]) -> tuple[int, int]:
+        """
+        Return ``(error_count, total_count)`` — the loop's progress metric.
+
+        Compared lexicographically, so resolving an ERROR always counts as
+        progress regardless of what happens to WARNING-severity violations,
+        and a change that only removes warnings still counts as progress when
+        the error count holds steady.
+
+        The second element is what makes multi-step repair work.  Renaming
+        ``temp_celsius`` to ``temperature`` turns
+        ``{MISSING temperature (error), UNEXPECTED temp_celsius (warning)}``
+        into ``{TYPE_MISMATCH temperature (error)}``: the error count is
+        unchanged at 1, but the total dropped from 2 to 1.  Measuring errors
+        alone would score that correct rename as "no progress" and stop before
+        ``TypeCoercionStrategy`` ever runs.
+
+        Both components are monotonically non-increasing along the accepted
+        path, which is what guarantees the loop terminates — see the module
+        docstring.
+        """
+        errors = sum(1 for v in violations if v.severity is ViolationSeverity.ERROR)
+        return (errors, len(violations))
 
     @staticmethod
     def _compute_violation_hash(violations: list[ContractViolation]) -> str:

@@ -286,6 +286,14 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    # Defaults are read from RepairConfig rather than duplicated as literals,
+    # so the CLI and the library can never drift apart (they previously
+    # disagreed: RepairConfig.max_attempts was 3, the CLI's default was 5).
+    # Core-only import -- no pydantic, negligible startup cost.
+    from stateguard.core.models.config import RepairConfig  # noqa: PLC0415
+
+    _defaults = RepairConfig()
+
     parser = argparse.ArgumentParser(
         prog="stateguard",
         description="StateGuard — runtime contract repair for AI tool outputs.",
@@ -352,20 +360,24 @@ def _build_parser() -> argparse.ArgumentParser:
     check.add_argument(
         "--max-attempts",
         type=int,
-        default=5,
+        default=_defaults.max_attempts,
         metavar="N",
         dest="max_attempts",
-        help="Maximum number of repair iterations (default: 5).",
+        help=(
+            f"Safety bound on repair iterations (default: "
+            f"{_defaults.max_attempts}). The loop stops on its own once it "
+            f"stops making progress."
+        ),
     )
     check.add_argument(
         "--confidence-threshold",
         type=float,
-        default=0.7,
+        default=_defaults.min_confidence_threshold,
         metavar="FLOAT",
         dest="confidence_threshold",
         help=(
-            "Minimum confidence score [0.0, 1.0] required before an operation "
-            "is applied (default: 0.7)."
+            f"Minimum confidence score [0.0, 1.0] required before an operation "
+            f"is applied (default: {_defaults.min_confidence_threshold})."
         ),
     )
 

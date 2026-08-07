@@ -177,7 +177,7 @@ class ContractGuard:
     # Public API
     # ------------------------------------------------------------------
 
-    def repair(self, schema: Any, data: dict[str, Any]) -> RepairResult:
+    def repair(self, schema: Any, data: Any) -> RepairResult:
         """
         Detect, attempt to repair, and revalidate *data* against *schema*.
 
@@ -187,6 +187,11 @@ class ContractGuard:
             Framework-native schema (e.g. a ``type[BaseModel]`` subclass).
         data:
             The data to validate and, if necessary, repair.  Never mutated.
+            Normally a ``dict``.  A payload whose root is not an object is
+            either normalised (a JSON-encoded string such as
+            ``'{"a": 1}'``, or a single-element sequence wrapping the
+            object) or returned as a ``FAILED`` result carrying a
+            ``STRUCTURAL_MISMATCH`` violation — passing one never raises.
 
         Returns
         -------
@@ -222,7 +227,7 @@ class ContractGuard:
 
         return result
 
-    def validate(self, schema: Any, data: dict[str, Any]) -> ValidationResult:
+    def validate(self, schema: Any, data: Any) -> ValidationResult:
         """
         Validate *data* against *schema* without attempting repair.
 
@@ -231,6 +236,14 @@ class ContractGuard:
         framework-agnostic checks, notably ``UNEXPECTED_FIELD``), so
         ``validate(...).is_valid`` is ``True`` exactly when ``repair(...)``
         would return ``RepairStatus.ALREADY_VALID``.
+
+        A payload whose root is not an object reports a single root-level
+        ``STRUCTURAL_MISMATCH`` violation rather than raising.  Note this
+        holds even for a root that ``repair`` *could* normalise — e.g.
+        ``'{"a": 1}'`` is not valid as-is, so ``is_valid`` is ``False``
+        while ``repair`` would return ``SUCCESS``.  That is consistent with
+        the rule above: normalising the root is a repair, so the input was
+        never ``ALREADY_VALID``.
         """
         contract = self._extract_contract(schema)
         engine = self._build_engine()

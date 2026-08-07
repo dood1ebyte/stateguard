@@ -38,8 +38,16 @@ class RepairConfig:
     Attributes
     ----------
     max_attempts:
-        Maximum number of repair-loop iterations before the engine gives up.
-        Each iteration applies one strategy and revalidates.  Must be >= 1.
+        Safety bound on repair-loop iterations.  Each iteration applies one
+        strategy and revalidates.  Must be >= 1.
+
+        This is a backstop, not the primary terminator: the loop stops on its
+        own once it stops making progress (see "Termination and convergence"
+        in ``stateguard.core.engine``).  The default of 6 is chosen to let a
+        realistic chain complete in a single ``repair()`` call — e.g. alias
+        rename, then fuzzy rename, then type coercion, then default fill —
+        since one repair routinely *exposes* the next rather than resolving
+        everything at once.
     min_confidence_threshold:
         Minimum confidence score ``[0.0, 1.0]`` required for a
         ``FieldOperation`` to be applied.  Operations below this threshold are
@@ -62,7 +70,7 @@ class RepairConfig:
         inadvertently logging sensitive runtime data (API keys, PII, etc.).
     """
 
-    max_attempts: int = 3
+    max_attempts: int = 6
     min_confidence_threshold: float = 0.7
     score_collision_margin: float = 0.15
     allow_partial_repair: bool = True

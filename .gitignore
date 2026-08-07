@@ -53,3 +53,6 @@ repros/
 
 # Benchmark run outputs
 benchmarks/results/*.json
+
+MCP_ADAPTER_PLAN.md
+CORE_HARDENING_PLAN.md

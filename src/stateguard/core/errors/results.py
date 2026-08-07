@@ -88,8 +88,11 @@ class ValidationResult:
         All violations detected in this pass.  Empty when ``is_valid`` is
         ``True``.
     raw_input:
-        A snapshot of the data dict that was validated.  The engine stores
-        a deep copy; callers must not mutate this after construction.
+        A snapshot of the data that was validated.  Normally a ``dict``, but
+        typed ``Any`` because a payload whose root is not an object is
+        reported rather than rejected at the boundary -- see
+        ``stateguard.core.validator.root_structural_violation``.  Callers
+        must not mutate this after construction.
     contract_id:
         The ``ContractSpec.contract_id`` against which this validation ran.
     validated_at:
@@ -98,7 +101,7 @@ class ValidationResult:
 
     is_valid: bool
     violations: list[ContractViolation]
-    raw_input: dict[str, Any]
+    raw_input: Any
     contract_id: str
     validated_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
@@ -182,7 +185,10 @@ class RepairResult:
     status:
         Terminal state of the repair session.
     original_input:
-        Deep copy of the data dict as received before any repair.
+        Deep copy of the data exactly as received, before any repair --
+        including the root-shape normalisation the engine applies to a
+        JSON-string or single-element-sequence payload.  Typed ``Any``
+        because that received value is not necessarily a ``dict``.
         Never mutated by the engine.
     initial_violations:
         All violations found in the first validation pass, before any repair.
@@ -214,7 +220,7 @@ class RepairResult:
 
     # Required
     status: RepairStatus
-    original_input: dict[str, Any]
+    original_input: Any
     initial_violations: list[ContractViolation]
     remaining_violations: list[ContractViolation]
     attempts: list[RepairAttempt]
