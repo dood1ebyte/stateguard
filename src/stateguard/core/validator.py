@@ -30,7 +30,39 @@ from stateguard.core.models.field_types import (
     union_member_matches,
 )
 
-__all__ = ["ContractValidator"]
+__all__ = ["ContractValidator", "root_structural_violation"]
+
+
+# ---------------------------------------------------------------------------
+# Root shape
+# ---------------------------------------------------------------------------
+
+
+def root_structural_violation(data: Any) -> ContractViolation:
+    """
+    Build the ``STRUCTURAL_MISMATCH`` violation for a non-object payload root.
+
+    A ``ContractSpec`` describes the fields of an object, so a payload whose
+    root is not a ``dict`` cannot be field-validated at all -- there is
+    nothing to look fields up in.  Rather than crashing part-way through
+    (which is what unguarded ``key in data`` / ``data[key]`` expressions do
+    for ``None``, ``int``, ``str``, ``list`` and friends), this is reported
+    as a single root-level violation.
+
+    Per ``ViolationType.STRUCTURAL_MISMATCH``'s documented convention,
+    ``field_path`` is the empty string for root-level structural problems.
+
+    Shared with ``RepairEngine`` so that the validator and the engine
+    describe an unusable root identically.
+    """
+    return ContractViolation(
+        field_path="",
+        violation_type=ViolationType.STRUCTURAL_MISMATCH,
+        severity=ViolationSeverity.ERROR,
+        message=(f"Expected an object at the contract root, got {type(data).__name__}."),
+        expected_type=FieldType.OBJECT,
+        received_value=data,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +96,7 @@ class ContractValidator:
     def validate(
         self,
         contract: ContractSpec,
-        data: dict[str, Any],
+        data: Any,
     ) -> ValidationResult:
         """
         Validate *data* against *contract*, returning all violations found.
@@ -74,7 +106,10 @@ class ContractValidator:
         contract:
             The normalised contract to validate against.
         data:
-            The data dict to validate.  Not mutated.
+            The data to validate.  Not mutated.  Normally a ``dict``; any
+            other type is reported as a single root-level
+            ``STRUCTURAL_MISMATCH`` rather than raising -- see
+            ``root_structural_violation``.
 
         Returns
         -------
@@ -83,6 +118,14 @@ class ContractValidator:
             violations were found (``WARNING`` violations do not affect
             ``is_valid``).
         """
+        if not isinstance(data, dict):
+            return ValidationResult(
+                is_valid=False,
+                violations=[root_structural_violation(data)],
+                raw_input=data,
+                contract_id=contract.contract_id,
+            )
+
         violations: list[ContractViolation] = []
         self._validate_fields(contract, data, prefix="", violations=violations)
         self._detect_unexpected(contract, data, prefix="", violations=violations)

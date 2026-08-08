@@ -16,7 +16,11 @@ class TestRepairConfig:
     # --- Defaults -------------------------------------------------------------
 
     def test_default_max_attempts(self) -> None:
-        assert RepairConfig().max_attempts == 3
+        # Raised from 3 to 6 alongside the convergence guarantee in
+        # RepairEngine: max_attempts is now a safety bound rather than the
+        # primary terminator, so it can afford to accommodate a longer
+        # repair chain (alias -> fuzzy -> coerce -> default-fill).
+        assert RepairConfig().max_attempts == 6
 
     def test_default_min_confidence_threshold(self) -> None:
         assert RepairConfig().min_confidence_threshold == 0.7
@@ -55,7 +59,7 @@ class TestRepairConfig:
     def test_all_defaults_together(self) -> None:
         c = RepairConfig()
         assert c == RepairConfig(
-            max_attempts=3,
+            max_attempts=6,
             min_confidence_threshold=0.7,
             score_collision_margin=0.15,
             allow_partial_repair=True,
@@ -212,7 +216,7 @@ class TestGuardConfig:
         c1 = GuardConfig()
         c2 = GuardConfig()
         c1.repair.max_attempts = 99
-        assert c2.repair.max_attempts == 3
+        assert c2.repair.max_attempts == RepairConfig().max_attempts
 
     def test_repair_configs_are_different_objects(self) -> None:
         c1 = GuardConfig()
