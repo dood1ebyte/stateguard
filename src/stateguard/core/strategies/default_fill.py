@@ -3,16 +3,22 @@ DefaultValueFillStrategy — repairs MISSING_REQUIRED_FIELD via declared default
 
 Priority 40 (runs last among the four V1 strategies).  Fires only when the
 contract declares an explicit default for the missing field
-(``FieldSpec.default is not MISSING``).  Confidence is always ``1.0`` —
-filling a field with its own declared default is the lowest-risk repair
-available.
+(``FieldSpec.default is not MISSING``).  Reports
+``schema_authority = 1.0`` at ``RepairRisk.DECLARED``: filling a field with
+its own declared default is the contract speaking, not an inference, so there
+is nothing for a margin to erode.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from stateguard.core.errors.operations import FieldOperation, FieldOpType
+from stateguard.core.errors.operations import (
+    FieldOperation,
+    FieldOpType,
+    RepairEvidence,
+    RepairRisk,
+)
 from stateguard.core.errors.violations import ContractViolation, ViolationType
 from stateguard.core.interfaces.strategy import IRepairStrategy
 from stateguard.core.models.contract import MISSING, ContractSpec, FieldSpec
@@ -57,8 +63,9 @@ class DefaultValueFillStrategy(IRepairStrategy):
     A declared default of ``None`` is a valid, distinct value from "no
     default declared" and is filled normally.
 
-    Confidence is always ``1.0`` — using a schema-declared default is
-    definitionally correct per the contract.
+    Declares ``RepairRisk.DECLARED`` with ``schema_authority = 1.0`` —
+    using a schema-declared default is definitionally correct per the
+    contract. ``TrustPolicy`` turns that into the score.
     """
 
     @property
@@ -103,12 +110,15 @@ class DefaultValueFillStrategy(IRepairStrategy):
                 FieldOperation(
                     op_type=FieldOpType.SET_DEFAULT,
                     target_path=violation.field_path,
-                    confidence=1.0,
-                    rationale=(
-                        f"Field '{violation.field_path}' has a declared "
-                        f"default value of {field_spec.default!r}."
-                    ),
+                    rationale=(f"Field '{violation.field_path}' has a declared default value."),
                     value=field_spec.default,
+                    # Using a field's own declared default is definitionally
+                    # correct per the contract -- the schema is the authority.
+                    risk=RepairRisk.DECLARED,
+                    evidence=RepairEvidence(
+                        schema_authority=1.0,
+                        notes=(f"'{violation.field_path}' declares a default in the contract",),
+                    ),
                 )
             )
 

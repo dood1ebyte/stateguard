@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from stateguard.core.errors.operations import FieldOpType
+from dataclasses import replace
+
+from stateguard.core.trust import TrustDecision, TrustPolicy
+from stateguard.core.errors.operations import FieldOpType, RepairRisk
 from stateguard.core.errors.violations import ViolationSeverity, ViolationType
 from stateguard.core.models.contract import MISSING, ContractSpec, FieldSpec
 from stateguard.core.models.field_types import FieldType
@@ -150,7 +153,12 @@ class TestPropose:
         op = ops[0]
         assert op.op_type is FieldOpType.SET_DEFAULT
         assert op.target_path == "humidity"
-        assert op.confidence == 1.0
+        assert op.risk is RepairRisk.DECLARED
+        assert op.evidence.schema_authority == 1.0
+        assert TrustPolicy().evaluate(op) == (
+            replace(op, trust=1.0),
+            TrustDecision.APPLY,
+        )
         assert op.value == 60
         assert op.source_path is None
 
@@ -308,7 +316,10 @@ class TestPropose:
         strategy = DefaultValueFillStrategy()
         ops = strategy.propose([v], contract, {})
         assert "humidity" in ops[0].rationale
-        assert "60" in ops[0].rationale
+        # The default *value* must NOT appear: rationales are written into
+        # repair-log entries, and RepairConfig.include_values_in_log defaults
+        # to False so runtime values stay out of log pipelines.
+        assert "60" not in ops[0].rationale
 
     def test_empty_violations_returns_empty(self) -> None:
         contract = ContractSpec(

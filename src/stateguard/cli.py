@@ -26,6 +26,9 @@ Exit codes
 2   FAILED — the data could not be repaired to satisfy the contract.
     ``argparse`` also uses exit code 2 for usage errors (argument parsing
     failures), which is a standard Unix convention.
+3   AMBIGUOUS — a repair was found but the evidence did not justify applying
+    it unsupervised. Distinct from 2 because it is actionable: the candidates
+    are printed, so a caller can choose one or re-prompt for better output.
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ __all__ = ["main"]
 _EXIT_OK = 0  # SUCCESS or ALREADY_VALID
 _EXIT_PARTIAL = 1  # PARTIAL
 _EXIT_FAILED = 2  # FAILED  (argparse also uses 2 for bad args, per convention)
+_EXIT_AMBIGUOUS = 3  # AMBIGUOUS -- a repair was found but withheld
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +115,7 @@ def _print_human(result: Any, args: argparse.Namespace) -> None:
         RepairStatus.ALREADY_VALID: "✓",
         RepairStatus.PARTIAL: "⚠",
         RepairStatus.FAILED: "✗",
+        RepairStatus.AMBIGUOUS: "?",
     }
     icon = status_icons.get(status, "?")
     print(f"\n{icon} Status: {status.value.upper()}\n")
@@ -134,8 +139,24 @@ def _print_human(result: Any, args: argparse.Namespace) -> None:
                 src = f"  ← {op.source_path}" if op.source_path else ""
                 print(
                     f"      • {op.op_type.value}  {op.target_path}{src}  "
-                    f"(confidence {op.confidence:.2f})"
+                    f"(trust {op.trust:.2f}, risk {op.risk.name})"
                 )
+        print()
+
+    if result.ambiguous:
+        print("Ambiguous repairs (found, not applied):")
+        for item in result.ambiguous:
+            best = item.best
+            print(f"  ? {item.target_path}: {item.reason}")
+            for candidate in item.candidates:
+                src = f"  ← {candidate.source_path}" if candidate.source_path else ""
+                print(
+                    f"      • {candidate.op_type.value}{src}  "
+                    f"(trust {candidate.trust:.2f}, risk {candidate.risk.name})"
+                )
+            if best is not None:
+                for note in best.evidence.notes:
+                    print(f"        - {note}")
         print()
 
     if result.remaining_violations:
@@ -210,13 +231,31 @@ def _print_json(result: Any) -> None:
                         "op_type": op.op_type.value,
                         "target_path": op.target_path,
                         "source_path": op.source_path,
-                        "confidence": op.confidence,
+                        "trust": op.trust,
+                        "risk": op.risk.name,
                     }
                     for op in a.applied_operations
                 ],
                 "rejected_count": len(a.rejected_operations),
             }
             for a in result.attempts
+        ],
+        "ambiguous": [
+            {
+                "target_path": item.target_path,
+                "reason": item.reason,
+                "candidates": [
+                    {
+                        "op_type": candidate.op_type.value,
+                        "source_path": candidate.source_path,
+                        "trust": candidate.trust,
+                        "risk": candidate.risk.name,
+                        "notes": list(candidate.evidence.notes),
+                    }
+                    for candidate in item.candidates
+                ],
+            }
+            for item in result.ambiguous
         ],
         "repaired_output": repaired,
     }
@@ -277,6 +316,8 @@ def _cmd_check(args: argparse.Namespace) -> int:
         return _EXIT_OK
     if result.status is RepairStatus.PARTIAL:
         return _EXIT_PARTIAL
+    if result.status is RepairStatus.AMBIGUOUS:
+        return _EXIT_AMBIGUOUS
     return _EXIT_FAILED
 
 

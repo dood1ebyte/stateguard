@@ -228,7 +228,7 @@ def print_summary(summary: BenchmarkSummary, verbose: bool = False) -> None:
     print(f"  Repaired:           {summary.repaired_cases}")
     print(f"  Repair rate:        {summary.repair_rate:.1%}")
     avg = summary.average_confidence
-    print(f"  Average confidence: {avg:.3f}" if avg is not None else "  Average confidence: n/a")
+    print(f"  Average trust:      {avg:.3f}" if avg is not None else "  Average trust:      n/a")
     print("=" * 60)
     print()
 

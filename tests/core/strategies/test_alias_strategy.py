@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from stateguard.core.errors.operations import FieldOpType
+from dataclasses import replace
+
+from stateguard.core.trust import TrustDecision, TrustPolicy
+from stateguard.core.errors.operations import FieldOpType, RepairRisk
 from stateguard.core.errors.violations import ViolationSeverity, ViolationType
 from stateguard.core.models.contract import ContractSpec, FieldSpec
 from stateguard.core.models.field_types import FieldType
@@ -142,7 +145,14 @@ class TestProposeTopLevel:
         assert op.op_type is FieldOpType.RENAME
         assert op.source_path == "temp"
         assert op.target_path == "temperature"
-        assert op.confidence == 1.0
+        # The strategy declares evidence and risk; TrustPolicy assigns the
+        # score. A declared alias is the contract speaking, not a guess.
+        assert op.risk is RepairRisk.DECLARED
+        assert op.evidence.schema_authority == 1.0
+        assert TrustPolicy().evaluate(op) == (
+            replace(op, trust=1.0),
+            TrustDecision.APPLY,
+        )
 
     def test_alias_not_present_proposes_nothing(self) -> None:
         contract = ContractSpec(
@@ -317,7 +327,8 @@ class TestProposeNested:
         op = ops[0]
         assert op.target_path == "address.zip_code"
         assert op.source_path == "address.zip"
-        assert op.confidence == 1.0
+        assert op.risk is RepairRisk.DECLARED
+        assert op.evidence.schema_authority == 1.0
 
     def test_nested_alias_not_present(self) -> None:
         contract = self._address_contract()

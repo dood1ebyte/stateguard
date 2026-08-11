@@ -256,14 +256,14 @@ class TestRegressionPreservesEarlierRepairs:
         fix_a = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="a",
-            confidence=1.0,
+            trust=1.0,
             rationale="fills a correctly",
             value=1,
         )
         break_c = FieldOperation(
             op_type=FieldOpType.SET_VALUE,
             target_path="c",
-            confidence=1.0,
+            trust=1.0,
             rationale="writes a type-invalid value into optional c",
             value="oops",
         )
@@ -337,7 +337,7 @@ class TestTermination:
         fix_a = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="a",
-            confidence=1.0,
+            trust=1.0,
             rationale="fix a, repeatedly",
             value=1,
         )

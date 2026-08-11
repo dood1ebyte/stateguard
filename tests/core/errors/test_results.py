@@ -55,7 +55,7 @@ def _rename_op(src: str = "temp_celsius", tgt: str = "temperature") -> FieldOper
     return FieldOperation(
         op_type=FieldOpType.RENAME,
         target_path=tgt,
-        confidence=0.85,
+        trust=0.85,
         rationale="Fuzzy match",
         source_path=src,
     )
@@ -116,11 +116,20 @@ def _result(
 
 class TestRepairStatus:
     def test_all_expected_values_present(self) -> None:
-        expected = {"success", "partial", "failed", "already_valid"}
+        expected = {"success", "partial", "failed", "already_valid", "ambiguous"}
         assert {rs.value for rs in RepairStatus} == expected
 
     def test_member_count(self) -> None:
-        assert len(RepairStatus) == 4
+        assert len(RepairStatus) == 5
+
+    def test_ambiguous_is_distinct_from_failed(self) -> None:
+        """
+        AMBIGUOUS means "a repair was found and withheld", FAILED means "no
+        repair was found". Collapsing them would discard the only part of the
+        outcome a caller can act on.
+        """
+        assert RepairStatus.AMBIGUOUS is not RepairStatus.FAILED
+        assert RepairStatus.AMBIGUOUS == "ambiguous"
 
     def test_string_equality_success(self) -> None:
         assert RepairStatus.SUCCESS == "success"
@@ -298,14 +307,14 @@ class TestRepairAttempt:
         high_conf = FieldOperation(
             op_type=FieldOpType.RENAME,
             target_path="temperature",
-            confidence=0.9,
+            trust=0.9,
             rationale="r",
             source_path="temp_celsius",
         )
         low_conf = FieldOperation(
             op_type=FieldOpType.REMOVE,
             target_path="extra",
-            confidence=0.3,
+            trust=0.3,
             rationale="r",
         )
         a = RepairAttempt(
@@ -498,7 +507,7 @@ class TestRepairResultProperties:
         assert getattr(rr, prop) is expected
 
     def test_exactly_one_property_true_per_status(self) -> None:
-        props = ["is_success", "is_partial", "is_failed", "is_already_valid"]
+        props = ["is_success", "is_partial", "is_failed", "is_already_valid", "is_ambiguous"]
         for status in RepairStatus:
             rr = RepairResult(
                 status=status,
@@ -627,9 +636,9 @@ class TestRepairLogger:
 
     def test_data_kwargs_stored_as_dict(self) -> None:
         logger = RepairLogger()
-        logger.info("ev", "msg", strategy="Fuzzy", confidence=0.85, field="temp")
+        logger.info("ev", "msg", strategy="Fuzzy", trust=0.85, field="temp")
         e = logger.entries[0]
-        assert e.data == {"strategy": "Fuzzy", "confidence": 0.85, "field": "temp"}
+        assert e.data == {"strategy": "Fuzzy", "trust": 0.85, "field": "temp"}
 
 
 # ===========================================================================

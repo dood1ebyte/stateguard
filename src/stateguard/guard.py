@@ -36,9 +36,11 @@ from stateguard.core.strategies import (
     DefaultValueFillStrategy,
     ExactAliasStrategy,
     FuzzyFieldMatchStrategy,
+    NormalizedNameStrategy,
     StrategyRegistry,
     TypeCoercionStrategy,
 )
+from stateguard.core.trust import TrustPolicy
 from stateguard.logging.logger import RepairLogger
 from stateguard.logging.repair_history import RepairHistoryRecorder
 from stateguard.telemetry.hooks import ITelemetryHook
@@ -67,6 +69,14 @@ class ContractGuard:
         Optional telemetry hook.  Defaults to ``NoopTelemetry`` (disabled) --
         StateGuard collects no telemetry unless a hook is explicitly
         supplied.
+    policy:
+        Optional ``TrustPolicy`` governing how measured evidence becomes a
+        score and an apply/abstain/reject decision.  Defaults to one built
+        from ``config.repair``: ``score_collision_margin`` sets the margin at
+        which a runner-up stops casting doubt, and
+        ``min_confidence_threshold`` becomes a floor beneath every risk
+        tier.  Pass an explicit policy to override the per-risk bands, which
+        ``RepairConfig`` deliberately does not expose field-by-field.
     history:
         Optional ``RepairHistoryRecorder``.  Defaults to ``None``
         (disabled) -- StateGuard writes no local repair history unless a
@@ -91,6 +101,7 @@ class ContractGuard:
         config: GuardConfig | None = None,
         telemetry: ITelemetryHook | None = None,
         history: RepairHistoryRecorder | None = None,
+        policy: TrustPolicy | None = None,
     ) -> None:
         self._adapter = adapter
         self._config = config if config is not None else GuardConfig()
@@ -99,13 +110,24 @@ class ContractGuard:
         self._registry = StrategyRegistry(
             [
                 ExactAliasStrategy(),
-                FuzzyFieldMatchStrategy(
-                    min_confidence_threshold=self._config.repair.min_confidence_threshold,
-                    score_collision_margin=self._config.repair.score_collision_margin,
-                ),
+                NormalizedNameStrategy(),
+                FuzzyFieldMatchStrategy(),
                 TypeCoercionStrategy(),
                 DefaultValueFillStrategy(),
             ]
+        )
+        # Thresholds live on the policy, not on individual strategies: the
+        # strategies report evidence and this decides what it is worth.
+        # ``score_collision_margin`` keeps its meaning -- the margin at which
+        # a runner-up stops casting doubt -- but now scales trust continuously
+        # instead of vetoing a proposal outright.
+        self._policy = (
+            policy
+            if policy is not None
+            else TrustPolicy(
+                margin_full_credit=self._config.repair.score_collision_margin,
+                minimum_trust=self._config.repair.min_confidence_threshold,
+            )
         )
 
     # ------------------------------------------------------------------
@@ -280,4 +302,5 @@ class ContractGuard:
             config=self._config.repair,
             logger=RepairLogger(),
             telemetry=self._telemetry,
+            policy=self._policy,
         )

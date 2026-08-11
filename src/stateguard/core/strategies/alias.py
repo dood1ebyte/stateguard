@@ -11,7 +11,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from stateguard.core.errors.operations import FieldOperation, FieldOpType
+from stateguard.core.errors.operations import (
+    FieldOperation,
+    FieldOpType,
+    RepairEvidence,
+    RepairRisk,
+)
 from stateguard.core.errors.violations import ContractViolation, ViolationType
 from stateguard.core.interfaces.strategy import IRepairStrategy
 from stateguard.core.models.contract import ContractSpec, FieldSpec
@@ -80,10 +85,11 @@ class ExactAliasStrategy(IRepairStrategy):
     Renames a field to its contract path when an exact declared alias is
     present in the data.
 
-    Confidence is always ``1.0`` — this strategy only fires on an exact
-    string match against ``FieldSpec.known_aliases``, which is populated
-    by adapters from schema-declared aliases (e.g. Pydantic
-    ``Field(alias="temp")`` or ``validation_alias``).
+    Reports ``schema_authority = 1.0`` at ``RepairRisk.DECLARED`` — this
+    strategy only fires on an exact string match against
+    ``FieldSpec.known_aliases``, which is populated by adapters from
+    schema-declared aliases (e.g. Pydantic ``Field(alias="temp")`` or
+    ``validation_alias``). ``TrustPolicy`` turns that into the score.
 
     No fuzzy matching is performed here; see ``FuzzyFieldMatchStrategy``
     for heuristic renames.
@@ -139,12 +145,21 @@ class ExactAliasStrategy(IRepairStrategy):
                         FieldOperation(
                             op_type=FieldOpType.RENAME,
                             target_path=violation.field_path,
-                            confidence=1.0,
                             rationale=(
                                 f"Exact alias match: '{alias}' is a declared "
                                 f"alias for '{violation.field_path}'."
                             ),
                             source_path=source_path,
+                            # The contract itself names this alias, so there is
+                            # nothing inferred here for a margin to erode.
+                            risk=RepairRisk.DECLARED,
+                            evidence=RepairEvidence(
+                                schema_authority=1.0,
+                                notes=(
+                                    f"'{alias}' is declared in known_aliases for "
+                                    f"'{violation.field_path}'",
+                                ),
+                            ),
                         )
                     )
                     break  # one rename per missing field; first alias wins

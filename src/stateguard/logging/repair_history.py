@@ -32,7 +32,8 @@ Record granularity
 One JSONL line is written per **applied** ``FieldOperation``, across every
 ``RepairAttempt`` in a single ``repair()`` call -- this is the natural
 "one repair event" unit, since each operation carries its own strategy,
-field path, confidence, and before/after values. For the case where no
+field path, trust score, risk tier, and before/after values. For the case
+where no
 attempts occurred at all (``ALREADY_VALID`` or an immediate ``FAILED``
 with no applicable strategy), exactly one summary record is written
 instead, with the operation-specific fields set to ``None``.
@@ -230,7 +231,8 @@ class RepairHistoryRecorder:
                     "field_path": None,
                     "field_before": None,
                     "field_after": None,
-                    "confidence": None,
+                    "trust": None,
+                    "risk": None,
                     "success": result.status.value in ("success", "already_valid"),
                     "attempt_number": None,
                     "op_type": None,
@@ -265,7 +267,8 @@ class RepairHistoryRecorder:
             "field_path": op.target_path,
             "field_before": None if field_before is _NOT_FOUND else field_before,
             "field_after": None if field_after is _NOT_FOUND else field_after,
-            "confidence": op.confidence,
+            "trust": op.trust,
+            "risk": op.risk.name,
             "success": attempt.succeeded,
             "attempt_number": attempt.attempt_number,
             "op_type": op.op_type.value,

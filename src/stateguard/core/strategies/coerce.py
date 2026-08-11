@@ -37,7 +37,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from stateguard.core.errors.operations import FieldOperation, FieldOpType
+from stateguard.core.errors.operations import (
+    FieldOperation,
+    FieldOpType,
+    RepairEvidence,
+    RepairRisk,
+)
 from stateguard.core.errors.violations import ContractViolation, ViolationType
 from stateguard.core.interfaces.strategy import IRepairStrategy
 from stateguard.core.models.contract import ContractSpec, FieldSpec
@@ -47,16 +52,49 @@ __all__ = ["TypeCoercionStrategy"]
 
 
 # ---------------------------------------------------------------------------
-# Confidence constants
+# Round-trip fidelity
 # ---------------------------------------------------------------------------
+#
+# These replace the four hand-picked confidence constants this module used to
+# carry (0.95 numeric, 0.85 bool, 0.9 array-wrap, 0.85 JSON).  Those numbers
+# described nothing measurable -- they were the author's feeling about each
+# cast.  Fidelity is measured instead: convert the value, convert it back, and
+# see how much of the original survived.
 
-_NUMERIC_COERCION_CONFIDENCE = 0.95
-_BOOL_COERCION_CONFIDENCE = 0.85
-_ARRAY_WRAP_CONFIDENCE = 0.9
-_JSON_SERIALIZE_CONFIDENCE = 0.85
+#: Converting back reproduces the input exactly: ``"5"`` -> ``5`` -> ``"5"``.
+_FIDELITY_EXACT = 1.0
+
+#: Converting back reproduces the input modulo surrounding whitespace.
+_FIDELITY_WHITESPACE = 0.95
+
+#: Converting back differs from the input, but only in formatting the value
+#: itself does not depend on: ``"05"`` -> ``5`` -> ``"5"``.
+_FIDELITY_NORMALISED = 0.85
+
+#: ``"1"`` -> ``True`` is a reading of the string, not a re-encoding of it.
+_FIDELITY_BOOL_NUMERIC = 0.80
 
 # Strings accepted for str -> bool coercion (case-insensitive).
-_BOOL_STRINGS = {"true", "false", "1", "0"}
+_BOOL_TRUE_WORDS = {"true"}
+_BOOL_FALSE_WORDS = {"false"}
+_BOOL_NUMERIC = {"1", "0"}
+_BOOL_STRINGS = _BOOL_TRUE_WORDS | _BOOL_FALSE_WORDS | _BOOL_NUMERIC
+
+
+def _roundtrip_fidelity(original: str, coerced: Any) -> float:
+    """
+    How much of *original* survives ``str(coerced)``.
+
+    The point of measuring rather than assuming: ``"5"`` and ``"05"`` were
+    previously both worth 0.95 simply because both are digit strings, even
+    though only one of them round-trips.
+    """
+    back = str(coerced)
+    if back == original:
+        return _FIDELITY_EXACT
+    if back == original.strip():
+        return _FIDELITY_WHITESPACE
+    return _FIDELITY_NORMALISED
 
 
 # ---------------------------------------------------------------------------
@@ -115,55 +153,115 @@ def _find_field_spec(contract: ContractSpec, full_path: str) -> FieldSpec | None
 # ---------------------------------------------------------------------------
 
 
-def _coercion_confidence(
+def _coercion_evidence(
     value: Any,
     target_type: FieldType,
     item_type: FieldType | None = None,
     union_members: tuple[UnionMember, ...] | None = None,
-) -> float | None:
+) -> tuple[RepairEvidence, RepairRisk] | None:
     """
-    Return the confidence for coercing *value* to *target_type*, or
-    ``None`` if no safe coercion is defined for this (value, target) pair.
+    Measure the evidence for coercing *value* to *target_type*.
+
+    Returns ``(evidence, risk)``, or ``None`` if no safe coercion is defined
+    for this (value, target) pair.  ``TrustPolicy`` turns the evidence into a
+    score; this function never invents one.
 
     *item_type* is consulted only for ``ARRAY`` targets and *union_members*
     only for ``UNION`` targets; both come from the field's ``FieldSpec``.
     """
     if target_type in (FieldType.STRING, FieldType.BYTES):
-        if json_serialized(value) is not None:
-            return _JSON_SERIALIZE_CONFIDENCE
-        return None
+        serialised = json_serialized(value)
+        if serialised is None:
+            return None
+        # json.loads(json.dumps(x)) == x for the containers we accept, so the
+        # value survives intact -- but a container rendered as text is no
+        # longer a container, which is why the risk is LOSSY rather than
+        # REVERSIBLE.
+        return (
+            RepairEvidence(
+                value_preserved=_FIDELITY_EXACT,
+                # Rendering a container as text discards its structure, even
+                # though every byte of the value survives. Recorded so that a
+                # union offering both this and a wrap-in-list prefers the wrap.
+                signals=(("structure_preserved", 0.0),),
+                notes=(f"{type(value).__name__} serialises to JSON and parses back equal",),
+            ),
+            RepairRisk.LOSSY,
+        )
 
     if target_type is FieldType.INTEGER:
         if isinstance(value, str) and not isinstance(value, bool) and _is_integer_string(value):
-            return _NUMERIC_COERCION_CONFIDENCE
+            fidelity = _roundtrip_fidelity(value, int(value))
+            return (
+                RepairEvidence(
+                    value_preserved=fidelity,
+                    notes=(f"str -> int round-trips at {fidelity:.2f}",),
+                ),
+                RepairRisk.REVERSIBLE,
+            )
         return None
 
     if target_type is FieldType.FLOAT:
         if isinstance(value, bool):
             return None
         if isinstance(value, int):
-            # int -> float is always safe.
-            return _NUMERIC_COERCION_CONFIDENCE
+            # int -> float never loses the value.
+            return (
+                RepairEvidence(
+                    value_preserved=_FIDELITY_EXACT,
+                    notes=("int is exactly representable as float",),
+                ),
+                RepairRisk.REVERSIBLE,
+            )
         if isinstance(value, str) and _is_float_string(value):
-            return _NUMERIC_COERCION_CONFIDENCE
+            fidelity = _roundtrip_fidelity(value, float(value))
+            return (
+                RepairEvidence(
+                    value_preserved=fidelity,
+                    notes=(f"str -> float round-trips at {fidelity:.2f}",),
+                ),
+                RepairRisk.REVERSIBLE,
+            )
         return None
 
     if target_type is FieldType.BOOLEAN:
-        if isinstance(value, str) and value.strip().lower() in _BOOL_STRINGS:
-            return _BOOL_COERCION_CONFIDENCE
-        return None
+        if not isinstance(value, str):
+            return None
+        lowered = value.strip().lower()
+        if lowered in _BOOL_TRUE_WORDS or lowered in _BOOL_FALSE_WORDS:
+            fidelity = _FIDELITY_EXACT if value == lowered else _FIDELITY_WHITESPACE
+            note = "string spells the boolean out"
+        elif lowered in _BOOL_NUMERIC:
+            fidelity = _FIDELITY_BOOL_NUMERIC
+            note = "numeric string read as a boolean"
+        else:
+            return None
+        # Reading a string as a boolean is an interpretation, not a
+        # re-encoding -- "1" could legitimately have meant the integer 1.
+        return RepairEvidence(value_preserved=fidelity, notes=(note,)), RepairRisk.INFERRED
 
     if target_type is FieldType.ARRAY:
         if _array_wrap_is_safe(value, item_type):
-            return _ARRAY_WRAP_CONFIDENCE
+            # The element survives untouched, but cardinality is invented:
+            # nothing in the payload said this was a one-element list.
+            return (
+                RepairEvidence(
+                    value_preserved=_FIDELITY_EXACT,
+                    # The value itself is untouched inside the list -- a dict
+                    # stays a dict. Only cardinality is invented.
+                    signals=(("structure_preserved", 1.0),),
+                    notes=("value matches the declared item_type; wrapped as a single element",),
+                ),
+                RepairRisk.LOSSY,
+            )
         return None
 
     if target_type is FieldType.UNION:
         resolved = resolve_union_member(value, union_members)
         if resolved is None:
             return None
-        member, confidence = resolved
-        return confidence
+        _member, evidence, risk = resolved
+        return evidence, risk
 
     return None
 
@@ -208,16 +306,24 @@ def _array_wrap_is_safe(value: Any, item_type: FieldType | None) -> bool:
 def resolve_union_member(
     value: Any,
     union_members: tuple[UnionMember, ...] | None,
-) -> tuple[UnionMember, float] | None:
+) -> tuple[UnionMember, RepairEvidence, RepairRisk] | None:
     """
     Pick the union member *value* can be safely coerced to.
 
-    Evaluates every member with the same rules as ``_coercion_confidence``
-    (scalar casts; wrap-in-list for ``ARRAY`` members) and returns the
-    single member with the strictly highest confidence, together with that
-    confidence.  Returns ``None`` when no member is coercible or when two
-    or more members tie at the top (ambiguous — refusing is the safe
-    default).
+    Evaluates every member with the same rules as ``_coercion_evidence``
+    (scalar casts; wrap-in-list for ``ARRAY`` members) and ranks them by:
+
+    1. **fidelity** — how much of the value survives;
+    2. **structure preservation** — whether the value keeps its own shape.
+       A ``dict`` accepted by both a ``str`` member and a ``list`` member
+       survives byte-for-byte either way, but ``[{...}]`` keeps it a mapping
+       while ``'{"...": ...}'`` turns it into text.  Structured beats
+       stringified;
+    3. **risk** — the least consequential member wins a remaining tie.
+
+    Returns ``None`` when no member is coercible, or when the top two rank
+    identically on all three — a genuinely ambiguous union is refused rather
+    than guessed at.
 
     Shared with the engine's ``_coerce_value`` so that feasibility and
     application always resolve to the same member.
@@ -225,35 +331,55 @@ def resolve_union_member(
     if not union_members:
         return None
 
-    candidates: list[tuple[UnionMember, float]] = []
+    candidates: list[tuple[tuple[float, float, int], UnionMember, RepairEvidence, RepairRisk]] = []
     for member in union_members:
-        confidence = _coercion_confidence(value, member.field_type, item_type=member.item_type)
-        if confidence is not None:
-            candidates.append((member, confidence))
+        measured = _coercion_evidence(value, member.field_type, item_type=member.item_type)
+        if measured is None:
+            continue
+        evidence, risk = measured
+        fidelity = evidence.value_preserved if evidence.value_preserved is not None else 0.0
+        structure = dict(evidence.signals).get("structure_preserved", 1.0)
+        candidates.append(((fidelity, structure, -int(risk)), member, evidence, risk))
 
     if not candidates:
         return None
 
-    candidates.sort(key=lambda c: c[1], reverse=True)
-    if len(candidates) > 1 and candidates[0][1] == candidates[1][1]:
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    if len(candidates) > 1 and candidates[0][0] == candidates[1][0]:
         return None
-    return candidates[0]
+
+    _rank, member, evidence, risk = candidates[0]
+    return member, evidence, risk
 
 
 def _is_integer_string(value: str) -> bool:
-    """``True`` if *value* is a digit string, optionally negative."""
-    if value.isdigit():
+    """
+    ``True`` if *value* is a decimal integer string, optionally negative.
+
+    Uses ``str.isdecimal`` rather than ``str.isdigit``: ``"²".isdigit()`` is
+    ``True`` but ``int("²")`` raises, which previously produced a
+    high-confidence coercion that silently did nothing when applied.
+    """
+    if value.isdecimal():
         return True
-    return bool(value.startswith("-") and len(value) > 1 and value[1:].isdigit())
+    return bool(value.startswith("-") and len(value) > 1 and value[1:].isdecimal())
 
 
 def _is_float_string(value: str) -> bool:
-    """``True`` if ``float(value)`` would succeed."""
+    """
+    ``True`` if *value* names a finite float.
+
+    ``float()`` also accepts ``"nan"``, ``"inf"``, ``"infinity"`` and their
+    signed forms.  Those are not lossless casts of a numeric string: NaN
+    poisons every downstream comparison, and neither survives
+    ``json.dumps`` as valid JSON.  They are refused here rather than given a
+    high fidelity score.
+    """
     try:
-        float(value)
+        parsed = float(value)
     except ValueError:
         return False
-    return True
+    return parsed == parsed and parsed not in (float("inf"), float("-inf"))
 
 
 # ---------------------------------------------------------------------------
@@ -310,25 +436,29 @@ class TypeCoercionStrategy(IRepairStrategy):
                     item_type = field_spec.item_type
                     union_members = field_spec.union_members
 
-            confidence = _coercion_confidence(
+            measured = _coercion_evidence(
                 value,
                 violation.expected_type,
                 item_type=item_type,
                 union_members=union_members,
             )
-            if confidence is None:
+            if measured is None:
                 continue
+            evidence, risk = measured
 
             operations.append(
                 FieldOperation(
                     op_type=FieldOpType.COERCE,
                     target_path=violation.field_path,
-                    confidence=confidence,
+                    # No value interpolation: rationale strings end up in log
+                    # entries, and RepairConfig.include_values_in_log defaults
+                    # to False precisely so runtime values do not.
                     rationale=(
-                        f"Coerce {type(value).__name__} value "
-                        f"{value!r} to {violation.expected_type.value} "
-                        f"for field '{violation.field_path}'."
+                        f"Coerce {type(value).__name__} at "
+                        f"'{violation.field_path}' to {violation.expected_type.value}."
                     ),
+                    risk=risk,
+                    evidence=evidence,
                 )
             )
 

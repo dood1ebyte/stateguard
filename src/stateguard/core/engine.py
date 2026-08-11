@@ -2,9 +2,17 @@
 RepairEngine — orchestrates the repair loop.
 
 This is the heart of the core engine: it correlates violations, selects
-strategies via the ``StrategyRegistry``, applies proposed ``FieldOperation``
-objects that meet the confidence threshold, revalidates via the adapter,
-and assembles the final ``RepairResult`` with a full audit trail.
+strategies via the ``StrategyRegistry``, scores each proposed
+``FieldOperation`` through ``TrustPolicy``, applies the ones that clear the
+bar for their risk tier, revalidates via the adapter, and assembles the final
+``RepairResult`` with a full audit trail.
+
+Scoring is deliberately not the strategies' job.  They report what they
+measured (``RepairEvidence``) and how bad it would be to be wrong
+(``RepairRisk``); ``TrustPolicy`` turns that into a number and an
+apply/abstain/reject decision.  Proposals that land in the abstain band are
+recorded on ``RepairResult.ambiguous`` rather than silently dropped, so a
+caller can re-prompt, review, or display them.
 
 Validation strategy
 --------------------
@@ -73,6 +81,7 @@ from typing import Any
 
 from stateguard.core.errors.operations import FieldOperation, FieldOpType
 from stateguard.core.errors.results import (
+    AmbiguousRepair,
     RepairAttempt,
     RepairResult,
     RepairStatus,
@@ -93,6 +102,7 @@ from stateguard.core.strategies.coerce import (
     resolve_union_member,
 )
 from stateguard.core.strategies.registry import StrategyRegistry
+from stateguard.core.trust import TrustDecision, TrustPolicy
 from stateguard.core.validator import ContractValidator, root_structural_violation
 from stateguard.logging.logger import RepairLogger
 from stateguard.telemetry.hooks import ITelemetryHook, TelemetryEvent, TelemetryEventType
@@ -142,6 +152,29 @@ def _safe_deepcopy(value: Any) -> Any:
         # Any copy failure degrades to sharing the reference. Safe here
         # precisely because original_input is never written to.
         return value
+
+
+def _identical(left: Any, right: Any) -> bool:
+    """
+    Value equality that does not conflate values of different types.
+
+    ``==`` is the wrong test for "did this operation change anything":
+    ``5 == 5.0`` and ``1 == True`` are both ``True`` in Python, so a coercion
+    that correctly turned an ``int`` into a ``float`` would look like a no-op
+    and be thrown away.  Comparing types first keeps that distinction while
+    still recognising a genuinely redundant write.
+    """
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _identical(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _identical(a, b) for a, b in zip(left, right, strict=True)
+        )
+    return bool(left == right)
 
 
 def _unwrap_single_element(sequence: Sequence[Any]) -> dict[str, Any] | None:
@@ -431,7 +464,7 @@ def _coerce_value(
         resolved = resolve_union_member(value, union_members)
         if resolved is None:
             return _COERCE_FAILED
-        member, _confidence = resolved
+        member, _evidence, _risk = resolved
         return _coerce_value(value, member.field_type, item_type=member.item_type)
 
     return _COERCE_FAILED
@@ -470,12 +503,135 @@ class RepairEngine:
         config: RepairConfig,
         logger: RepairLogger,
         telemetry: ITelemetryHook | None = None,
+        policy: TrustPolicy | None = None,
     ) -> None:
         self._registry = registry
         self._config = config
         self._logger = logger
         self._telemetry: ITelemetryHook = telemetry if telemetry is not None else NoopTelemetry()
         self._core_validator = ContractValidator()
+        self._policy = policy if policy is not None else TrustPolicy()
+
+    # ------------------------------------------------------------------
+    # Ambiguity
+    # ------------------------------------------------------------------
+
+    def _record_decisions(
+        self,
+        contract: ContractSpec,
+        offered: list[tuple[FieldOperation, TrustDecision]],
+    ) -> None:
+        """Log and emit telemetry for every proposal that was not applied."""
+        for op, decision in offered:
+            if decision is TrustDecision.APPLY:
+                continue
+
+            if decision is TrustDecision.AMBIGUOUS:
+                self._logger.warning(
+                    "operation.ambiguous",
+                    f"Found a {op.op_type.value} for '{op.target_path}' but the "
+                    f"evidence does not justify applying it unsupervised.",
+                    op_type=op.op_type.value,
+                    target_path=op.target_path,
+                    trust=op.trust,
+                    risk=op.risk.name,
+                )
+            else:
+                self._logger.warning(
+                    "operation.rejected",
+                    f"Rejected {op.op_type.value} on '{op.target_path}'.",
+                    op_type=op.op_type.value,
+                    target_path=op.target_path,
+                    trust=op.trust,
+                    risk=op.risk.name,
+                )
+
+            self._emit(
+                contract,
+                TelemetryEventType.OPERATION_REJECTED,
+                op_type=op.op_type.value,
+                target_path=op.target_path,
+                trust=op.trust,
+                decision=decision.value,
+            )
+            # Only withheld operations get the full explanation. An applied one
+            # already logs its trust and risk, and rendering an explanation for
+            # every operation doubled the size of every repair_log.
+            self._logger.debug(
+                "operation.explained",
+                self._policy.explain(op, decision),
+                target_path=op.target_path,
+            )
+
+    @staticmethod
+    def _hold_tainted(
+        scored: tuple[FieldOperation, TrustDecision],
+        withheld_sources: set[str],
+    ) -> tuple[FieldOperation, TrustDecision]:
+        """
+        Keep withholding a source key the engine has already been unsure about.
+
+        Abstaining on one field and then repairing it another way makes the
+        *contest* disappear without resolving anything about the key itself.
+        Without this guard the engine talks itself into the exact repair it
+        just refused: with ``user_id`` and ``user_name`` both missing and one
+        ``user_email`` present, the rename is correctly withheld -- but once
+        ``user_name`` is filled from its declared default, ``user_email`` is
+        the only candidate for the only remaining field, scores 0.891
+        unopposed, and the email address lands in ``user_id`` after all.
+
+        Nothing was learned about where ``user_email`` belongs, so the
+        uncertainty stands. A key that has been withheld once stays withheld
+        for the rest of the run, and the caller still sees it on
+        ``RepairResult.ambiguous``.
+        """
+        op, decision = scored
+        if (
+            decision is TrustDecision.APPLY
+            and op.source_path is not None
+            and op.source_path in withheld_sources
+        ):
+            return op, TrustDecision.AMBIGUOUS
+        return scored
+
+    def _record_ambiguous(
+        self,
+        ambiguous: list[AmbiguousRepair],
+        op: FieldOperation,
+    ) -> None:
+        """
+        Add *op* to the abstained-repair list, merging by target path.
+
+        Merging matters for two reasons.  The loop can re-propose the same
+        withheld repair on a later attempt, which would otherwise append a
+        duplicate and make a caller prompt twice for one decision.  And when
+        several proposals compete for the same field, a caller choosing
+        between them needs them together and ranked -- which is the entire
+        point of surfacing an abstention rather than dropping it.
+        """
+        band = self._policy.band_for(op.risk)
+        reason = (
+            f"trust {op.trust:.2f} is below the {op.risk.name} threshold of {band.apply_at:.2f}"
+        )
+
+        for existing in ambiguous:
+            if existing.target_path != op.target_path:
+                continue
+            for candidate in existing.candidates:
+                if (
+                    candidate.op_type is op.op_type
+                    and candidate.source_path == op.source_path
+                    and candidate.value == op.value
+                ):
+                    return  # already recorded on an earlier attempt
+            existing.candidates.append(op)
+            existing.candidates.sort(key=lambda c: c.trust, reverse=True)
+            existing.reason = reason
+            return
+
+        ambiguous.append(
+            AmbiguousRepair(target_path=op.target_path, candidates=[op], reason=reason)
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -603,6 +759,11 @@ class RepairEngine:
         current_key = initial_key
         seen_hashes: set[str] = {self._compute_violation_hash(current_violations)}
         attempts: list[RepairAttempt] = []
+        ambiguous: list[AmbiguousRepair] = []
+        # Source keys the engine has already declined to place. See
+        # ``_hold_tainted`` -- resolving the competing field by other means
+        # must not turn a refused rename into an applied one.
+        withheld_sources: set[str] = set()
 
         status: RepairStatus | None = None
         remaining_violations: list[ContractViolation] = current_violations
@@ -620,7 +781,63 @@ class RepairEngine:
                 remaining_violations = correlated
                 break
 
+            # --- Select a strategy that actually has something to apply --------
+            # Not simply ``applicable[0]``. A strategy can be applicable, propose
+            # a repair, and have every proposal land in the abstain band -- which
+            # is common now that abstention is a real outcome. Stopping there
+            # would let one uncertain rename suppress a *certain*,
+            # schema-declared repair from a lower-priority strategy: the loop
+            # would see an unchanged payload, call it no progress, and give up.
+            # So keep trying strategies in priority order until one has work to
+            # do, carrying the abstentions and rejections of the ones passed over.
             strategy = applicable[0]
+            proposed: list[FieldOperation] = []
+            candidate_ops: list[FieldOperation] = []
+            rejected_ops: list[FieldOperation] = []
+            abstained_ops: list[FieldOperation] = []
+
+            # Proposals from strategies that were passed over still count: they
+            # were considered, and an abstention recorded by one of them must
+            # not be erased by the strategy that ends up being selected.
+            carried_proposed: list[FieldOperation] = []
+            carried_rejected: list[FieldOperation] = []
+            carried_abstained: list[FieldOperation] = []
+
+            for nth, considered in enumerate(applicable):
+                offered = [
+                    self._hold_tainted(self._policy.evaluate(op), withheld_sources)
+                    for op in considered.propose(correlated, contract, working_data)
+                ]
+                appliable = [op for op, decision in offered if decision is TrustDecision.APPLY]
+                self._record_decisions(contract, offered)
+
+                strategy = considered
+                proposed = [*carried_proposed, *(op for op, _ in offered)]
+                candidate_ops = appliable
+                rejected_ops = [
+                    *carried_rejected,
+                    *(op for op, decision in offered if decision is TrustDecision.REJECT),
+                ]
+                abstained_ops = [
+                    *carried_abstained,
+                    *(op for op, decision in offered if decision is TrustDecision.AMBIGUOUS),
+                ]
+
+                if appliable or nth == len(applicable) - 1:
+                    break
+
+                carried_proposed = proposed
+                carried_rejected = rejected_ops
+                carried_abstained = abstained_ops
+
+                self._logger.info(
+                    "strategy.passed_over",
+                    f"'{considered.name}' had nothing it could apply; "
+                    f"trying the next applicable strategy.",
+                    strategy=considered.name,
+                    attempt_number=attempt_number,
+                )
+
             self._emit(
                 contract,
                 TelemetryEventType.STRATEGY_SELECTED,
@@ -641,54 +858,50 @@ class RepairEngine:
                 strategy=strategy.name,
             )
 
-            proposed = strategy.propose(correlated, contract, working_data)
-
-            applied_ops: list[FieldOperation] = []
-            rejected_ops: list[FieldOperation] = []
-            for op in proposed:
-                if op.confidence >= self._config.min_confidence_threshold:
-                    applied_ops.append(op)
-                else:
-                    rejected_ops.append(op)
-                    self._emit(
-                        contract,
-                        TelemetryEventType.OPERATION_REJECTED,
-                        op_type=op.op_type.value,
-                        target_path=op.target_path,
-                        confidence=op.confidence,
-                    )
-                    self._logger.warning(
-                        "operation.rejected",
-                        f"Rejected {op.op_type.value} on "
-                        f"'{op.target_path}': confidence "
-                        f"{op.confidence:.2f} below threshold "
-                        f"{self._config.min_confidence_threshold:.2f}.",
-                        op_type=op.op_type.value,
-                        target_path=op.target_path,
-                        confidence=op.confidence,
-                        rationale=op.rationale,
-                    )
+            for op in abstained_ops:
+                self._record_ambiguous(ambiguous, op)
+                if op.source_path is not None:
+                    withheld_sources.add(op.source_path)
 
             data_before = deepcopy(working_data)
             new_data = deepcopy(working_data)
 
-            for op in applied_ops:
-                self._apply_operation(new_data, op, contract)
+            # An operation only counts as applied if it actually changed the
+            # data. Several apply paths return silently when their target has
+            # gone missing or a cast turns out to be impossible; recording
+            # those as applied made the audit trail claim edits that never
+            # happened.
+            applied_ops: list[FieldOperation] = []
+            for op in candidate_ops:
+                if not self._apply_operation(new_data, op, contract):
+                    rejected_ops.append(op)
+                    self._logger.warning(
+                        "operation.no_effect",
+                        f"{op.op_type.value} on '{op.target_path}' left the payload "
+                        f"unchanged; not recording it as applied.",
+                        op_type=op.op_type.value,
+                        target_path=op.target_path,
+                        trust=op.trust,
+                    )
+                    continue
+
+                applied_ops.append(op)
                 self._emit(
                     contract,
                     TelemetryEventType.OPERATION_APPLIED,
                     op_type=op.op_type.value,
                     target_path=op.target_path,
-                    confidence=op.confidence,
+                    trust=op.trust,
                 )
                 self._logger.info(
                     "operation.applied",
                     f"Applied {op.op_type.value} on '{op.target_path}' "
-                    f"(confidence {op.confidence:.2f}).",
+                    f"(trust {op.trust:.2f}, risk {op.risk.name}).",
                     op_type=op.op_type.value,
                     target_path=op.target_path,
                     source_path=op.source_path,
-                    confidence=op.confidence,
+                    trust=op.trust,
+                    risk=op.risk.name,
                     rationale=op.rationale,
                 )
 
@@ -706,6 +919,7 @@ class RepairEngine:
                     proposed_operations=proposed,
                     applied_operations=applied_ops,
                     rejected_operations=rejected_ops,
+                    abstained_operations=abstained_ops,
                     data_before=data_before,
                     data_after=data_after,
                     succeeded=attempt_succeeded,
@@ -790,6 +1004,11 @@ class RepairEngine:
                     if self._config.allow_partial_repair
                     else RepairStatus.FAILED
                 )
+            elif ambiguous:
+                # Nothing was resolved, but a repair *was* found and withheld.
+                # Reporting that as FAILED would throw away the one piece of
+                # information the caller can act on.
+                status = RepairStatus.AMBIGUOUS
             else:
                 status = RepairStatus.FAILED
 
@@ -805,7 +1024,7 @@ class RepairEngine:
             repaired_output = None
 
         # --- Final telemetry ------------------------------------------------------
-        if status is RepairStatus.FAILED:
+        if status in (RepairStatus.FAILED, RepairStatus.AMBIGUOUS):
             self._emit(
                 contract,
                 TelemetryEventType.REPAIR_FAILED,
@@ -829,6 +1048,7 @@ class RepairEngine:
             repair_log=self._logger.entries,
             contract_id=contract.contract_id,
             repaired_output=repaired_output,
+            ambiguous=ambiguous,
         )
 
     # ------------------------------------------------------------------
@@ -1054,44 +1274,60 @@ class RepairEngine:
         data: dict[str, Any],
         op: FieldOperation,
         contract: ContractSpec,
-    ) -> None:
-        """Apply a single ``FieldOperation`` to *data* in place."""
+    ) -> bool:
+        """
+        Apply a single ``FieldOperation`` to *data* in place.
+
+        Returns whether the payload actually changed.  Each applier already
+        knows this — every one of its early returns *is* the "nothing to do"
+        case — so it reports the fact rather than the caller inferring it by
+        comparing snapshots.  That inference was both expensive (a full
+        ``deepcopy`` per operation) and wrong: ``{"x": 5} == {"x": 5.0}`` is
+        ``True`` in Python, so a coercion that correctly changed an ``int``
+        into a ``float`` looked like a no-op and was discarded.
+        """
         if op.op_type is FieldOpType.RENAME:
-            self._apply_rename(data, op)
-        elif op.op_type is FieldOpType.COERCE:
-            self._apply_coerce(data, op, contract)
-        elif op.op_type is FieldOpType.SET_DEFAULT:
+            return self._apply_rename(data, op)
+        if op.op_type is FieldOpType.COERCE:
+            return self._apply_coerce(data, op, contract)
+        if op.op_type is FieldOpType.SET_DEFAULT or op.op_type is FieldOpType.SET_VALUE:
+            existing = _get_nested(data, op.target_path)
+            if existing is not _NOT_FOUND and _identical(existing, op.value):
+                return False
             _set_nested(data, op.target_path, op.value)
-        elif op.op_type is FieldOpType.REMOVE:
+            return True
+        if op.op_type is FieldOpType.REMOVE:
+            existed = _get_nested(data, op.target_path) is not _NOT_FOUND
             _delete_nested(data, op.target_path)
-        elif op.op_type is FieldOpType.SET_VALUE:
-            _set_nested(data, op.target_path, op.value)
+            return existed
+        return False
 
     @staticmethod
-    def _apply_rename(data: dict[str, Any], op: FieldOperation) -> None:
+    def _apply_rename(data: dict[str, Any], op: FieldOperation) -> bool:
         """Move the value at ``op.source_path`` to ``op.target_path``."""
         if op.source_path is None:
-            return
+            return False
         value = _get_nested(data, op.source_path)
         if value is _NOT_FOUND:
-            return
+            return False
         _delete_nested(data, op.source_path)
         _set_nested(data, op.target_path, value)
+        return True
 
     @staticmethod
     def _apply_coerce(
         data: dict[str, Any],
         op: FieldOperation,
         contract: ContractSpec,
-    ) -> None:
+    ) -> bool:
         """Cast the value at ``op.target_path`` to its contract-declared type."""
         value = _get_nested(data, op.target_path)
         if value is _NOT_FOUND:
-            return
+            return False
 
         field_spec = _find_field_spec(contract, op.target_path)
         if field_spec is None:
-            return
+            return False
 
         coerced = _coerce_value(
             value,
@@ -1099,7 +1335,8 @@ class RepairEngine:
             item_type=field_spec.item_type,
             union_members=field_spec.union_members,
         )
-        if coerced is _COERCE_FAILED:
-            return
+        if coerced is _COERCE_FAILED or _identical(value, coerced):
+            return False
 
         _set_nested(data, op.target_path, coerced)
+        return True

@@ -8,6 +8,7 @@ from stateguard.core.errors.operations import FieldOpType
 from stateguard.core.errors.violations import ViolationSeverity, ViolationType
 from stateguard.core.models.contract import ContractSpec, FieldSpec
 from stateguard.core.models.field_types import FieldType
+from stateguard.core.trust import TrustDecision, TrustPolicy
 from stateguard.core.strategies.fuzzy import (
     FuzzyFieldMatchStrategy,
     _combined_score,
@@ -222,8 +223,10 @@ class TestIdentity:
 
     def test_default_thresholds(self) -> None:
         strategy = FuzzyFieldMatchStrategy()
-        assert strategy._min_confidence_threshold == 0.7
-        assert strategy._score_collision_margin == 0.15
+        # Both constructor parameters are accepted and ignored: thresholding
+        # moved to TrustPolicy when strategies stopped scoring themselves.
+        assert strategy._min_confidence_threshold is None
+        assert strategy._score_collision_margin is None
 
     def test_custom_thresholds(self) -> None:
         strategy = FuzzyFieldMatchStrategy(
@@ -231,6 +234,7 @@ class TestIdentity:
         )
         assert strategy._min_confidence_threshold == 0.5
         assert strategy._score_collision_margin == 0.05
+        # ...stored, but no longer consulted by propose().
 
 
 # ===========================================================================
@@ -309,9 +313,12 @@ class TestProposeSingleMatch:
         assert op.op_type is FieldOpType.RENAME
         assert op.source_path == "cty"
         assert op.target_path == "city"
-        assert op.confidence == pytest.approx(0.75)
+        # propose() reports evidence; TrustPolicy assigns trust.
+        assert op.trust == 0.0
+        assert op.evidence.name_match is not None
+        assert TrustPolicy().evaluate(op)[1] is TrustDecision.APPLY
 
-    def test_rationale_contains_score_and_field_names(self) -> None:
+    def test_rationale_names_the_fields_and_evidence_carries_the_score(self) -> None:
         missing = make_violation(
             field_path="city", violation_type=ViolationType.MISSING_REQUIRED_FIELD
         )
@@ -325,7 +332,11 @@ class TestProposeSingleMatch:
         rationale = ops[0].rationale
         assert "cty" in rationale
         assert "city" in rationale
-        assert "0.75" in rationale
+        # The score left the rationale string and became structured evidence,
+        # which is what TrustPolicy.explain() renders.
+        assert "0.75" not in rationale
+        assert ops[0].evidence.name_match is not None
+        assert any("jaro-winkler" in note for note in ops[0].evidence.notes)
 
     def test_high_confidence_match_zip_code(self) -> None:
         """'zipcode' -> 'zip_code' scores 0.875."""
@@ -341,7 +352,10 @@ class TestProposeSingleMatch:
         strategy = FuzzyFieldMatchStrategy()
         ops = strategy.propose([missing, unexpected], make_contract(), {"zipcode": "400001"})
         assert len(ops) == 1
-        assert ops[0].confidence == pytest.approx(0.875)
+        # propose() reports evidence; TrustPolicy assigns trust.
+        assert ops[0].trust == 0.0
+        assert ops[0].evidence.name_match is not None
+        assert TrustPolicy().evaluate(ops[0])[1] is TrustDecision.APPLY
         assert ops[0].source_path == "zipcode"
         assert ops[0].target_path == "zip_code"
 
@@ -380,8 +394,13 @@ class TestProposeBelowThreshold:
         ops = strategy.propose([missing, unexpected], make_contract(), {"b": 1})
         assert ops == []
 
-    def test_custom_lower_threshold_allows_match(self) -> None:
-        """With threshold 0.1, even a low-similarity pair is proposed."""
+    def test_constructor_threshold_no_longer_lets_weak_matches_through(self) -> None:
+        """
+        'humidity' and 'temperature' are simply different words (similarity
+        0.477). The old constructor threshold could be lowered to force a
+        match anyway; it is now ignored, and a pair this dissimilar is not
+        proposed at all.
+        """
         missing = make_violation(
             field_path="temperature",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -393,8 +412,7 @@ class TestProposeBelowThreshold:
         )
         strategy = FuzzyFieldMatchStrategy(min_confidence_threshold=0.1)
         ops = strategy.propose([missing, unexpected], make_contract(), {"humidity": 80})
-        assert len(ops) == 1
-        assert ops[0].confidence == pytest.approx(0.18181818181818177)
+        assert ops == []
 
 
 # ===========================================================================
@@ -403,11 +421,14 @@ class TestProposeBelowThreshold:
 
 
 class TestProposeCollision:
-    def test_collision_proposes_nothing(self) -> None:
+    def test_collision_is_surfaced_as_ambiguous_not_dropped(self) -> None:
         """
-        'userId' and 'usr_id' both score 0.8571 against 'user_id' —
-        identical scores mean a collision (difference 0 < margin 0.15).
-        No rename should be proposed.
+        'userId' and 'usr_id' are both plausible renames of 'user_id'.
+
+        A near-tie used to make the strategy return nothing at all, so the
+        caller never learned a repair had been considered. Now the pairing is
+        proposed with its narrow margin recorded as evidence, and TrustPolicy
+        withholds it -- an outcome the caller can see and act on.
         """
         missing = make_violation(
             field_path="user_id",
@@ -429,11 +450,13 @@ class TestProposeCollision:
             make_contract(),
             {"userId": 1, "usr_id": 2},
         )
-        assert ops == []
+        assert len(ops) == 1
+        assert ops[0].evidence.margin is not None
+        assert ops[0].evidence.margin < 0.15
+        assert TrustPolicy().evaluate(ops[0])[1] is TrustDecision.AMBIGUOUS
 
     def test_collision_avoided_with_zero_margin(self) -> None:
-        """With margin=0.0, equal scores are NOT a collision (0 < 0 is False),
-        so the first-scored candidate (by registration order) is proposed."""
+        """A candidate with no competitor left is proposed outright."""
         missing = make_violation(
             field_path="user_id",
             violation_type=ViolationType.MISSING_REQUIRED_FIELD,
@@ -448,7 +471,7 @@ class TestProposeCollision:
             violation_type=ViolationType.UNEXPECTED_FIELD,
             severity=ViolationSeverity.WARNING,
         )
-        strategy = FuzzyFieldMatchStrategy(score_collision_margin=0.0)
+        strategy = FuzzyFieldMatchStrategy()
         ops = strategy.propose(
             [missing, unexpected1, unexpected2],
             make_contract(),
@@ -517,25 +540,22 @@ class TestProposeCollision:
         )
         data = {"abcdf": 1, "abcfg": 2}
 
-        # margin=0.25 > diff(0.2) -> collision -> no proposal
-        strategy_collide = FuzzyFieldMatchStrategy(
-            min_confidence_threshold=0.1, score_collision_margin=0.25
-        )
+        # 'abcdf' beats 'abcfg' by 0.107 -- narrow, but a real gap. The
+        # margin scales trust rather than vetoing the pairing outright, so a
+        # clear-enough winner is still applied.
+        strategy_collide = FuzzyFieldMatchStrategy()
         ops_collide = strategy_collide.propose(
             [missing, unexpected1, unexpected2], make_contract(), data
         )
-        assert ops_collide == []
+        assert len(ops_collide) == 1
+        assert ops_collide[0].source_path == "abcdf"
+        assert TrustPolicy().evaluate(ops_collide[0])[1] is TrustDecision.APPLY
 
-        # margin=0.1 < diff(0.2) -> no collision -> proposal made for best (abcdf, 0.8)
-        strategy_clear = FuzzyFieldMatchStrategy(
-            min_confidence_threshold=0.1, score_collision_margin=0.1
-        )
-        ops_clear = strategy_clear.propose(
-            [missing, unexpected1, unexpected2], make_contract(), data
-        )
-        assert len(ops_clear) == 1
-        assert ops_clear[0].source_path == "abcdf"
-        assert ops_clear[0].confidence == pytest.approx(0.8)
+        # The runner-up is recorded as evidence rather than silently
+        # discarded, so an explanation can name what nearly won.
+        assert ops_collide[0].evidence.margin == pytest.approx(0.107, abs=0.01)
+        assert ops_collide[0].evidence.alternatives_considered == 2
+        assert any("abcfg" in note for note in ops_collide[0].evidence.notes)
 
 
 # ===========================================================================
@@ -732,7 +752,10 @@ class TestProposeUnicode:
         strategy = FuzzyFieldMatchStrategy()
         ops = strategy.propose([missing, unexpected], make_contract(), {"cafe": "value"})
         assert len(ops) == 1
-        assert ops[0].confidence == pytest.approx(0.75)
+        # propose() reports evidence; TrustPolicy assigns trust.
+        assert ops[0].trust == 0.0
+        assert ops[0].evidence.name_match is not None
+        assert TrustPolicy().evaluate(ops[0])[1] is TrustDecision.APPLY
 
 
 # ===========================================================================
@@ -829,7 +852,7 @@ class TestNestedDepth2:
         assert len(ops) == 1
         assert ops[0].source_path == "address.zipcode"
         assert ops[0].target_path == "address.zip_code"
-        assert ops[0].confidence >= 0.7
+        assert TrustPolicy().evaluate(ops[0])[1] is TrustDecision.APPLY
 
     def test_depth2_shared_prefix_inflates_similarity(self) -> None:
         """The shared 'address.' prefix raises the score well above what
@@ -857,9 +880,12 @@ class TestNestedDepth2:
         strategy = FuzzyFieldMatchStrategy()
         data = {"billing": {"zipcode": "400001"}}
         ops = strategy.propose([missing, unexpected_wrong_branch], make_contract(), data)
-        # "address.zip_code" vs "billing.zipcode" scores far below threshold
-        # because their prefixes ("address." vs "billing.") differ entirely.
-        assert ops == []
+        # Still not applied -- but withheld visibly now. The pairing scores
+        # 0.636 because the field names really are similar; the differing
+        # branch prefixes hold it below the INFERRED bar, so it surfaces as
+        # AMBIGUOUS instead of vanishing without trace.
+        assert len(ops) == 1
+        assert TrustPolicy().evaluate(ops[0])[1] is TrustDecision.AMBIGUOUS
 
 
 class TestNestedDepth3:
@@ -886,7 +912,10 @@ class TestNestedDepth3:
         assert len(ops) == 1
         assert ops[0].source_path == "address.country.cod"
         assert ops[0].target_path == "address.country.code"
-        assert ops[0].confidence == pytest.approx(0.985)
+        # propose() reports evidence; TrustPolicy assigns trust.
+        assert ops[0].trust == 0.0
+        assert ops[0].evidence.name_match is not None
+        assert TrustPolicy().evaluate(ops[0])[1] is TrustDecision.APPLY
 
     def test_depth3_multiple_missing_in_same_branch(self) -> None:
         """Two missing fields in the same nested branch are each matched
@@ -996,21 +1025,24 @@ class TestNestedDepth3:
             "branchA": {"cod": "x"},
             "branchB": {"cod": "y"},
         }
-        scores_for_a = strategy._score_candidates("branchA.code", ["branchA.cod", "branchB.cod"])
-        # The same-branch candidate scores higher, but not by a wide
-        # margin -- "branchA" and "branchB" differ by only one character.
-        assert scores_for_a[0][0] == "branchA.cod"
-        margin = scores_for_a[0][1] - scores_for_a[1][1]
-        assert margin < 0.15  # within the default collision margin
-
         ops = strategy.propose(
             [missing_a, missing_b, unexpected_a, unexpected_b],
             make_contract(),
             data,
         )
-        # Collision detected for both missing fields -> no rename proposed
-        # for either. Safe-by-default: no silently wrong cross-branch fix.
-        assert ops == []
+
+        # Global assignment resolves what per-field collision detection could
+        # not. Scoring one missing field at a time, "branchA.cod" and
+        # "branchB.cod" are near-equidistant from "branchA.code", so the
+        # margin looked fatally narrow and BOTH renames were abandoned.
+        # Assigning across the whole problem instead, each candidate lands in
+        # its own branch, because taking "branchA.cod" for "branchA.code"
+        # leaves "branchB.cod" a perfect home rather than a contested one.
+        pairs = {(op.source_path, op.target_path) for op in ops}
+        assert pairs == {
+            ("branchA.cod", "branchA.code"),
+            ("branchB.cod", "branchB.code"),
+        }
 
 
 class TestDeeplyNestedInvalidPaths:

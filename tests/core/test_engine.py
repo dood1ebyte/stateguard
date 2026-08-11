@@ -16,7 +16,7 @@ from stateguard.core.engine import (
     _get_nested,
     _set_nested,
 )
-from stateguard.core.errors.operations import FieldOperation, FieldOpType
+from stateguard.core.errors.operations import FieldOperation, FieldOpType, RepairRisk
 from stateguard.core.errors.results import RepairStatus, ValidationResult
 from stateguard.core.errors.violations import (
     ContractViolation,
@@ -35,6 +35,7 @@ from stateguard.core.strategies import (
     TypeCoercionStrategy,
 )
 from stateguard.logging.logger import RepairLogger
+from stateguard.core.trust import TrustPolicy
 from tests.conftest import (
     CapturingTelemetryHook,
     MockContractAdapter,
@@ -421,7 +422,7 @@ class TestNoProgressDetection:
         noop_op = FieldOperation(
             op_type=FieldOpType.SET_VALUE,
             target_path="x",
-            confidence=1.0,
+            trust=1.0,
             rationale="no-op",
             value="hello",
         )
@@ -433,7 +434,12 @@ class TestNoProgressDetection:
 
         assert result.status is RepairStatus.FAILED
         assert len(result.attempts) == 1
-        assert result.attempts[0].applied_operations == [noop_op]
+        # An operation that changed nothing is not "applied". Recording it as
+        # applied made the audit trail -- and the durable history file --
+        # claim an edit that never happened.
+        assert result.attempts[0].applied_operations == []
+        assert noop_op in result.attempts[0].rejected_operations
+        assert "operation.no_effect" in {e.event for e in result.repair_log}
 
 
 # ===========================================================================
@@ -452,7 +458,7 @@ class TestRegressionDetection:
         bad_op = FieldOperation(
             op_type=FieldOpType.SET_VALUE,
             target_path="b",
-            confidence=1.0,
+            trust=1.0,
             rationale="introduces a type mismatch on b",
             value="oops",
         )
@@ -475,7 +481,7 @@ class TestRegressionDetection:
         bad_op = FieldOperation(
             op_type=FieldOpType.SET_VALUE,
             target_path="b",
-            confidence=1.0,
+            trust=1.0,
             rationale="introduces a type mismatch on b",
             value="oops",
         )
@@ -496,7 +502,7 @@ class TestRegressionDetection:
         bad_op = FieldOperation(
             op_type=FieldOpType.SET_VALUE,
             target_path="b",
-            confidence=1.0,
+            trust=1.0,
             rationale="introduces a type mismatch on b",
             value="oops",
         )
@@ -528,7 +534,7 @@ class TestPartialRepair:
         fix_a = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="a",
-            confidence=1.0,
+            trust=1.0,
             rationale="fix a only",
             value=1,
         )
@@ -607,7 +613,7 @@ class TestMaxAttemptsExhaustion:
         fix_a = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="a",
-            confidence=1.0,
+            trust=1.0,
             rationale="fix a only",
             value=1,
         )
@@ -648,14 +654,14 @@ class TestConfidenceThresholdFiltering:
         high = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="a",
-            confidence=0.9,
+            trust=0.9,
             rationale="high confidence",
             value=1,
         )
         low = FieldOperation(
             op_type=FieldOpType.REMOVE,
             target_path="nonexistent",
-            confidence=0.3,
+            trust=0.3,
             rationale="low confidence",
         )
         registry = StrategyRegistry(
@@ -679,14 +685,14 @@ class TestConfidenceThresholdFiltering:
         high = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="a",
-            confidence=0.9,
+            trust=0.9,
             rationale="high confidence",
             value=1,
         )
         low = FieldOperation(
             op_type=FieldOpType.SET_VALUE,
             target_path="b",
-            confidence=0.3,
+            trust=0.3,
             rationale="low confidence",
             value="should not be applied",
         )
@@ -698,20 +704,27 @@ class TestConfidenceThresholdFiltering:
 
         assert "b" not in result.attempts[0].data_after
 
-    def test_threshold_exactly_at_confidence_is_applied(self) -> None:
-        """confidence >= threshold (not strictly >) is applied."""
+    def test_trust_exactly_at_the_band_is_applied(self) -> None:
+        """
+        ``trust >= apply_at`` (not strictly >) is applied.
+
+        The bar comes from the operation's RepairRisk band rather than a
+        single global threshold, so this pins the boundary for INFERRED --
+        the tier a strategy gets when it does not declare one.
+        """
         contract = ContractSpec(fields=[FieldSpec("a", FieldType.INTEGER)])
+        band = TrustPolicy().band_for(RepairRisk.INFERRED)
         op = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="a",
-            confidence=0.7,
-            rationale="exactly at threshold",
+            trust=band.apply_at,
+            rationale="exactly at the INFERRED apply threshold",
             value=1,
         )
         registry = StrategyRegistry(
             [MockRepairStrategy(name="Exact", priority=10, handle=True, operations=[op])]
         )
-        engine = make_engine(registry=registry, config=RepairConfig(min_confidence_threshold=0.7))
+        engine = make_engine(registry=registry)
         result = engine.repair(contract, {}, MockContractAdapter())
         assert result.attempts[0].applied_operations == [op]
         assert result.attempts[0].rejected_operations == []
@@ -721,7 +734,7 @@ class TestConfidenceThresholdFiltering:
         low = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="a",
-            confidence=0.1,
+            trust=0.1,
             rationale="too low",
             value=1,
         )
@@ -1098,8 +1111,21 @@ class TestCoerceValue:
         members = (UnionMember(FieldType.INTEGER), UnionMember(FieldType.OBJECT))
         assert _coerce_value("42", FieldType.UNION, union_members=members) == 42
 
-    def test_union_ambiguous_tie_fails(self) -> None:
+    def test_union_picks_the_member_that_preserves_the_value_best(self) -> None:
+        """
+        ``"42"`` against ``int | float`` is no longer a tie.
+
+        Both casts used to carry the same hand-picked constant, so the union
+        refused to choose. Measured round-trip fidelity separates them:
+        ``str(int("42")) == "42"`` exactly, while ``str(float("42"))`` is
+        ``"42.0"``. The integer member preserves the value, so it wins.
+        """
         members = (UnionMember(FieldType.INTEGER), UnionMember(FieldType.FLOAT))
+        assert _coerce_value("42", FieldType.UNION, union_members=members) == 42
+
+    def test_union_genuinely_equal_members_still_refuse(self) -> None:
+        """Two members that measure identically remain ambiguous."""
+        members = (UnionMember(FieldType.INTEGER), UnionMember(FieldType.INTEGER))
         assert _coerce_value("42", FieldType.UNION, union_members=members) is _COERCE_FAILED
 
     def test_union_without_members_fails(self) -> None:
@@ -1130,7 +1156,7 @@ class TestApplyOperationDirect:
         op = FieldOperation(
             op_type=FieldOpType.RENAME,
             target_path="temperature",
-            confidence=1.0,
+            trust=1.0,
             rationale="r",
             source_path="temp_celsius",
         )
@@ -1143,7 +1169,7 @@ class TestApplyOperationDirect:
         op = FieldOperation(
             op_type=FieldOpType.RENAME,
             target_path="address.zip_code",
-            confidence=1.0,
+            trust=1.0,
             rationale="r",
             source_path="address.zip",
         )
@@ -1156,7 +1182,7 @@ class TestApplyOperationDirect:
         op = FieldOperation(
             op_type=FieldOpType.RENAME,
             target_path="temperature",
-            confidence=1.0,
+            trust=1.0,
             rationale="r",
             source_path="missing_source",
         )
@@ -1169,7 +1195,7 @@ class TestApplyOperationDirect:
         op = FieldOperation(
             op_type=FieldOpType.COERCE,
             target_path="count",
-            confidence=0.95,
+            trust=0.95,
             rationale="r",
         )
         self._engine()._apply_operation(data, op, contract)
@@ -1182,7 +1208,7 @@ class TestApplyOperationDirect:
         op = FieldOperation(
             op_type=FieldOpType.COERCE,
             target_path="count",
-            confidence=0.95,
+            trust=0.95,
             rationale="r",
         )
         self._engine()._apply_operation(data, op, contract)
@@ -1194,7 +1220,7 @@ class TestApplyOperationDirect:
         op = FieldOperation(
             op_type=FieldOpType.COERCE,
             target_path="other",
-            confidence=0.95,
+            trust=0.95,
             rationale="r",
         )
         self._engine()._apply_operation(data, op, contract)
@@ -1206,7 +1232,7 @@ class TestApplyOperationDirect:
         op = FieldOperation(
             op_type=FieldOpType.COERCE,
             target_path="count",
-            confidence=0.95,
+            trust=0.95,
             rationale="r",
         )
         self._engine()._apply_operation(data, op, contract)
@@ -1218,7 +1244,7 @@ class TestApplyOperationDirect:
         op = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="humidity",
-            confidence=1.0,
+            trust=1.0,
             rationale="r",
             value=60,
         )
@@ -1231,7 +1257,7 @@ class TestApplyOperationDirect:
         op = FieldOperation(
             op_type=FieldOpType.REMOVE,
             target_path="extra",
-            confidence=1.0,
+            trust=1.0,
             rationale="r",
         )
         self._engine()._apply_operation(data, op, contract)
@@ -1243,7 +1269,7 @@ class TestApplyOperationDirect:
         op = FieldOperation(
             op_type=FieldOpType.SET_VALUE,
             target_path="status",
-            confidence=0.5,
+            trust=0.5,
             rationale="r",
             value="forced",
         )
@@ -1331,7 +1357,7 @@ class TestTelemetryEmission:
         low = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="a",
-            confidence=0.1,
+            trust=0.1,
             rationale="too low",
             value=1,
         )
