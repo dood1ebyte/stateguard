@@ -69,14 +69,14 @@ class CaseOutcome:
     expected_status: str
     actual_status: str
     passed: bool
-    confidences: list[float] = field(default_factory=list)
+    trusts: list[float] = field(default_factory=list)
     error: str | None = None
 
     @property
-    def average_confidence(self) -> float | None:
-        if not self.confidences:
+    def average_trust(self) -> float | None:
+        if not self.trusts:
             return None
-        return sum(self.confidences) / len(self.confidences)
+        return sum(self.trusts) / len(self.trusts)
 
 
 @dataclass
@@ -87,9 +87,32 @@ class BenchmarkSummary:
     total_cases: int
     passed_cases: int
     failed_cases: int
-    repaired_cases: int  # cases whose actual_status is success or partial
-    repair_rate: float  # repaired_cases / total_cases
-    average_confidence: float | None
+
+    # A case is *repairable* when its own expected_result says so. Cases
+    # expecting "already_valid" have nothing to repair, and the case expecting
+    # "failed" exists to prove StateGuard refuses to guess -- repairing it
+    # would be a bug. Dividing by total_cases counted both as repair failures,
+    # which made 77.8% the maximum achievable score on a suite where every
+    # case was behaving correctly.
+    #
+    # A repairable case counts in the numerator only when it *passed* -- the
+    # status matches exactly and any declared min_confidence was met. Asking
+    # only whether the outcome landed somewhere in {success, partial} let a
+    # case degrade from success to partial while repair_rate still read 100%,
+    # so the headline number could not see the regression it exists to catch.
+    repairable_cases: int
+    repaired_correctly: int
+    repair_rate: float  # repaired_correctly / repairable_cases -- recall
+
+    # Of the cases StateGuard chose to repair, how many should it have?
+    # A case that repairs when its expected_result says "failed" is a false
+    # positive: a silently wrong repair, which is the failure mode that
+    # actually costs users data.
+    attempted_repairs: int
+    false_positives: int
+    precision: float | None
+
+    average_trust: float | None
     outcomes: list[CaseOutcome]
 
     def to_dict(self) -> dict[str, Any]:
@@ -98,9 +121,13 @@ class BenchmarkSummary:
             "total_cases": self.total_cases,
             "passed_cases": self.passed_cases,
             "failed_cases": self.failed_cases,
-            "repaired_cases": self.repaired_cases,
+            "repairable_cases": self.repairable_cases,
+            "repaired_correctly": self.repaired_correctly,
             "repair_rate": self.repair_rate,
-            "average_confidence": self.average_confidence,
+            "attempted_repairs": self.attempted_repairs,
+            "false_positives": self.false_positives,
+            "precision": self.precision,
+            "average_trust": self.average_trust,
             "outcomes": [
                 {
                     "name": o.name,
@@ -108,7 +135,7 @@ class BenchmarkSummary:
                     "expected_status": o.expected_status,
                     "actual_status": o.actual_status,
                     "passed": o.passed,
-                    "average_confidence": o.average_confidence,
+                    "average_trust": o.average_trust,
                     "error": o.error,
                 }
                 for o in self.outcomes
@@ -155,13 +182,14 @@ def run_case(case: dict[str, Any]) -> CaseOutcome:
         actual_status = result.status.value
         passed = actual_status == expected_status
 
+        # `min_confidence` keeps its name in the case files (it is the on-disk
+        # format), but the value it is compared against is the policy-computed
+        # trust score -- op.confidence is a deprecated read-only alias due to
+        # be removed, and reads identically.
         min_confidence = expected.get("min_confidence")
-        confidences = [
-            op.confidence for attempt in result.attempts for op in attempt.applied_operations
-        ]
-        if passed and min_confidence is not None and confidences:
-            if min(confidences) < min_confidence:
-                passed = False
+        trusts = [op.trust for attempt in result.attempts for op in attempt.applied_operations]
+        if passed and min_confidence is not None and trusts and min(trusts) < min_confidence:
+            passed = False
 
         return CaseOutcome(
             name=name,
@@ -169,7 +197,7 @@ def run_case(case: dict[str, Any]) -> CaseOutcome:
             expected_status=expected_status,
             actual_status=actual_status,
             passed=passed,
-            confidences=confidences,
+            trusts=trusts,
         )
     except Exception as exc:  # noqa: BLE001 -- a case-level crash must not kill the run
         return CaseOutcome(
@@ -194,20 +222,34 @@ def run_benchmark(cases: list[dict[str, Any]]) -> BenchmarkSummary:
     total = len(outcomes)
     passed = sum(1 for o in outcomes if o.passed)
     failed = total - passed
-    repaired = sum(1 for o in outcomes if o.actual_status in ("success", "partial"))
-    repair_rate = repaired / total if total else 0.0
 
-    all_confidences = [c for o in outcomes for c in o.confidences]
-    average_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else None
+    did_repair = {"success", "partial"}
+    repairable = [o for o in outcomes if o.expected_status in did_repair]
+    attempted = [o for o in outcomes if o.actual_status in did_repair]
+
+    # `o.passed`, not `o.actual_status in did_repair`: a repairable case only
+    # counts as repaired when it landed on the status it was supposed to.
+    repaired_correctly = sum(1 for o in repairable if o.passed)
+    false_positives = sum(1 for o in attempted if o.expected_status not in did_repair)
+
+    repair_rate = repaired_correctly / len(repairable) if repairable else 0.0
+    precision = (len(attempted) - false_positives) / len(attempted) if attempted else None
+
+    all_trust = [t for o in outcomes for t in o.trusts]
+    average_trust = sum(all_trust) / len(all_trust) if all_trust else None
 
     return BenchmarkSummary(
         timestamp=datetime.now(timezone.utc).isoformat(),
         total_cases=total,
         passed_cases=passed,
         failed_cases=failed,
-        repaired_cases=repaired,
+        repairable_cases=len(repairable),
+        repaired_correctly=repaired_correctly,
         repair_rate=repair_rate,
-        average_confidence=average_confidence,
+        attempted_repairs=len(attempted),
+        false_positives=false_positives,
+        precision=precision,
+        average_trust=average_trust,
         outcomes=outcomes,
     )
 
@@ -225,9 +267,20 @@ def print_summary(summary: BenchmarkSummary, verbose: bool = False) -> None:
     print(f"  Total cases:        {summary.total_cases}")
     print(f"  Passed:             {summary.passed_cases}")
     print(f"  Failed:             {summary.failed_cases}")
-    print(f"  Repaired:           {summary.repaired_cases}")
-    print(f"  Repair rate:        {summary.repair_rate:.1%}")
-    avg = summary.average_confidence
+    print()
+    print(
+        f"  Repair rate:        {summary.repair_rate:.1%}  "
+        f"({summary.repaired_correctly}/{summary.repairable_cases} repairable cases repaired)"
+    )
+    if summary.precision is None:
+        print("  Precision:          n/a  (no repairs attempted)")
+    else:
+        print(
+            f"  Precision:          {summary.precision:.1%}  "
+            f"({summary.false_positives} wrong repair(s) "
+            f"of {summary.attempted_repairs} attempted)"
+        )
+    avg = summary.average_trust
     print(f"  Average trust:      {avg:.3f}" if avg is not None else "  Average trust:      n/a")
     print("=" * 60)
     print()

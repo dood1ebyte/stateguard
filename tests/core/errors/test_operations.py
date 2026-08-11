@@ -6,7 +6,11 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from stateguard.core.errors.operations import FieldOperation, FieldOpType
+from stateguard.core.errors.operations import (
+    FieldOperation,
+    FieldOpType,
+    RepairEvidence,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -435,3 +439,22 @@ class TestFieldOperationAllOpTypes:
     def test_out_of_range_confidence_values_raise(self, trust: float) -> None:
         with pytest.raises(ValueError):
             _remove(trust=trust)
+
+
+class TestEvidenceRangeValidation:
+    """Every evidence score is a [0, 1] quantity; nothing else is meaningful."""
+
+    @pytest.mark.parametrize(
+        "label", ["name_match", "value_preserved", "schema_authority", "margin"]
+    )
+    @pytest.mark.parametrize("score", [-0.01, 1.01, 2.0, -1.0])
+    def test_out_of_range_scores_raise(self, label: str, score: float) -> None:
+        with pytest.raises(ValueError, match=f"RepairEvidence.{label} must be in"):
+            RepairEvidence(**{label: score})
+
+    @pytest.mark.parametrize("score", [0.0, 0.5, 1.0])
+    def test_boundary_scores_are_accepted(self, score: float) -> None:
+        assert RepairEvidence(name_match=score).name_match == score
+
+    def test_none_means_not_applicable_and_is_never_range_checked(self) -> None:
+        assert RepairEvidence().applicable_scores == ()

@@ -225,8 +225,9 @@ class FieldOperation:
     ``FieldOperation`` is a **frozen** dataclass.  Once proposed, an operation
     is never modified.  The engine scores, applies, or rejects operations but
     does not alter them, ensuring the ``RepairAttempt`` audit trail is a
-    faithful record of what was proposed.  Scoring produces a *new* instance
-    via ``with_trust``.
+    faithful record of what was proposed.  Scoring produces a *new* instance:
+    ``TrustPolicy.evaluate`` returns ``dataclasses.replace(op, trust=...)``
+    rather than writing to the original.
 
     Hashability
     -----------

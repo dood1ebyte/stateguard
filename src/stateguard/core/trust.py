@@ -297,8 +297,16 @@ class TrustPolicy:
         Contains no field values — only paths, scores, and the cut-points that
         were applied — so it is safe to log regardless of
         ``RepairConfig.include_values_in_log``.
+
+        The cut-points rendered are the **effective** ones from
+        ``band_for`` — the tier's own band as raised by ``minimum_trust`` —
+        not the raw defaults.  Reading ``self._bands`` directly here made the
+        explanation contradict the decision it was explaining: a policy with
+        ``minimum_trust=0.99`` would abstain on a trust-0.89 INFERRED rename
+        and then print "applies at 0.75", which reads as an engine bug rather
+        than as the caller's own threshold doing its job.
         """
-        band = self._bands[operation.risk]
+        band = self.band_for(operation.risk)
         source = f" <- {operation.source_path}" if operation.source_path else ""
         lines = [
             f"{operation.op_type.value.upper()}  {operation.target_path}{source}"

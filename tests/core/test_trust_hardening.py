@@ -338,3 +338,99 @@ class TestMinimumTrustFloor:
 
         assert policy.band_for(RepairRisk.INFERRED).apply_at == pytest.approx(0.75)
         assert policy.band_for(RepairRisk.LOSSY).apply_at == pytest.approx(0.95)
+
+
+# ===========================================================================
+# What the caller is told about an abstention
+# ===========================================================================
+
+
+class TestAmbiguityReasonIsTrue:
+    """
+    ``AmbiguousRepair.reason`` is the field a caller reads to decide what to
+    do. It has to be a true statement about why the repair was withheld.
+
+    There are exactly two ways to abstain: the trust score fell short, or it
+    cleared the bar and the source key was already withheld earlier in the
+    run. Reporting both as "below the threshold" produced text that
+    contradicted its own numbers.
+    """
+
+    CONTESTED = {
+        "fields": [
+            {"path": "user_id", "type": "string"},
+            {"path": "user_name", "type": "string", "default": "anon"},
+        ]
+    }
+
+    def test_a_held_source_is_not_described_as_below_threshold(self) -> None:
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(self.CONTESTED, {"user_email": "a@b.com"})
+
+        held = next(a for a in result.ambiguous if a.target_path == "user_id")
+        best = held.best
+        assert best is not None
+
+        # The rename to user_id scores 0.891, which clears INFERRED's 0.75
+        # bar -- it was withheld because user_email had already been declined.
+        assert best.trust > 0.75
+        assert "below" not in held.reason
+        assert "already withheld" in held.reason
+        assert "user_email" in held.reason
+
+    def test_a_genuinely_low_score_still_says_below(self) -> None:
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(self.CONTESTED, {"user_email": "a@b.com"})
+
+        low = next(a for a in result.ambiguous if a.target_path == "user_name")
+        best = low.best
+        assert best is not None
+        assert best.trust < 0.75
+        assert "is below the INFERRED threshold" in low.reason
+
+    def test_the_reason_describes_the_top_ranked_candidate(self) -> None:
+        """Merging rivals must not leave the reason describing a lower one."""
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(self.CONTESTED, {"user_email": "a@b.com"})
+        for entry in result.ambiguous:
+            best = entry.best
+            assert best is not None
+            assert f"{best.trust:.2f}" in entry.reason
+
+
+class TestAttemptAttribution:
+    """
+    An attempt may consult several strategies before one has something it can
+    apply. ``proposed_operations`` therefore spans all of them, so the record
+    has to say which ones were consulted or the operations cannot be
+    attributed at all.
+    """
+
+    def test_considered_strategies_records_every_strategy_consulted(self) -> None:
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(
+            {
+                "fields": [
+                    {"path": "user_id", "type": "string"},
+                    {"path": "user_name", "type": "string", "default": "anon"},
+                ]
+            },
+            {"user_email": "a@b.com"},
+        )
+
+        first = result.attempts[0]
+        # Fuzzy proposed a rename it abstained on, so the engine moved on to
+        # the default fill -- whose name is the one on strategy_name.
+        assert first.strategy_name == "DefaultValueFillStrategy"
+        assert "FuzzyFieldMatchStrategy" in first.considered_strategies
+        assert first.considered_strategies[-1] == first.strategy_name
+        # The carried proposal is present, and now attributable.
+        assert any(op.source_path == "user_email" for op in first.proposed_operations)
+
+    def test_a_single_strategy_attempt_lists_only_itself(self) -> None:
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(
+            {"fields": [{"path": "temperature", "type": "float"}]},
+            {"temperature": "31.5"},
+        )
+        assert result.attempts[0].considered_strategies == ["TypeCoercionStrategy"]

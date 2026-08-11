@@ -274,3 +274,24 @@ class TestEndToEnd:
 
         assert result.status is RepairStatus.AMBIGUOUS
         assert result.repaired_output is None
+
+
+class TestIdenticalNamesAreNotRenamed:
+    def test_a_name_that_matches_itself_proposes_nothing(self) -> None:
+        """
+        A path reported as both missing and unexpected normalises to itself.
+        Renaming it to itself is a no-op the engine would have to discard, so
+        the pair is dropped before it becomes a proposal.
+        """
+        missing = make_violation(
+            field_path="user_id",
+            violation_type=ViolationType.MISSING_REQUIRED_FIELD,
+        )
+        unexpected = make_violation(
+            field_path="user_id",
+            violation_type=ViolationType.UNEXPECTED_FIELD,
+            severity=ViolationSeverity.WARNING,
+        )
+        strategy = NormalizedNameStrategy()
+        assert strategy._pairs([missing, unexpected]) == {}
+        assert strategy.propose([missing, unexpected], _contract("user_id"), {"user_id": 1}) == []

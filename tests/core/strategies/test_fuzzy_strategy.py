@@ -8,205 +8,14 @@ from stateguard.core.errors.operations import FieldOpType
 from stateguard.core.errors.violations import ViolationSeverity, ViolationType
 from stateguard.core.models.contract import ContractSpec, FieldSpec
 from stateguard.core.models.field_types import FieldType
-from stateguard.core.trust import TrustDecision, TrustPolicy
 from stateguard.core.strategies.fuzzy import (
     FuzzyFieldMatchStrategy,
-    _combined_score,
-    _levenshtein_distance,
-    _normalized_score,
-    _token_prefix_boost,
+    jaro_winkler,
+    score_assignments,
 )
+from stateguard.core.trust import TrustDecision, TrustPolicy
+from stateguard.guard import ContractGuard
 from tests.conftest import make_violation
-
-
-# ===========================================================================
-# _levenshtein_distance
-# ===========================================================================
-
-
-class TestLevenshteinDistance:
-    def test_identical_strings(self) -> None:
-        assert _levenshtein_distance("hello", "hello") == 0
-
-    def test_empty_vs_empty(self) -> None:
-        assert _levenshtein_distance("", "") == 0
-
-    def test_empty_vs_nonempty(self) -> None:
-        assert _levenshtein_distance("", "abc") == 3
-
-    def test_nonempty_vs_empty(self) -> None:
-        assert _levenshtein_distance("abc", "") == 3
-
-    def test_single_substitution(self) -> None:
-        assert _levenshtein_distance("cat", "bat") == 1
-
-    def test_single_insertion(self) -> None:
-        assert _levenshtein_distance("cat", "cats") == 1
-
-    def test_single_deletion(self) -> None:
-        assert _levenshtein_distance("cats", "cat") == 1
-
-    def test_completely_different_equal_length(self) -> None:
-        assert _levenshtein_distance("abc", "xyz") == 3
-
-    def test_is_symmetric(self) -> None:
-        assert _levenshtein_distance("kitten", "sitting") == _levenshtein_distance(
-            "sitting", "kitten"
-        )
-
-    def test_classic_kitten_sitting(self) -> None:
-        assert _levenshtein_distance("kitten", "sitting") == 3
-
-    def test_case_sensitive(self) -> None:
-        """_levenshtein_distance itself is case-sensitive; normalization
-        happens in _normalized_score."""
-        assert _levenshtein_distance("ABC", "abc") == 3
-
-    def test_single_character_strings(self) -> None:
-        assert _levenshtein_distance("a", "b") == 1
-        assert _levenshtein_distance("a", "a") == 0
-
-    def test_unicode_strings(self) -> None:
-        assert _levenshtein_distance("café", "cafe") == 1
-
-    def test_longer_first_argument(self) -> None:
-        assert _levenshtein_distance("temp_celsius", "temperature") == 7
-
-    def test_shorter_first_argument(self) -> None:
-        # Same pair, arguments swapped — must be symmetric.
-        assert _levenshtein_distance("temperature", "temp_celsius") == 7
-
-
-# ===========================================================================
-# _normalized_score
-# ===========================================================================
-
-
-class TestNormalizedScore:
-    def test_identical_strings_score_one(self) -> None:
-        assert _normalized_score("hello", "hello") == 1.0
-
-    def test_case_insensitive_identical_scores_one(self) -> None:
-        assert _normalized_score("ABC", "abc") == 1.0
-
-    def test_both_empty_scores_one(self) -> None:
-        assert _normalized_score("", "") == 1.0
-
-    def test_empty_vs_nonempty_scores_zero(self) -> None:
-        assert _normalized_score("", "x") == 0.0
-
-    def test_completely_different_equal_length_scores_zero(self) -> None:
-        assert _normalized_score("a", "b") == 0.0
-
-    def test_is_symmetric(self) -> None:
-        assert _normalized_score("user_id", "userId") == _normalized_score("userId", "user_id")
-
-    def test_score_is_in_unit_interval(self) -> None:
-        for a, b in [
-            ("temperature", "temp_celsius"),
-            ("a", "b"),
-            ("", ""),
-            ("x", ""),
-            ("hello", "hello"),
-        ]:
-            score = _normalized_score(a, b)
-            assert 0.0 <= score <= 1.0
-
-    @pytest.mark.parametrize(
-        ("a", "b", "expected"),
-        [
-            ("city", "cty", 0.75),
-            ("zip_code", "zipcode", 0.875),
-            ("zip_code", "postal_code", 0.45454545454545454),
-            ("user_id", "userId", 0.8571428571428572),
-            ("user_id", "usr_id", 0.8571428571428572),
-            ("temperature", "humidity", 0.18181818181818177),
-            ("temperature", "temp_celsius", 0.41666666666666663),
-            ("café", "cafe", 0.75),
-        ],
-    )
-    def test_known_value_table(self, a: str, b: str, expected: float) -> None:
-        assert _normalized_score(a, b) == pytest.approx(expected)
-
-
-# ===========================================================================
-# _token_prefix_boost
-# ===========================================================================
-
-
-class TestTokenPrefixBoost:
-    def test_temp_celsius_vs_temperature(self) -> None:
-        """The motivating example: 'temp' is a token-prefix of 'temperature'."""
-        score = _token_prefix_boost("temperature", "temp_celsius")
-        assert score == pytest.approx(0.8)
-
-    def test_temp_kelvin_vs_temperature(self) -> None:
-        score = _token_prefix_boost("temperature", "temp_kelvin")
-        assert score == pytest.approx(0.8090909090909091)
-
-    def test_symmetric(self) -> None:
-        assert _token_prefix_boost("temperature", "temp_celsius") == pytest.approx(
-            _token_prefix_boost("temp_celsius", "temperature")
-        )
-
-    def test_no_relationship_returns_zero(self) -> None:
-        assert _token_prefix_boost("temperature", "humidity") == 0.0
-
-    def test_short_token_below_minimum_length_ignored(self) -> None:
-        """'id' (2 chars) is below _MIN_PREFIX_TOKEN_LENGTH (3); no boost."""
-        assert _token_prefix_boost("user_id", "usr_id") == 0.0
-
-    def test_unrelated_strings_without_underscore_no_boost(self) -> None:
-        """Two unrelated whole-string tokens (no underscore, no prefix
-        relationship) receive no boost."""
-        assert _token_prefix_boost("temperature", "humidity") == 0.0
-
-    def test_case_insensitive(self) -> None:
-        score = _token_prefix_boost("TEMPERATURE", "TEMP_CELSIUS")
-        assert score == pytest.approx(0.8)
-
-    def test_empty_strings_return_zero(self) -> None:
-        assert _token_prefix_boost("", "") == 0.0
-
-    def test_token_longer_than_other_string_no_match(self) -> None:
-        assert _token_prefix_boost("ab_cdefgh", "ab") == 0.0
-
-    def test_exact_match_via_whole_string_token(self) -> None:
-        """A whole (no-underscore) name that is itself a prefix of the
-        other name still qualifies as a token."""
-        score = _token_prefix_boost("temp", "temperature")
-        assert score == pytest.approx(0.8090909090909091)
-
-
-# ===========================================================================
-# _combined_score
-# ===========================================================================
-
-
-class TestCombinedScore:
-    def test_temp_celsius_clears_default_threshold(self) -> None:
-        """The canonical scenario: combined score clears the engine's
-        default min_confidence_threshold (0.7)."""
-        assert _combined_score("temperature", "temp_celsius") >= 0.7
-
-    def test_combined_is_max_of_both_signals(self) -> None:
-        a, b = "temperature", "temp_celsius"
-        expected = max(_normalized_score(a, b), _token_prefix_boost(a, b))
-        assert _combined_score(a, b) == expected
-
-    def test_boost_never_lowers_a_strong_levenshtein_match(self) -> None:
-        """zip_code/zipcode: Levenshtein (0.875) already exceeds the
-        token-prefix boost (0.8125); combined must equal the higher value."""
-        assert _combined_score("zip_code", "zipcode") == pytest.approx(0.875)
-
-    def test_boost_raises_a_weak_levenshtein_match(self) -> None:
-        assert _combined_score("temperature", "temp_celsius") == pytest.approx(0.8)
-
-    def test_unrelated_strings_stay_low(self) -> None:
-        assert _combined_score("xyz", "temperature") < 0.5
-
-    def test_identical_strings_score_one(self) -> None:
-        assert _combined_score("city", "city") == 1.0
 
 
 # ===========================================================================
@@ -785,35 +594,6 @@ class TestInternalHelpers:
         result = FuzzyFieldMatchStrategy._find_unexpected_keys([v1, v2])
         assert result == ["b"]
 
-    def test_score_candidates_sorted_descending(self) -> None:
-        result = FuzzyFieldMatchStrategy._score_candidates("zip_code", ["postal_code", "zipcode"])
-        assert [c for c, _ in result] == ["zipcode", "postal_code"]
-        assert result[0][1] > result[1][1]
-
-    def test_score_candidates_empty(self) -> None:
-        result = FuzzyFieldMatchStrategy._score_candidates("zip_code", [])
-        assert result == []
-
-    def test_check_collision_true_when_close(self) -> None:
-        scores = [("a", 0.8), ("b", 0.75)]
-        assert FuzzyFieldMatchStrategy._check_collision(scores, margin=0.1) is True
-
-    def test_check_collision_false_when_far_apart(self) -> None:
-        scores = [("a", 0.9), ("b", 0.5)]
-        assert FuzzyFieldMatchStrategy._check_collision(scores, margin=0.15) is False
-
-    def test_check_collision_false_with_single_candidate(self) -> None:
-        scores = [("a", 0.9)]
-        assert FuzzyFieldMatchStrategy._check_collision(scores, margin=0.15) is False
-
-    def test_check_collision_false_with_no_candidates(self) -> None:
-        assert FuzzyFieldMatchStrategy._check_collision([], margin=0.15) is False
-
-    def test_check_collision_exact_boundary(self) -> None:
-        """Difference exactly equal to margin is NOT a collision (< not <=)."""
-        scores = [("a", 0.80), ("b", 0.65)]
-        assert FuzzyFieldMatchStrategy._check_collision(scores, margin=0.15) is False
-
 
 # ===========================================================================
 # Nested fields (M9 hardening — depth 2 and depth 3)
@@ -858,10 +638,8 @@ class TestNestedDepth2:
         """The shared 'address.' prefix raises the score well above what
         the bare field names ('city' vs 'cty', already 0.75) would give
         alone -- nesting context makes the match even more confident."""
-        bare_score = FuzzyFieldMatchStrategy._score_candidates("city", ["cty"])[0][1]
-        nested_score = FuzzyFieldMatchStrategy._score_candidates("address.city", ["address.cty"])[
-            0
-        ][1]
+        bare_score = jaro_winkler("city", "cty")
+        nested_score = jaro_winkler("address.city", "address.cty")
         assert nested_score > bare_score
 
     def test_depth2_cross_branch_not_matched_by_default(self) -> None:
@@ -1072,3 +850,92 @@ class TestDeeplyNestedInvalidPaths:
         # enforced by this strategy.
         assert len(ops) == 1
         assert ops[0].target_path == "a.b.c.d.e.f"
+
+
+# ===========================================================================
+# score_assignments — competition is counted over the whole problem
+# ===========================================================================
+
+
+class TestMarginCountsConsumedEndpoints:
+    """
+    A pairing's margin must count every field and key in the payload, not only
+    the ones later iterations still have available.
+
+    Measuring against the residual made the margin an artefact of assignment
+    order: the last pairing in a run faced no remaining rivals by
+    construction, scored ``margin = 1.0``, and collected full trust however
+    contested it had actually been.
+    """
+
+    def test_consumed_target_still_counts_against_the_margin(self) -> None:
+        assignments = score_assignments(["user_id", "user_name"], ["user_email", "user_names"])
+        by_target = {a.target: a for a in assignments}
+
+        # Taken first, consuming user_name.
+        assert by_target["user_name"].candidate == "user_names"
+
+        # user_email fits the consumed user_name (0.913) marginally better
+        # than the user_id it was left with (0.891), so it is maximally
+        # contested -- not uncontested, which is what the residual-only
+        # measurement reported.
+        contested = by_target["user_id"]
+        assert contested.candidate == "user_email"
+        assert contested.margin == pytest.approx(0.0)
+        assert contested.runner_up == "user_name"
+        assert contested.runner_up_kind == "target"
+
+    def test_the_contested_rename_is_withheld_despite_the_decoy(self) -> None:
+        """
+        The regression this guards: a second, unrelated rename in the same
+        payload used to consume user_email's competitor and let the email
+        address land in user_id at trust 0.891.
+        """
+        guard = ContractGuard.with_dict_schema()
+        schema = {
+            "fields": [
+                {"path": "user_id", "type": "string"},
+                {"path": "user_name", "type": "string"},
+            ]
+        }
+        result = guard.repair(schema, {"user_email": "a@b.com", "user_names": "arnav"})
+
+        assert result.repaired_output is not None
+        # The legitimate rename still applies...
+        assert result.repaired_output["user_name"] == "arnav"
+        # ...and the contested one does not.
+        assert "user_id" not in result.repaired_output
+        assert [a.target_path for a in result.ambiguous] == ["user_id"]
+
+    def test_an_uncontested_pairing_still_earns_full_credit(self) -> None:
+        """Counting the full problem must not penalise a genuinely lone pair."""
+        assignments = score_assignments(["temperature"], ["temp_celsius"])
+        assert assignments[0].margin == 1.0
+        assert assignments[0].runner_up is None
+
+
+class TestSimilarityEdges:
+    """The degenerate inputs `_jaro` short-circuits on."""
+
+    def test_identical_strings_score_one(self) -> None:
+        assert jaro_winkler("temperature", "temperature") == 1.0
+
+    def test_case_only_difference_scores_one(self) -> None:
+        """Comparison is case-insensitive, so this takes the identity path."""
+        assert jaro_winkler("UserID", "userid") == 1.0
+
+    @pytest.mark.parametrize(("a", "b"), [("", "city"), ("city", ""), ("", "")])
+    def test_empty_operand_scores_zero_or_identity(self, a: str, b: str) -> None:
+        score = jaro_winkler(a, b)
+        assert score == (1.0 if a == b else 0.0)
+
+
+class TestAssignmentRequiresBothSides:
+    @pytest.mark.parametrize(
+        ("missing", "unexpected"),
+        [([], ["cty"]), (["city"], []), ([], [])],
+    )
+    def test_nothing_to_pair_returns_no_assignments(
+        self, missing: list[str], unexpected: list[str]
+    ) -> None:
+        assert score_assignments(missing, unexpected) == []

@@ -324,3 +324,82 @@ class TestConfidenceAlias:
                 rationale="r",
                 confidence=0.42,
             )
+
+
+# ===========================================================================
+# Effective bands
+# ===========================================================================
+
+
+class TestExplainReportsEffectiveBands:
+    """
+    ``explain()`` must render the cut-points that were actually applied.
+
+    Reading the raw per-risk bands made the explanation contradict the
+    decision it was explaining as soon as ``minimum_trust`` raised a tier's
+    bar -- which reads as an engine bug rather than as the caller's own
+    threshold doing its job.
+    """
+
+    def _rename(self) -> FieldOperation:
+        return FieldOperation(
+            op_type=FieldOpType.RENAME,
+            target_path="user_id",
+            rationale="r",
+            source_path="user_email",
+            risk=RepairRisk.INFERRED,
+            evidence=RepairEvidence(name_match=0.891, margin=1.0),
+        )
+
+    def test_raised_bar_is_the_one_explained(self) -> None:
+        policy = TrustPolicy(minimum_trust=0.99)
+        scored, decision = policy.evaluate(self._rename())
+
+        assert decision is TrustDecision.AMBIGUOUS
+        explanation = policy.explain(scored, decision)
+        assert "applies at 0.99" in explanation
+        assert "applies at 0.75" not in explanation
+
+    def test_declared_tier_shows_the_floor_it_actually_uses(self) -> None:
+        # ContractGuard's default wiring: min_confidence_threshold -> floor.
+        policy = TrustPolicy(minimum_trust=0.7)
+        op = FieldOperation(
+            op_type=FieldOpType.SET_DEFAULT,
+            target_path="humidity",
+            rationale="r",
+            risk=RepairRisk.DECLARED,
+            evidence=RepairEvidence(schema_authority=1.0),
+        )
+        scored, decision = policy.evaluate(op)
+        assert decision is TrustDecision.APPLY
+        assert "DECLARED applies at 0.70" in policy.explain(scored, decision)
+
+    def test_unraised_bands_are_unchanged(self) -> None:
+        policy = TrustPolicy()
+        scored, decision = policy.evaluate(self._rename())
+        assert "applies at 0.75" in policy.explain(scored, decision)
+
+
+class TestPolicyConfiguration:
+    def test_partial_band_override_replaces_only_that_tier(self) -> None:
+        policy = TrustPolicy(bands={RepairRisk.INFERRED: TrustBand(0.1, 0.2)})
+        assert policy.band_for(RepairRisk.INFERRED) == TrustBand(0.1, 0.2)
+        # Every other tier keeps its default.
+        assert policy.band_for(RepairRisk.LOSSY) == DEFAULT_TRUST_BANDS[RepairRisk.LOSSY]
+
+    def test_zero_margin_full_credit_disables_margin_scaling(self) -> None:
+        """A caller who does not want margin to bite sets the reach to zero."""
+        policy = TrustPolicy(margin_full_credit=0.0)
+        assert policy.margin_factor(0.0) == 1.0
+        assert policy.score(RepairEvidence(name_match=0.9, margin=0.0)) == pytest.approx(0.9)
+
+    def test_signals_are_rendered_in_explanations(self) -> None:
+        policy = TrustPolicy()
+        op = FieldOperation(
+            op_type=FieldOpType.COERCE,
+            target_path="meta",
+            rationale="r",
+            risk=RepairRisk.LOSSY,
+            evidence=RepairEvidence(value_preserved=1.0, signals=(("structure_preserved", 0.0),)),
+        )
+        assert "structure_preserved" in policy.explain(*policy.evaluate(op))

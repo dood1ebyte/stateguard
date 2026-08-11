@@ -1,5 +1,5 @@
 """
-TypeCoercionStrategy — repairs TYPE_MISMATCH via safe, lossless type casts.
+TypeCoercionStrategy — repairs type and structure mismatches via safe casts.
 
 Priority 30.  Only proposes casts where the source value unambiguously
 represents a value of the target type:
@@ -15,10 +15,19 @@ represents a value of the target type:
   and round-trippable; repairs harness-side over-parsing of JSON text
   arguments).  ``BYTES`` targets also yield a ``str`` — the framework's
   native validation encodes it (e.g. Pydantic's lax str -> bytes).
+* ``str`` → ``dict``/``list`` — JSON-*parse*, for ``OBJECT`` and ``ARRAY``
+  targets, when the string parses to the declared shape.  This is the more
+  common direction in practice: a model asked for an object returns it as a
+  string, or a tool-calling harness forwards an argument unparsed.  Refused
+  when the parse yields the wrong kind (``"123"`` is valid JSON but is not an
+  object) or when array elements do not match the declared ``item_type``.
 * value → ``list``     — wrap-in-list, only when the target is an ``ARRAY``
   with a declared ``item_type`` that the value already satisfies as a
   single element (lossless: ``"x"`` → ``["x"]``).  Bare/untyped arrays and
-  values that are already lists are never wrapped.
+  values that are already lists are never wrapped.  **Parsing is attempted
+  first**: a JSON array string satisfies ``item_type=string`` as a single
+  element, so wrapping would turn ``'["a","b"]'`` into ``['["a","b"]']`` --
+  which validates cleanly as a list of strings and is silently wrong.
 * value → union        — for ``UNION`` targets, each member is tried with
   the rules above; the coercion is proposed only when exactly one member
   yields the highest-confidence candidate (ties are ambiguous and refused).
@@ -49,6 +58,17 @@ from stateguard.core.models.contract import ContractSpec, FieldSpec
 from stateguard.core.models.field_types import FieldType, UnionMember, type_matches
 
 __all__ = ["TypeCoercionStrategy"]
+
+
+# Violation kinds this strategy can act on.
+#
+# STRUCTURAL_MISMATCH is included because ``ContractValidator`` reports a
+# non-dict in an OBJECT field that way rather than as a TYPE_MISMATCH -- so a
+# JSON-encoded object arriving as a string was invisible to this strategy
+# despite being exactly the case it now repairs. Root-level structural
+# violations carry an empty field_path, which resolves to _NOT_FOUND and is
+# skipped harmlessly.
+_COERCIBLE_VIOLATIONS = frozenset({ViolationType.TYPE_MISMATCH, ViolationType.STRUCTURAL_MISMATCH})
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +109,36 @@ def _roundtrip_fidelity(original: str, coerced: Any) -> float:
     previously both worth 0.95 simply because both are digit strings, even
     though only one of them round-trips.
     """
-    back = str(coerced)
+    return _compare_roundtrip(original, str(coerced))
+
+
+def _json_roundtrip_fidelity(original: str, parsed: Any) -> float:
+    """
+    How much of *original* survives ``json.dumps(json.loads(original))``.
+
+    The JSON analogue of ``_roundtrip_fidelity``: ``str()`` is the wrong
+    renderer for a parsed container (``str({'a': 1})`` uses single quotes and
+    can never match its own JSON source), so the comparison is made against a
+    re-serialisation instead.
+
+    What this actually distinguishes is formatting the *value* does not
+    depend on.  ``'{"a": 1}'`` re-serialises byte-for-byte and scores 1.0;
+    ``'{"a":1}'`` and ``'{"a": 1E2}'`` do not, and score
+    ``_FIDELITY_NORMALISED`` for exactly the reason ``"05"`` -> ``5`` does.
+
+    Losses that are *not* mere formatting -- a repeated object key, where one
+    value is silently discarded -- never reach here: ``json_parsed`` refuses
+    them outright.
+    """
+    try:
+        back = json.dumps(parsed)
+    except (TypeError, ValueError):  # pragma: no cover -- parsed came from JSON
+        return _FIDELITY_NORMALISED
+    return _compare_roundtrip(original, back)
+
+
+def _compare_roundtrip(original: str, back: str) -> float:
+    """Grade a re-rendered value against the text it was parsed from."""
     if back == original:
         return _FIDELITY_EXACT
     if back == original.strip():
@@ -240,7 +289,40 @@ def _coercion_evidence(
         # re-encoding -- "1" could legitimately have meant the integer 1.
         return RepairEvidence(value_preserved=fidelity, notes=(note,)), RepairRisk.INFERRED
 
+    if target_type is FieldType.OBJECT:
+        parsed_object = json_parsed(value, dict)
+        if parsed_object is not None:
+            fidelity = _json_roundtrip_fidelity(value, parsed_object)
+            return (
+                RepairEvidence(
+                    value_preserved=fidelity,
+                    signals=(("structure_preserved", 1.0),),
+                    notes=(f"string parses as a JSON object, round-trips at {fidelity:.2f}",),
+                ),
+                RepairRisk.REVERSIBLE,
+            )
+        return None
+
     if target_type is FieldType.ARRAY:
+        # Parsing is tried before wrapping, and the order is load-bearing.
+        # A JSON array *string* satisfies `item_type=string` as a single
+        # element, so wrapping would turn '["a","b"]' into ['["a","b"]'] --
+        # which validates cleanly as a list of strings and is silently wrong.
+        parsed_array = json_parsed(value, list)
+        if parsed_array is not None and _parsed_array_matches(parsed_array, item_type):
+            fidelity = _json_roundtrip_fidelity(value, parsed_array)
+            return (
+                RepairEvidence(
+                    value_preserved=fidelity,
+                    signals=(("structure_preserved", 1.0),),
+                    notes=(
+                        f"string parses as a JSON array of {len(parsed_array)} item(s), "
+                        f"round-trips at {fidelity:.2f}",
+                    ),
+                ),
+                RepairRisk.REVERSIBLE,
+            )
+
         if _array_wrap_is_safe(value, item_type):
             # The element survives untouched, but cardinality is invented:
             # nothing in the payload said this was a one-element list.
@@ -285,6 +367,91 @@ def json_serialized(value: Any) -> str | None:
         return json.dumps(value)
     except (TypeError, ValueError):
         return None
+
+
+class _DuplicateJsonKeyError(ValueError):
+    """
+    Raised by ``_reject_duplicate_keys`` when a JSON object repeats a key.
+
+    Subclasses ``ValueError`` so every existing ``json.loads`` call site
+    already treats it as "not parseable" rather than letting it escape.
+    """
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """
+    ``object_pairs_hook`` that refuses an object with a repeated key.
+
+    ``json.loads('{"a": 1, "a": 2}')`` silently returns ``{"a": 2}`` -- the
+    first value is destroyed with no signal at all.  A repair that quietly
+    discards data is the failure mode this whole layer exists to prevent, and
+    refusing rather than resolving is already the rule at the root: see
+    ``_pairs_to_dict`` in ``stateguard.core.engine``, which rejects a
+    key/value pair list for exactly this reason.
+    """
+    seen: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in seen:
+            raise _DuplicateJsonKeyError(f"duplicate key {key!r} in JSON object")
+        seen[key] = item
+    return seen
+
+
+def json_loads_strict(text: str | bytes) -> Any:
+    """
+    ``json.loads`` that refuses lossy input instead of silently resolving it.
+
+    The only difference from ``json.loads`` is the duplicate-key guard (see
+    ``_reject_duplicate_keys``), which applies at every depth including inside
+    arrays.  Shared by ``json_parsed`` and by the engine's root-shape
+    normalisation so a payload is judged the same way wherever it arrives.
+    """
+    return json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+
+
+def json_parsed(value: Any, expected: type) -> Any | None:
+    """
+    Parse *value* as JSON and return the result if it is an *expected*, else
+    ``None``.
+
+    The inverse of ``json_serialized``, and the more common direction in
+    practice: a model asked for an object returns the object *as a string*,
+    or a tool-calling harness forwards an argument without parsing it.
+
+    Three guards make this safe to attempt:
+
+    * only strings are considered, and only when the contract declares a
+      structured target — a scalar where an object is expected is a semantic
+      mismatch, not an unparsed argument;
+    * the parse must actually yield *expected*.  ``"123"`` is valid JSON but
+      produces an ``int``, which is not an object, so it is refused rather
+      than half-accepted;
+    * the parse must not be lossy.  A repeated object key makes ``json.loads``
+      discard a value without saying so, which is refused outright rather than
+      priced down — there is no fidelity score that honestly describes
+      "one of these two values is gone".
+
+    Deeply nested input raises ``RecursionError`` rather than
+    ``JSONDecodeError``; both are treated as "not parseable" rather than
+    propagated, matching ``_normalise_root_payload``.
+
+    Shared with the engine's ``_coerce_value`` so that feasibility and
+    application always agree on what was parsed.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = json_loads_strict(value)
+    except (ValueError, RecursionError):
+        return None
+    return parsed if isinstance(parsed, expected) else None
+
+
+def _parsed_array_matches(parsed: list[Any], item_type: FieldType | None) -> bool:
+    """``True`` if every element of *parsed* satisfies *item_type*."""
+    if item_type is None:
+        return True
+    return all(type_matches(item, item_type) for item in parsed)
 
 
 def _array_wrap_is_safe(value: Any, item_type: FieldType | None) -> bool:
@@ -389,7 +556,8 @@ def _is_float_string(value: str) -> bool:
 
 class TypeCoercionStrategy(IRepairStrategy):
     """
-    Proposes ``COERCE`` operations for TYPE_MISMATCH violations where a
+    Proposes ``COERCE`` operations for TYPE_MISMATCH and STRUCTURAL_MISMATCH
+    violations where a
     safe, lossless cast exists from the received value to the contract's
     declared type.
     """
@@ -408,7 +576,7 @@ class TypeCoercionStrategy(IRepairStrategy):
         contract: ContractSpec,
         data: dict[str, Any],
     ) -> bool:
-        return any(v.violation_type is ViolationType.TYPE_MISMATCH for v in violations)
+        return any(v.violation_type in _COERCIBLE_VIOLATIONS for v in violations)
 
     def propose(
         self,
@@ -419,7 +587,7 @@ class TypeCoercionStrategy(IRepairStrategy):
         operations: list[FieldOperation] = []
 
         for violation in violations:
-            if violation.violation_type is not ViolationType.TYPE_MISMATCH:
+            if violation.violation_type not in _COERCIBLE_VIOLATIONS:
                 continue
             if violation.expected_type is None:
                 continue
@@ -428,17 +596,26 @@ class TypeCoercionStrategy(IRepairStrategy):
             if value is _NOT_FOUND:
                 continue
 
+            # Measure against the type the *contract* declares for this path,
+            # not the violation's expected_type, because that is what the
+            # engine's applier will cast to. The two are the same for every
+            # violation except an array-item mismatch, where the validator
+            # sets expected_type to the item type: coercing ["a", 1] to STRING
+            # is feasible (json-serialise) but the applier would be casting to
+            # ARRAY, so the proposal was scored 1.0 and could never be applied.
+            # Reading one source for both keeps them from diverging at all.
+            field_spec = _find_field_spec(contract, violation.field_path)
+            target_type: FieldType = violation.expected_type
             item_type: FieldType | None = None
             union_members: tuple[UnionMember, ...] | None = None
-            if violation.expected_type in (FieldType.ARRAY, FieldType.UNION):
-                field_spec = _find_field_spec(contract, violation.field_path)
-                if field_spec is not None:
-                    item_type = field_spec.item_type
-                    union_members = field_spec.union_members
+            if field_spec is not None:
+                target_type = field_spec.field_type
+                item_type = field_spec.item_type
+                union_members = field_spec.union_members
 
             measured = _coercion_evidence(
                 value,
-                violation.expected_type,
+                target_type,
                 item_type=item_type,
                 union_members=union_members,
             )
@@ -455,7 +632,7 @@ class TypeCoercionStrategy(IRepairStrategy):
                     # to False precisely so runtime values do not.
                     rationale=(
                         f"Coerce {type(value).__name__} at "
-                        f"'{violation.field_path}' to {violation.expected_type.value}."
+                        f"'{violation.field_path}' to {target_type.value}."
                     ),
                     risk=risk,
                     evidence=evidence,

@@ -24,6 +24,7 @@ from stateguard.core.errors.violations import ContractViolation
 from stateguard.logging.logger import RepairLogEntry
 
 __all__ = [
+    "AmbiguousRepair",
     "RepairAttempt",
     "RepairResult",
     "RepairStatus",
@@ -133,25 +134,41 @@ class RepairAttempt:
     attempt_number:
         1-indexed position of this attempt within the repair session.
     strategy_name:
-        ``IRepairStrategy.name`` of the strategy that was executed.
+        ``IRepairStrategy.name`` of the strategy that **acted** -- the one
+        whose proposals reached ``applied_operations``.  An attempt may
+        consult several: the engine walks applicable strategies in priority
+        order until one has something it can apply, because otherwise a
+        single uncertain rename would suppress a certain, schema-declared
+        fill from a lower-priority strategy.  See ``considered_strategies``.
+    considered_strategies:
+        ``IRepairStrategy.name`` for every strategy consulted during this
+        attempt, in the order they were tried.  ``strategy_name`` is always
+        the last entry.  Without this the operation lists below could not be
+        attributed: a proposal carried over from a passed-over strategy is
+        indistinguishable from one made by the strategy that acted.
     violations_targeted:
-        ``violation_id`` values of the violations this strategy addressed.
+        ``violation_id`` values of the violations this attempt addressed.
     proposed_operations:
-        All ``FieldOperation`` objects returned by the strategy's
-        ``propose()`` method.
+        Every ``FieldOperation`` returned by ``propose()`` across **all**
+        of ``considered_strategies``, not only ``strategy_name``.  Proposals
+        from a passed-over strategy are kept because they were genuinely
+        considered, and an abstention recorded by one must not be erased by
+        whichever strategy ends up being selected.
     applied_operations:
         Subset of ``proposed_operations`` that ``TrustPolicy`` cleared for
-        application *and* that actually changed the payload.
+        application *and* that actually changed the payload.  These always
+        come from ``strategy_name``.
     rejected_operations:
         Subset of ``proposed_operations`` whose evidence was too weak to
         consider a repair at all, plus any that turned out to change nothing
-        when applied.
+        when applied.  May span ``considered_strategies``.
     abstained_operations:
         Subset of ``proposed_operations`` that ``TrustPolicy`` withheld -- a
         real repair was found, but not confidently enough to apply it
         unsupervised.  Without this an abstained operation appeared in
         neither list and the attempt read as "the strategy did nothing".
         Also collected across the whole run on ``RepairResult.ambiguous``.
+        May span ``considered_strategies``.
     data_before:
         Deep copy of the working data dict *before* operations were applied.
     data_after:
@@ -178,6 +195,7 @@ class RepairAttempt:
 
     # Optional / auto-generated fields
     abstained_operations: list[FieldOperation] = field(default_factory=list)
+    considered_strategies: list[str] = field(default_factory=list)
     attempt_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     attempted_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 

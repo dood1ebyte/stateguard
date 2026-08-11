@@ -74,7 +74,6 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
@@ -98,6 +97,9 @@ from stateguard.core.models.contract import ContractSpec, FieldSpec
 from stateguard.core.models.field_types import FieldType, UnionMember
 from stateguard.core.strategies.coerce import (
     _array_wrap_is_safe,
+    _parsed_array_matches,
+    json_loads_strict,
+    json_parsed,
     json_serialized,
     resolve_union_member,
 )
@@ -304,8 +306,11 @@ def _normalise_root_payload(data: Any) -> tuple[dict[str, Any] | None, str]:
     §2b.4 -- not here, where it would be applied unconditionally and
     silently.
 
-    ``json.loads`` on a string is safe (no code execution).  Deeply nested
-    input raises ``RecursionError`` and invalid encodings raise
+    Parsing a string is safe (no code execution) and goes through
+    ``json_loads_strict``, so a root object with a repeated key is refused
+    here for the same reason ``_pairs_to_dict`` refuses a duplicate pair --
+    ``json.loads`` would silently keep the last one.  Deeply nested input
+    raises ``RecursionError`` and invalid encodings raise
     ``UnicodeDecodeError``; both are caught and treated as "not recoverable"
     rather than propagated.
     """
@@ -315,7 +320,7 @@ def _normalise_root_payload(data: Any) -> tuple[dict[str, Any] | None, str]:
 
     if isinstance(data, (str, bytes)):
         try:
-            parsed = json.loads(data)
+            parsed = json_loads_strict(data)
         except (ValueError, RecursionError, UnicodeDecodeError):
             return None, ""
         if isinstance(parsed, dict):
@@ -455,7 +460,18 @@ def _coerce_value(
                 return False
         return _COERCE_FAILED
 
+    if target_type is FieldType.OBJECT:
+        parsed_object = json_parsed(value, dict)
+        if parsed_object is not None:
+            return parsed_object
+        return _COERCE_FAILED
+
     if target_type is FieldType.ARRAY:
+        # Parse before wrap, matching ``_coercion_evidence`` exactly -- the two
+        # must never disagree about what a COERCE means.
+        parsed_array = json_parsed(value, list)
+        if parsed_array is not None and _parsed_array_matches(parsed_array, item_type):
+            return parsed_array
         if _array_wrap_is_safe(value, item_type):
             return [value]
         return _COERCE_FAILED
@@ -594,6 +610,32 @@ class RepairEngine:
             return op, TrustDecision.AMBIGUOUS
         return scored
 
+    def _ambiguity_reason(self, op: FieldOperation) -> str:
+        """
+        Say why *op* was withheld, distinguishing the two ways it can happen.
+
+        There are exactly two.  Either the trust score fell short of the bar
+        for its risk tier, or it cleared the bar and ``_hold_tainted``
+        withheld it anyway because the engine had already declined to place
+        that source key.  ``TrustPolicy.decide`` returns AMBIGUOUS only in the
+        first case, so ``trust >= apply_at`` on an abstained operation
+        identifies the second exactly, with no extra plumbing.
+
+        Reporting both as "trust X is below the threshold of Y" produced a
+        statement that contradicted its own numbers -- "trust 0.89 is below
+        the INFERRED threshold of 0.75" -- in the one field a caller reads to
+        decide what to do about the abstention.
+        """
+        band = self._policy.band_for(op.risk)
+        if op.trust >= band.apply_at:
+            source = f"'{op.source_path}'" if op.source_path is not None else "this value"
+            return (
+                f"trust {op.trust:.2f} clears the {op.risk.name} threshold of "
+                f"{band.apply_at:.2f}, but {source} was already withheld once in "
+                f"this run and stays withheld"
+            )
+        return f"trust {op.trust:.2f} is below the {op.risk.name} threshold of {band.apply_at:.2f}"
+
     def _record_ambiguous(
         self,
         ambiguous: list[AmbiguousRepair],
@@ -608,12 +650,12 @@ class RepairEngine:
         several proposals compete for the same field, a caller choosing
         between them needs them together and ranked -- which is the entire
         point of surfacing an abstention rather than dropping it.
-        """
-        band = self._policy.band_for(op.risk)
-        reason = (
-            f"trust {op.trust:.2f} is below the {op.risk.name} threshold of {band.apply_at:.2f}"
-        )
 
+        The reason always describes the highest-trust candidate, since that is
+        the one the caller will weigh first.  Overwriting it with whichever
+        proposal happened to arrive last left the reason describing a
+        candidate other than the one at the head of the list.
+        """
         for existing in ambiguous:
             if existing.target_path != op.target_path:
                 continue
@@ -626,11 +668,15 @@ class RepairEngine:
                     return  # already recorded on an earlier attempt
             existing.candidates.append(op)
             existing.candidates.sort(key=lambda c: c.trust, reverse=True)
-            existing.reason = reason
+            existing.reason = self._ambiguity_reason(existing.candidates[0])
             return
 
         ambiguous.append(
-            AmbiguousRepair(target_path=op.target_path, candidates=[op], reason=reason)
+            AmbiguousRepair(
+                target_path=op.target_path,
+                candidates=[op],
+                reason=self._ambiguity_reason(op),
+            )
         )
 
     # ------------------------------------------------------------------
@@ -791,6 +837,7 @@ class RepairEngine:
             # So keep trying strategies in priority order until one has work to
             # do, carrying the abstentions and rejections of the ones passed over.
             strategy = applicable[0]
+            considered_strategies: list[str] = []
             proposed: list[FieldOperation] = []
             candidate_ops: list[FieldOperation] = []
             rejected_ops: list[FieldOperation] = []
@@ -804,10 +851,21 @@ class RepairEngine:
             carried_abstained: list[FieldOperation] = []
 
             for nth, considered in enumerate(applicable):
+                considered_strategies.append(considered.name)
                 offered = [
                     self._hold_tainted(self._policy.evaluate(op), withheld_sources)
                     for op in considered.propose(correlated, contract, working_data)
                 ]
+                # Taint immediately, not after the selection loop finishes.
+                # A key this strategy just declined to place must already be
+                # held when the *next* strategy in the same attempt is asked
+                # -- otherwise a lower-priority strategy can place it on the
+                # very attempt the engine declared itself unsure about it,
+                # which is the failure mode ``_hold_tainted`` exists to stop.
+                for op, decision in offered:
+                    if decision is TrustDecision.AMBIGUOUS and op.source_path is not None:
+                        withheld_sources.add(op.source_path)
+
                 appliable = [op for op, decision in offered if decision is TrustDecision.APPLY]
                 self._record_decisions(contract, offered)
 
@@ -858,10 +916,10 @@ class RepairEngine:
                 strategy=strategy.name,
             )
 
+            # Sources were already withheld as each strategy was consulted;
+            # this only surfaces the abstentions to the caller.
             for op in abstained_ops:
                 self._record_ambiguous(ambiguous, op)
-                if op.source_path is not None:
-                    withheld_sources.add(op.source_path)
 
             data_before = deepcopy(working_data)
             new_data = deepcopy(working_data)
@@ -915,6 +973,7 @@ class RepairEngine:
                 RepairAttempt(
                     attempt_number=attempt_number,
                     strategy_name=strategy.name,
+                    considered_strategies=considered_strategies,
                     violations_targeted=[v.violation_id for v in correlated],
                     proposed_operations=proposed,
                     applied_operations=applied_ops,

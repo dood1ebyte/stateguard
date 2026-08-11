@@ -6,20 +6,29 @@ from typing import Any
 
 import pytest
 
-from stateguard.core.errors.operations import FieldOpType, RepairRisk
+from stateguard.core.errors.operations import (
+    FieldOperation,
+    FieldOpType,
+    RepairRisk,
+)
+from stateguard.core.errors.results import RepairStatus
 from stateguard.core.errors.violations import ViolationSeverity, ViolationType
 from stateguard.core.models.contract import ContractSpec, FieldSpec
 from stateguard.core.models.field_types import FieldType, UnionMember
 from stateguard.core.strategies.coerce import (
+    _NOT_FOUND,
     TypeCoercionStrategy,
     _coercion_evidence,
     _get_nested_value,
     _is_float_string,
     _is_integer_string,
-    _NOT_FOUND,
+    json_loads_strict,
+    json_parsed,
     json_serialized,
     resolve_union_member,
 )
+from stateguard.core.trust import TrustDecision, TrustPolicy
+from stateguard.guard import ContractGuard
 from tests.conftest import make_violation
 
 
@@ -798,3 +807,253 @@ class TestCoercionEvidenceDirect:
     def test_bool_string_to_integer_none(self) -> None:
         """A 'bool string' that is not digit-form must not coerce to int."""
         assert _coercion_evidence("true", FieldType.INTEGER) is None
+
+
+# ===========================================================================
+# JSON-encoded structured values
+# ===========================================================================
+
+
+class TestJsonParsing:
+    """
+    The inverse of json_serialized, and the commoner direction: a model asked
+    for an object returns it as a string, or a harness forwards a tool
+    argument without parsing it.
+    """
+
+    @pytest.mark.parametrize(
+        ("value", "expected_type", "expected"),
+        [
+            ('{"a": 1}', dict, {"a": 1}),
+            ('["a", "b"]', list, ["a", "b"]),
+            ("{}", dict, {}),
+            ("[]", list, []),
+        ],
+    )
+    def test_parses_matching_shapes(self, value: str, expected_type: type, expected: Any) -> None:
+        assert json_parsed(value, expected_type) == expected
+
+    @pytest.mark.parametrize(
+        ("value", "expected_type"),
+        [
+            ("123", dict),  # valid JSON, wrong kind
+            ("123", list),
+            ('"a string"', dict),
+            ("null", dict),
+            ('{"a": 1}', list),  # object where an array was wanted
+            ("[1]", dict),
+            ("not json", dict),
+            ("{unclosed", dict),
+            (5, dict),  # not a string at all
+            (None, dict),
+        ],
+    )
+    def test_refuses_everything_else(self, value: Any, expected_type: type) -> None:
+        assert json_parsed(value, expected_type) is None
+
+    def test_deep_nesting_does_not_propagate_recursionerror(self) -> None:
+        """json.loads raises RecursionError, not JSONDecodeError, on deep input."""
+        assert json_parsed("[" * 20_000 + "]" * 20_000, list) is None
+
+    # --- evidence ---------------------------------------------------------
+
+    def test_object_parse_is_reversible(self) -> None:
+        measured = _coercion_evidence('{"a": 1}', FieldType.OBJECT)
+        assert measured is not None
+        evidence, risk = measured
+        # Parsing recovers structure; serialising discards it. The two
+        # directions are deliberately not the same risk tier.
+        assert risk is RepairRisk.REVERSIBLE
+        assert evidence.value_preserved == pytest.approx(1.0)
+
+    def test_array_parse_is_reversible(self) -> None:
+        measured = _coercion_evidence('["a"]', FieldType.ARRAY, item_type=FieldType.STRING)
+        assert measured is not None
+        assert measured[1] is RepairRisk.REVERSIBLE
+
+    def test_array_parse_checks_item_types(self) -> None:
+        """A parsed array whose elements do not fit item_type is not a repair."""
+        assert (
+            _coercion_evidence('["a", "b"]', FieldType.ARRAY, item_type=FieldType.INTEGER) is None
+        )
+
+    def test_parsing_beats_wrapping(self) -> None:
+        """
+        A JSON array string satisfies item_type=string as a single element, so
+        wrapping would produce ['["a","b"]'] -- which validates cleanly as a
+        list of strings and is silently wrong. Parse must win.
+        """
+        measured = _coercion_evidence('["a","b"]', FieldType.ARRAY, item_type=FieldType.STRING)
+        assert measured is not None
+        # Wrapping is LOSSY; parsing is REVERSIBLE. The tier tells them apart.
+        assert measured[1] is RepairRisk.REVERSIBLE
+
+    def test_wrapping_still_applies_to_non_json_strings(self) -> None:
+        measured = _coercion_evidence("hello", FieldType.ARRAY, item_type=FieldType.STRING)
+        assert measured is not None
+        assert measured[1] is RepairRisk.LOSSY
+
+
+class TestLossyJsonIsRefusedNotPriced:
+    """
+    ``json.loads`` discards a repeated object key without saying so. There is
+    no fidelity score that honestly describes "one of these two values is
+    gone", so the parse is refused outright -- the same rule the engine's
+    ``_pairs_to_dict`` applies to a duplicate key/value pair at the root.
+    """
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            '{"a": 1, "a": 2}',
+            '{"outer": {"a": 1, "a": 2}}',
+            '[{"a": 1, "a": 2}]',
+        ],
+    )
+    def test_duplicate_keys_refuse_the_parse(self, value: str) -> None:
+        assert json_parsed(value, dict) is None or json_parsed(value, list) is None
+        assert json_loads_strict.__name__ == "json_loads_strict"
+        with pytest.raises(ValueError, match="duplicate key"):
+            json_loads_strict(value)
+
+    def test_a_duplicate_key_is_not_repaired_end_to_end(self) -> None:
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(
+            {"fields": [{"path": "meta", "type": "object"}]},
+            {"meta": '{"a": 1, "a": 2}'},
+        )
+        # Previously: SUCCESS with {'meta': {'a': 2}} at trust 1.0.
+        assert result.repaired_output is None
+        assert result.status is not RepairStatus.SUCCESS
+
+    def test_a_duplicate_key_at_the_root_is_not_repaired(self) -> None:
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(
+            {"fields": [{"path": "a", "type": "integer"}]},
+            '{"a": 1, "a": 2}',
+        )
+        assert result.status is RepairStatus.FAILED
+
+    def test_a_single_key_object_still_parses(self) -> None:
+        assert json_parsed('{"a": 1, "b": 2}', dict) == {"a": 1, "b": 2}
+
+
+class TestJsonParseFidelityIsMeasured:
+    """
+    The OBJECT/ARRAY branches used to assert ``value_preserved = 1.0``. Every
+    other branch in this module measures the round trip; these now do too.
+    """
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ('{"a": 1}', 1.0),  # re-serialises byte-for-byte
+            (' {"a": 1} ', 0.95),  # differs only in surrounding whitespace
+            ('{"a":1}', 0.85),  # compact separators are normalised away
+            ('{"a": 1E2}', 0.85),  # so is number formatting
+        ],
+    )
+    def test_object_fidelity_tracks_the_round_trip(self, value: str, expected: float) -> None:
+        measured = _coercion_evidence(value, FieldType.OBJECT)
+        assert measured is not None
+        assert measured[0].value_preserved == pytest.approx(expected)
+
+    def test_array_fidelity_tracks_the_round_trip(self) -> None:
+        exact = _coercion_evidence('["a", "b"]', FieldType.ARRAY, item_type=FieldType.STRING)
+        compact = _coercion_evidence('["a","b"]', FieldType.ARRAY, item_type=FieldType.STRING)
+        assert exact is not None and compact is not None
+        assert exact[0].value_preserved == pytest.approx(1.0)
+        assert compact[0].value_preserved == pytest.approx(0.85)
+
+    def test_normalised_fidelity_still_clears_the_reversible_bar(self) -> None:
+        """Formatting is not data loss -- 0.85 must still apply at REVERSIBLE."""
+        measured = _coercion_evidence('{"a":1}', FieldType.OBJECT)
+        assert measured is not None
+        evidence, risk = measured
+        op = FieldOperation(
+            op_type=FieldOpType.COERCE,
+            target_path="meta",
+            rationale="r",
+            risk=risk,
+            evidence=evidence,
+        )
+        assert TrustPolicy().evaluate(op)[1] is TrustDecision.APPLY
+
+    def test_untyped_array_accepts_any_parsed_array(self) -> None:
+        """No declared item_type means nothing to check the elements against."""
+        measured = _coercion_evidence('["a", 1]', FieldType.ARRAY, item_type=None)
+        assert measured is not None
+        assert measured[1] is RepairRisk.REVERSIBLE
+
+
+class TestProposeAgreesWithTheApplier:
+    """
+    ``propose`` measures against the contract's declared type, which is what
+    the engine's applier casts to. Reading ``violation.expected_type`` instead
+    diverged on an array-item mismatch, where the validator sets it to the
+    *item* type.
+    """
+
+    def test_array_item_mismatch_proposes_nothing(self) -> None:
+        contract = ContractSpec(
+            fields=[FieldSpec("tags", FieldType.ARRAY, item_type=FieldType.STRING)]
+        )
+        violation = make_violation(
+            field_path="tags",
+            violation_type=ViolationType.TYPE_MISMATCH,
+            expected_type=FieldType.STRING,  # the validator reports the item type
+        )
+        ops = TypeCoercionStrategy().propose([violation], contract, {"tags": ["a", 1]})
+        # Previously: one COERCE at trust 1.0 that the applier could never
+        # perform, burning an attempt and claiming a repair in the audit trail.
+        assert ops == []
+
+    def test_array_item_mismatch_is_reported_not_falsely_attempted(self) -> None:
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(
+            {"fields": [{"path": "tags", "type": "array", "item_type": "string"}]},
+            {"tags": ["a", 1]},
+        )
+        assert result.status is RepairStatus.FAILED
+        applied = [op for a in result.attempts for op in a.applied_operations]
+        proposed = [op for a in result.attempts for op in a.proposed_operations]
+        assert applied == []
+        assert proposed == []
+
+
+class TestFieldSpecLookupThroughNesting:
+    """
+    ``propose`` resolves the declared type through ``nested_spec``; a path that
+    cannot be resolved falls back to the violation's own expected_type.
+    """
+
+    def _nested(self) -> ContractSpec:
+        inner = ContractSpec(fields=[FieldSpec("zip_code", FieldType.INTEGER)])
+        return ContractSpec(fields=[FieldSpec("address", FieldType.OBJECT, nested_spec=inner)])
+
+    def test_nested_path_uses_the_nested_declared_type(self) -> None:
+        violation = make_violation(
+            field_path="address.zip_code",
+            violation_type=ViolationType.TYPE_MISMATCH,
+            expected_type=FieldType.INTEGER,
+        )
+        ops = TypeCoercionStrategy().propose(
+            [violation], self._nested(), {"address": {"zip_code": "400001"}}
+        )
+        assert len(ops) == 1
+        assert ops[0].target_path == "address.zip_code"
+        assert ops[0].risk is RepairRisk.REVERSIBLE
+
+    def test_unresolvable_nested_path_falls_back_to_expected_type(self) -> None:
+        """An OBJECT with no nested_spec cannot resolve its children."""
+        contract = ContractSpec(fields=[FieldSpec("address", FieldType.OBJECT)])
+        violation = make_violation(
+            field_path="address.zip_code",
+            violation_type=ViolationType.TYPE_MISMATCH,
+            expected_type=FieldType.INTEGER,
+        )
+        ops = TypeCoercionStrategy().propose(
+            [violation], contract, {"address": {"zip_code": "400001"}}
+        )
+        assert len(ops) == 1
+        assert ops[0].risk is RepairRisk.REVERSIBLE
