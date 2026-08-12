@@ -6,20 +6,29 @@ from typing import Any
 
 import pytest
 
-from stateguard.core.errors.operations import FieldOpType
+from stateguard.core.errors.operations import (
+    FieldOperation,
+    FieldOpType,
+    RepairRisk,
+)
+from stateguard.core.errors.results import RepairStatus
 from stateguard.core.errors.violations import ViolationSeverity, ViolationType
 from stateguard.core.models.contract import ContractSpec, FieldSpec
 from stateguard.core.models.field_types import FieldType, UnionMember
 from stateguard.core.strategies.coerce import (
+    _NOT_FOUND,
     TypeCoercionStrategy,
-    _coercion_confidence,
+    _coercion_evidence,
     _get_nested_value,
     _is_float_string,
     _is_integer_string,
-    _NOT_FOUND,
+    json_loads_strict,
+    json_parsed,
     json_serialized,
     resolve_union_member,
 )
+from stateguard.core.trust import TrustDecision, TrustPolicy
+from stateguard.guard import ContractGuard
 from tests.conftest import make_violation
 
 
@@ -88,14 +97,18 @@ class TestStrToInt:
         op = ops[0]
         assert op.op_type is FieldOpType.COERCE
         assert op.target_path == "count"
-        assert op.confidence == pytest.approx(0.95)
+        # "5" -> 5 -> "5" reproduces the input exactly.
+        assert op.evidence.value_preserved == pytest.approx(1.0)
+        assert op.risk is RepairRisk.REVERSIBLE
+        assert op.trust == 0.0  # TrustPolicy assigns the score, not the strategy
 
     def test_negative_digit_string_coerces(self) -> None:
         v = _type_mismatch("delta", FieldType.INTEGER, "-5")
         strategy = TypeCoercionStrategy()
         ops = strategy.propose([v], make_contract(), {"delta": "-5"})
         assert len(ops) == 1
-        assert ops[0].confidence == pytest.approx(0.95)
+        assert ops[0].evidence.value_preserved == pytest.approx(1.0)
+        assert ops[0].risk is RepairRisk.REVERSIBLE
 
     def test_non_digit_string_does_not_coerce(self) -> None:
         v = _type_mismatch("count", FieldType.INTEGER, "five")
@@ -140,15 +153,22 @@ class TestStrToFloat:
         strategy = TypeCoercionStrategy()
         ops = strategy.propose([v], make_contract(), {"temperature": "31.5"})
         assert len(ops) == 1
-        assert ops[0].confidence == pytest.approx(0.95)
+        assert ops[0].evidence.value_preserved == pytest.approx(1.0)
+        assert ops[0].risk is RepairRisk.REVERSIBLE
         assert ops[0].target_path == "temperature"
 
     def test_integer_looking_string_coerces_to_float(self) -> None:
+        """
+        ``"30"`` -> ``30.0`` -> ``"30.0"`` does not reproduce the input, so
+        this scores below an exact round trip even though the numeric value
+        is untouched. The old model gave it the same 0.95 as ``"5"`` -> ``5``.
+        """
         v = _type_mismatch("temperature", FieldType.FLOAT, "30")
         strategy = TypeCoercionStrategy()
         ops = strategy.propose([v], make_contract(), {"temperature": "30"})
         assert len(ops) == 1
-        assert ops[0].confidence == pytest.approx(0.95)
+        assert ops[0].evidence.value_preserved == pytest.approx(0.85)
+        assert ops[0].risk is RepairRisk.REVERSIBLE
 
     def test_negative_decimal_string_coerces(self) -> None:
         v = _type_mismatch("delta", FieldType.FLOAT, "-3.5")
@@ -188,7 +208,8 @@ class TestIntToFloat:
         strategy = TypeCoercionStrategy()
         ops = strategy.propose([v], make_contract(), {"temperature": 30})
         assert len(ops) == 1
-        assert ops[0].confidence == pytest.approx(0.95)
+        assert ops[0].evidence.value_preserved == pytest.approx(1.0)
+        assert ops[0].risk is RepairRisk.REVERSIBLE
 
     def test_negative_int_coerces_to_float(self) -> None:
         v = _type_mismatch("delta", FieldType.FLOAT, -10)
@@ -217,12 +238,13 @@ class TestIntToFloat:
 
 class TestStrToBool:
     @pytest.mark.parametrize("value", ["true", "TRUE", "True", "false", "FALSE", "1", "0"])
-    def test_recognized_strings_coerce(self, value: str) -> None:
+    def test_recognized_strings_coerce(self, value: str) -> None:  # noqa: D102
         v = _type_mismatch("active", FieldType.BOOLEAN, value)
         strategy = TypeCoercionStrategy()
         ops = strategy.propose([v], make_contract(), {"active": value})
         assert len(ops) == 1
-        assert ops[0].confidence == pytest.approx(0.85)
+        assert ops[0].evidence.value_preserved is not None
+        assert ops[0].risk is RepairRisk.INFERRED
 
     def test_whitespace_padded_recognized_string_coerces(self) -> None:
         v = _type_mismatch("active", FieldType.BOOLEAN, "  true  ")
@@ -259,14 +281,16 @@ class TestJsonSerializeCoercion:
         assert len(ops) == 1
         assert ops[0].op_type is FieldOpType.COERCE
         assert ops[0].target_path == "content"
-        assert ops[0].confidence == pytest.approx(0.85)
+        assert ops[0].evidence.value_preserved == pytest.approx(1.0)
+        assert ops[0].risk is RepairRisk.LOSSY
 
     def test_list_to_string_coerces(self) -> None:
         v = _type_mismatch("content", FieldType.STRING, [1, 2])
         strategy = TypeCoercionStrategy()
         ops = strategy.propose([v], make_contract(), {"content": [1, 2]})
         assert len(ops) == 1
-        assert ops[0].confidence == pytest.approx(0.85)
+        assert ops[0].evidence.value_preserved == pytest.approx(1.0)
+        assert ops[0].risk is RepairRisk.LOSSY
 
     def test_dict_to_bytes_coerces(self) -> None:
         """BYTES targets get the same repair; the serialised str satisfies
@@ -276,7 +300,8 @@ class TestJsonSerializeCoercion:
         strategy = TypeCoercionStrategy()
         ops = strategy.propose([v], make_contract(), {"content": payload})
         assert len(ops) == 1
-        assert ops[0].confidence == pytest.approx(0.85)
+        assert ops[0].evidence.value_preserved == pytest.approx(1.0)
+        assert ops[0].risk is RepairRisk.LOSSY
 
     def test_non_serializable_dict_not_coerced(self) -> None:
         payload = {"x": object()}
@@ -361,7 +386,8 @@ class TestArrayWrap:
         assert len(ops) == 1
         assert ops[0].op_type is FieldOpType.COERCE
         assert ops[0].target_path == "content"
-        assert ops[0].confidence == pytest.approx(0.9)
+        assert ops[0].evidence.value_preserved == pytest.approx(1.0)
+        assert ops[0].risk is RepairRisk.LOSSY
 
     def test_item_type_mismatch_does_not_wrap(self) -> None:
         v = _type_mismatch("content", FieldType.ARRAY, "hello")
@@ -422,7 +448,8 @@ class TestUnionCoercion:
         strategy = TypeCoercionStrategy()
         ops = strategy.propose([v], _union_contract(members), {"content": payload})
         assert len(ops) == 1
-        assert ops[0].confidence == pytest.approx(0.9)
+        assert ops[0].evidence.value_preserved == pytest.approx(1.0)
+        assert ops[0].risk is RepairRisk.LOSSY
 
     def test_dict_serializes_into_string_member(self) -> None:
         """str | <object-like> union: only the STRING member is coercible."""
@@ -432,7 +459,8 @@ class TestUnionCoercion:
         strategy = TypeCoercionStrategy()
         ops = strategy.propose([v], _union_contract(members), {"content": payload})
         assert len(ops) == 1
-        assert ops[0].confidence == pytest.approx(0.85)
+        assert ops[0].evidence.value_preserved == pytest.approx(1.0)
+        assert ops[0].risk is RepairRisk.LOSSY
 
     def test_string_bytes_tie_refused(self) -> None:
         """str | bytes members both accept the JSON serialisation at equal
@@ -450,15 +478,21 @@ class TestUnionCoercion:
         strategy = TypeCoercionStrategy()
         ops = strategy.propose([v], _union_contract(members), {"content": "42"})
         assert len(ops) == 1
-        assert ops[0].confidence == pytest.approx(0.95)
+        assert ops[0].evidence.value_preserved == pytest.approx(1.0)
+        assert ops[0].risk is RepairRisk.REVERSIBLE
 
-    def test_ambiguous_tie_between_members_refused(self) -> None:
-        """'42' coerces to both int and float at equal confidence -> refuse."""
+    def test_int_member_wins_over_float_on_measured_fidelity(self) -> None:
+        """
+        '42' used to tie between int and float on identical constants, so the
+        union refused. Round-trip fidelity separates them: str(int("42")) is
+        "42" exactly, str(float("42")) is "42.0".
+        """
         members = (UnionMember(FieldType.INTEGER), UnionMember(FieldType.FLOAT))
         v = _type_mismatch("content", FieldType.UNION, "42")
         strategy = TypeCoercionStrategy()
         ops = strategy.propose([v], _union_contract(members), {"content": "42"})
-        assert ops == []
+        assert len(ops) == 1
+        assert ops[0].risk is RepairRisk.REVERSIBLE
 
     def test_no_coercible_member_refused(self) -> None:
         members = (UnionMember(FieldType.STRING), UnionMember(FieldType.OBJECT))
@@ -487,9 +521,10 @@ class TestResolveUnionMember:
         )
         resolved = resolve_union_member("1", members)
         assert resolved is not None
-        member, confidence = resolved
+        member, evidence, risk = resolved
         assert member.field_type is FieldType.INTEGER
-        assert confidence == pytest.approx(0.95)
+        assert evidence.value_preserved == pytest.approx(1.0)
+        assert risk is RepairRisk.REVERSIBLE
 
     def test_none_members_returns_none(self) -> None:
         assert resolve_union_member("1", None) is None
@@ -575,7 +610,8 @@ class TestProposeNested:
         assert len(ops) == 1
         op = ops[0]
         assert op.target_path == "address.country.population"
-        assert op.confidence == pytest.approx(0.95)
+        assert op.evidence.value_preserved == pytest.approx(1.0)
+        assert op.risk is RepairRisk.REVERSIBLE
 
     def test_depth3_nested_field_str_to_float(self) -> None:
         v = _type_mismatch("address.country.area_km2", FieldType.FLOAT, "3287263.5")
@@ -670,42 +706,354 @@ class TestJsonSerializedDirect:
         assert json_serialized(payload) is None
 
 
-class TestCoercionConfidenceDirect:
-    def test_str_to_integer_valid(self) -> None:
-        assert _coercion_confidence("5", FieldType.INTEGER) == pytest.approx(0.95)
+class TestCoercionEvidenceDirect:
+    """
+    ``_coercion_evidence`` replaces ``_coercion_confidence``.
 
-    def test_str_to_integer_invalid(self) -> None:
-        assert _coercion_confidence("five", FieldType.INTEGER) is None
+    The old function returned one of four constants chosen by hand. This one
+    measures round-trip fidelity and declares the consequence of being wrong,
+    leaving the score to TrustPolicy.
+    """
 
-    def test_str_to_float_valid(self) -> None:
-        assert _coercion_confidence("5.5", FieldType.FLOAT) == pytest.approx(0.95)
+    @staticmethod
+    def _fidelity(value: Any, target: FieldType, **kw: Any) -> float | None:
+        measured = _coercion_evidence(value, target, **kw)
+        return None if measured is None else measured[0].value_preserved
 
-    def test_int_to_float(self) -> None:
-        assert _coercion_confidence(5, FieldType.FLOAT) == pytest.approx(0.95)
+    @staticmethod
+    def _risk(value: Any, target: FieldType, **kw: Any) -> RepairRisk | None:
+        measured = _coercion_evidence(value, target, **kw)
+        return None if measured is None else measured[1]
 
-    def test_bool_to_float_none(self) -> None:
-        assert _coercion_confidence(True, FieldType.FLOAT) is None
+    # --- round-trip fidelity is measured, not assumed ---------------------
 
-    def test_str_to_bool_valid(self) -> None:
-        assert _coercion_confidence("true", FieldType.BOOLEAN) == pytest.approx(0.85)
+    @pytest.mark.parametrize(
+        ("value", "target", "expected"),
+        [
+            ("5", FieldType.INTEGER, 1.0),  # str(int("5")) == "5"
+            ("05", FieldType.INTEGER, 0.85),  # str(int("05")) == "5" != "05"
+            ("-7", FieldType.INTEGER, 1.0),
+            ("5.5", FieldType.FLOAT, 1.0),
+            (5, FieldType.FLOAT, 1.0),  # int is exactly representable
+        ],
+    )
+    def test_roundtrip_fidelity(self, value: Any, target: FieldType, expected: float) -> None:
+        assert self._fidelity(value, target) == pytest.approx(expected)
 
-    def test_str_to_bool_invalid(self) -> None:
-        assert _coercion_confidence("maybe", FieldType.BOOLEAN) is None
+    def test_whitespace_padded_integers_are_refused(self) -> None:
+        """Pre-existing behaviour, unchanged: ``" 5 ".isdecimal()`` is False."""
+        assert _coercion_evidence(" 5 ", FieldType.INTEGER) is None
 
-    def test_dict_to_string_valid(self) -> None:
-        assert _coercion_confidence({"a": 1}, FieldType.STRING) == pytest.approx(0.85)
+    def test_exact_and_normalised_casts_are_no_longer_scored_alike(self) -> None:
+        """
+        The headline of the change: "5" and "05" both used to be worth 0.95
+        simply because both are digit strings, even though only one of them
+        survives a round trip.
+        """
+        assert self._fidelity("5", FieldType.INTEGER) > self._fidelity("05", FieldType.INTEGER)
 
-    def test_dict_to_bytes_valid(self) -> None:
-        assert _coercion_confidence({"a": 1}, FieldType.BYTES) == pytest.approx(0.85)
+    # --- refusals ---------------------------------------------------------
 
-    def test_unsupported_target_type(self) -> None:
-        assert _coercion_confidence("x", FieldType.STRING) is None
-        assert _coercion_confidence("x", FieldType.BYTES) is None
-        assert _coercion_confidence("x", FieldType.OBJECT) is None
-        assert _coercion_confidence("x", FieldType.ARRAY) is None
-        assert _coercion_confidence("x", FieldType.ANY) is None
-        assert _coercion_confidence("x", FieldType.NULL) is None
+    @pytest.mark.parametrize(
+        ("value", "target"),
+        [
+            ("five", FieldType.INTEGER),
+            (True, FieldType.FLOAT),
+            ("maybe", FieldType.BOOLEAN),
+            ("x", FieldType.STRING),
+            ("x", FieldType.BYTES),
+            ("x", FieldType.OBJECT),
+            ("x", FieldType.ARRAY),
+            ("x", FieldType.ANY),
+            ("x", FieldType.NULL),
+        ],
+    )
+    def test_unsupported_pairs_refused(self, value: Any, target: FieldType) -> None:
+        assert _coercion_evidence(value, target) is None
+
+    @pytest.mark.parametrize("value", ["nan", "NaN", "inf", "-inf", "infinity"])
+    def test_non_finite_floats_refused(self, value: str) -> None:
+        """
+        ``float()`` accepts these, but NaN poisons every comparison it touches
+        and neither NaN nor Infinity survives ``json.dumps`` as valid JSON.
+        They are not lossless casts of a numeric string.
+        """
+        assert _coercion_evidence(value, FieldType.FLOAT) is None
+
+    # --- booleans ---------------------------------------------------------
+
+    def test_spelled_boolean_beats_numeric_boolean(self) -> None:
+        """ "1" -> True reads the string; "true" -> True re-encodes it."""
+        spelled = self._fidelity("true", FieldType.BOOLEAN)
+        numeric = self._fidelity("1", FieldType.BOOLEAN)
+        assert spelled is not None and numeric is not None
+        assert spelled > numeric
+
+    # --- risk tiers -------------------------------------------------------
+
+    def test_numeric_casts_are_reversible(self) -> None:
+        assert self._risk("5", FieldType.INTEGER) is RepairRisk.REVERSIBLE
+        assert self._risk(5, FieldType.FLOAT) is RepairRisk.REVERSIBLE
+
+    def test_reading_a_string_as_a_boolean_is_inferred(self) -> None:
+        assert self._risk("true", FieldType.BOOLEAN) is RepairRisk.INFERRED
+
+    def test_serialising_a_container_is_lossy(self) -> None:
+        """Every byte survives, but a container rendered as text is not one."""
+        assert self._fidelity({"a": 1}, FieldType.STRING) == 1.0
+        assert self._risk({"a": 1}, FieldType.STRING) is RepairRisk.LOSSY
+        assert self._risk({"a": 1}, FieldType.BYTES) is RepairRisk.LOSSY
 
     def test_bool_string_to_integer_none(self) -> None:
         """A 'bool string' that is not digit-form must not coerce to int."""
-        assert _coercion_confidence("true", FieldType.INTEGER) is None
+        assert _coercion_evidence("true", FieldType.INTEGER) is None
+
+
+# ===========================================================================
+# JSON-encoded structured values
+# ===========================================================================
+
+
+class TestJsonParsing:
+    """
+    The inverse of json_serialized, and the commoner direction: a model asked
+    for an object returns it as a string, or a harness forwards a tool
+    argument without parsing it.
+    """
+
+    @pytest.mark.parametrize(
+        ("value", "expected_type", "expected"),
+        [
+            ('{"a": 1}', dict, {"a": 1}),
+            ('["a", "b"]', list, ["a", "b"]),
+            ("{}", dict, {}),
+            ("[]", list, []),
+        ],
+    )
+    def test_parses_matching_shapes(self, value: str, expected_type: type, expected: Any) -> None:
+        assert json_parsed(value, expected_type) == expected
+
+    @pytest.mark.parametrize(
+        ("value", "expected_type"),
+        [
+            ("123", dict),  # valid JSON, wrong kind
+            ("123", list),
+            ('"a string"', dict),
+            ("null", dict),
+            ('{"a": 1}', list),  # object where an array was wanted
+            ("[1]", dict),
+            ("not json", dict),
+            ("{unclosed", dict),
+            (5, dict),  # not a string at all
+            (None, dict),
+        ],
+    )
+    def test_refuses_everything_else(self, value: Any, expected_type: type) -> None:
+        assert json_parsed(value, expected_type) is None
+
+    def test_deep_nesting_does_not_propagate_recursionerror(self) -> None:
+        """json.loads raises RecursionError, not JSONDecodeError, on deep input."""
+        assert json_parsed("[" * 20_000 + "]" * 20_000, list) is None
+
+    # --- evidence ---------------------------------------------------------
+
+    def test_object_parse_is_reversible(self) -> None:
+        measured = _coercion_evidence('{"a": 1}', FieldType.OBJECT)
+        assert measured is not None
+        evidence, risk = measured
+        # Parsing recovers structure; serialising discards it. The two
+        # directions are deliberately not the same risk tier.
+        assert risk is RepairRisk.REVERSIBLE
+        assert evidence.value_preserved == pytest.approx(1.0)
+
+    def test_array_parse_is_reversible(self) -> None:
+        measured = _coercion_evidence('["a"]', FieldType.ARRAY, item_type=FieldType.STRING)
+        assert measured is not None
+        assert measured[1] is RepairRisk.REVERSIBLE
+
+    def test_array_parse_checks_item_types(self) -> None:
+        """A parsed array whose elements do not fit item_type is not a repair."""
+        assert (
+            _coercion_evidence('["a", "b"]', FieldType.ARRAY, item_type=FieldType.INTEGER) is None
+        )
+
+    def test_parsing_beats_wrapping(self) -> None:
+        """
+        A JSON array string satisfies item_type=string as a single element, so
+        wrapping would produce ['["a","b"]'] -- which validates cleanly as a
+        list of strings and is silently wrong. Parse must win.
+        """
+        measured = _coercion_evidence('["a","b"]', FieldType.ARRAY, item_type=FieldType.STRING)
+        assert measured is not None
+        # Wrapping is LOSSY; parsing is REVERSIBLE. The tier tells them apart.
+        assert measured[1] is RepairRisk.REVERSIBLE
+
+    def test_wrapping_still_applies_to_non_json_strings(self) -> None:
+        measured = _coercion_evidence("hello", FieldType.ARRAY, item_type=FieldType.STRING)
+        assert measured is not None
+        assert measured[1] is RepairRisk.LOSSY
+
+
+class TestLossyJsonIsRefusedNotPriced:
+    """
+    ``json.loads`` discards a repeated object key without saying so. There is
+    no fidelity score that honestly describes "one of these two values is
+    gone", so the parse is refused outright -- the same rule the engine's
+    ``_pairs_to_dict`` applies to a duplicate key/value pair at the root.
+    """
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            '{"a": 1, "a": 2}',
+            '{"outer": {"a": 1, "a": 2}}',
+            '[{"a": 1, "a": 2}]',
+        ],
+    )
+    def test_duplicate_keys_refuse_the_parse(self, value: str) -> None:
+        assert json_parsed(value, dict) is None or json_parsed(value, list) is None
+        assert json_loads_strict.__name__ == "json_loads_strict"
+        with pytest.raises(ValueError, match="duplicate key"):
+            json_loads_strict(value)
+
+    def test_a_duplicate_key_is_not_repaired_end_to_end(self) -> None:
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(
+            {"fields": [{"path": "meta", "type": "object"}]},
+            {"meta": '{"a": 1, "a": 2}'},
+        )
+        # Previously: SUCCESS with {'meta': {'a': 2}} at trust 1.0.
+        assert result.repaired_output is None
+        assert result.status is not RepairStatus.SUCCESS
+
+    def test_a_duplicate_key_at_the_root_is_not_repaired(self) -> None:
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(
+            {"fields": [{"path": "a", "type": "integer"}]},
+            '{"a": 1, "a": 2}',
+        )
+        assert result.status is RepairStatus.FAILED
+
+    def test_a_single_key_object_still_parses(self) -> None:
+        assert json_parsed('{"a": 1, "b": 2}', dict) == {"a": 1, "b": 2}
+
+
+class TestJsonParseFidelityIsMeasured:
+    """
+    The OBJECT/ARRAY branches used to assert ``value_preserved = 1.0``. Every
+    other branch in this module measures the round trip; these now do too.
+    """
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ('{"a": 1}', 1.0),  # re-serialises byte-for-byte
+            (' {"a": 1} ', 0.95),  # differs only in surrounding whitespace
+            ('{"a":1}', 0.85),  # compact separators are normalised away
+            ('{"a": 1E2}', 0.85),  # so is number formatting
+        ],
+    )
+    def test_object_fidelity_tracks_the_round_trip(self, value: str, expected: float) -> None:
+        measured = _coercion_evidence(value, FieldType.OBJECT)
+        assert measured is not None
+        assert measured[0].value_preserved == pytest.approx(expected)
+
+    def test_array_fidelity_tracks_the_round_trip(self) -> None:
+        exact = _coercion_evidence('["a", "b"]', FieldType.ARRAY, item_type=FieldType.STRING)
+        compact = _coercion_evidence('["a","b"]', FieldType.ARRAY, item_type=FieldType.STRING)
+        assert exact is not None and compact is not None
+        assert exact[0].value_preserved == pytest.approx(1.0)
+        assert compact[0].value_preserved == pytest.approx(0.85)
+
+    def test_normalised_fidelity_still_clears_the_reversible_bar(self) -> None:
+        """Formatting is not data loss -- 0.85 must still apply at REVERSIBLE."""
+        measured = _coercion_evidence('{"a":1}', FieldType.OBJECT)
+        assert measured is not None
+        evidence, risk = measured
+        op = FieldOperation(
+            op_type=FieldOpType.COERCE,
+            target_path="meta",
+            rationale="r",
+            risk=risk,
+            evidence=evidence,
+        )
+        assert TrustPolicy().evaluate(op)[1] is TrustDecision.APPLY
+
+    def test_untyped_array_accepts_any_parsed_array(self) -> None:
+        """No declared item_type means nothing to check the elements against."""
+        measured = _coercion_evidence('["a", 1]', FieldType.ARRAY, item_type=None)
+        assert measured is not None
+        assert measured[1] is RepairRisk.REVERSIBLE
+
+
+class TestProposeAgreesWithTheApplier:
+    """
+    ``propose`` measures against the contract's declared type, which is what
+    the engine's applier casts to. Reading ``violation.expected_type`` instead
+    diverged on an array-item mismatch, where the validator sets it to the
+    *item* type.
+    """
+
+    def test_array_item_mismatch_proposes_nothing(self) -> None:
+        contract = ContractSpec(
+            fields=[FieldSpec("tags", FieldType.ARRAY, item_type=FieldType.STRING)]
+        )
+        violation = make_violation(
+            field_path="tags",
+            violation_type=ViolationType.TYPE_MISMATCH,
+            expected_type=FieldType.STRING,  # the validator reports the item type
+        )
+        ops = TypeCoercionStrategy().propose([violation], contract, {"tags": ["a", 1]})
+        # Previously: one COERCE at trust 1.0 that the applier could never
+        # perform, burning an attempt and claiming a repair in the audit trail.
+        assert ops == []
+
+    def test_array_item_mismatch_is_reported_not_falsely_attempted(self) -> None:
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(
+            {"fields": [{"path": "tags", "type": "array", "item_type": "string"}]},
+            {"tags": ["a", 1]},
+        )
+        assert result.status is RepairStatus.FAILED
+        applied = [op for a in result.attempts for op in a.applied_operations]
+        proposed = [op for a in result.attempts for op in a.proposed_operations]
+        assert applied == []
+        assert proposed == []
+
+
+class TestFieldSpecLookupThroughNesting:
+    """
+    ``propose`` resolves the declared type through ``nested_spec``; a path that
+    cannot be resolved falls back to the violation's own expected_type.
+    """
+
+    def _nested(self) -> ContractSpec:
+        inner = ContractSpec(fields=[FieldSpec("zip_code", FieldType.INTEGER)])
+        return ContractSpec(fields=[FieldSpec("address", FieldType.OBJECT, nested_spec=inner)])
+
+    def test_nested_path_uses_the_nested_declared_type(self) -> None:
+        violation = make_violation(
+            field_path="address.zip_code",
+            violation_type=ViolationType.TYPE_MISMATCH,
+            expected_type=FieldType.INTEGER,
+        )
+        ops = TypeCoercionStrategy().propose(
+            [violation], self._nested(), {"address": {"zip_code": "400001"}}
+        )
+        assert len(ops) == 1
+        assert ops[0].target_path == "address.zip_code"
+        assert ops[0].risk is RepairRisk.REVERSIBLE
+
+    def test_unresolvable_nested_path_falls_back_to_expected_type(self) -> None:
+        """An OBJECT with no nested_spec cannot resolve its children."""
+        contract = ContractSpec(fields=[FieldSpec("address", FieldType.OBJECT)])
+        violation = make_violation(
+            field_path="address.zip_code",
+            violation_type=ViolationType.TYPE_MISMATCH,
+            expected_type=FieldType.INTEGER,
+        )
+        ops = TypeCoercionStrategy().propose(
+            [violation], contract, {"address": {"zip_code": "400001"}}
+        )
+        assert len(ops) == 1
+        assert ops[0].risk is RepairRisk.REVERSIBLE

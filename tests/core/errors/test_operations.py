@@ -6,7 +6,11 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from stateguard.core.errors.operations import FieldOperation, FieldOpType
+from stateguard.core.errors.operations import (
+    FieldOperation,
+    FieldOpType,
+    RepairEvidence,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -54,23 +58,23 @@ class TestFieldOpType:
 def _rename(
     source: str = "temp_celsius",
     target: str = "temperature",
-    confidence: float = 0.85,
+    trust: float = 0.85,
     rationale: str = "Fuzzy match",
 ) -> FieldOperation:
     return FieldOperation(
         op_type=FieldOpType.RENAME,
         target_path=target,
-        confidence=confidence,
+        trust=trust,
         rationale=rationale,
         source_path=source,
     )
 
 
-def _remove(target: str = "unwanted", confidence: float = 1.0) -> FieldOperation:
+def _remove(target: str = "unwanted", trust: float = 1.0) -> FieldOperation:
     return FieldOperation(
         op_type=FieldOpType.REMOVE,
         target_path=target,
-        confidence=confidence,
+        trust=trust,
         rationale="Remove unexpected field",
     )
 
@@ -94,7 +98,7 @@ class TestFieldOperationConstruction:
         op = FieldOperation(
             op_type=FieldOpType.COERCE,
             target_path="count",
-            confidence=0.95,
+            trust=0.95,
             rationale="str->int: value is digit string",
         )
         assert op.op_type is FieldOpType.COERCE
@@ -105,7 +109,7 @@ class TestFieldOperationConstruction:
         op = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="humidity",
-            confidence=1.0,
+            trust=1.0,
             rationale="Field has declared default",
             value=50,
         )
@@ -117,7 +121,7 @@ class TestFieldOperationConstruction:
         op = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="optional_field",
-            confidence=1.0,
+            trust=1.0,
             rationale="Default is None",
             value=None,
         )
@@ -127,7 +131,7 @@ class TestFieldOperationConstruction:
         op = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="status",
-            confidence=1.0,
+            trust=1.0,
             rationale="Default status",
             value="unknown",
         )
@@ -137,7 +141,7 @@ class TestFieldOperationConstruction:
         op = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="temperature",
-            confidence=1.0,
+            trust=1.0,
             rationale="Default temp",
             value=20.0,
         )
@@ -147,7 +151,7 @@ class TestFieldOperationConstruction:
         op = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="active",
-            confidence=1.0,
+            trust=1.0,
             rationale="Default active",
             value=False,
         )
@@ -163,7 +167,7 @@ class TestFieldOperationConstruction:
         op = FieldOperation(
             op_type=FieldOpType.SET_VALUE,
             target_path="override_field",
-            confidence=0.5,
+            trust=0.5,
             rationale="Last-resort forced value",
             value="forced",
         )
@@ -171,15 +175,15 @@ class TestFieldOperationConstruction:
         assert op.value == "forced"
 
     def test_confidence_zero_is_valid(self) -> None:
-        op = _remove(confidence=0.0)
+        op = _remove(trust=0.0)
         assert op.confidence == 0.0
 
     def test_confidence_one_is_valid(self) -> None:
-        op = _remove(confidence=1.0)
+        op = _remove(trust=1.0)
         assert op.confidence == 1.0
 
     def test_confidence_midpoint_is_valid(self) -> None:
-        op = _rename(confidence=0.5)
+        op = _rename(trust=0.5)
         assert op.confidence == 0.5
 
 
@@ -190,27 +194,27 @@ class TestFieldOperationConstruction:
 
 class TestFieldOperationValidation:
     def test_confidence_above_one_raises(self) -> None:
-        with pytest.raises(ValueError, match="confidence must be in"):
-            _remove(confidence=1.001)
+        with pytest.raises(ValueError, match="trust must be in"):
+            _remove(trust=1.001)
 
     def test_confidence_below_zero_raises(self) -> None:
-        with pytest.raises(ValueError, match="confidence must be in"):
-            _remove(confidence=-0.001)
+        with pytest.raises(ValueError, match="trust must be in"):
+            _remove(trust=-0.001)
 
     def test_confidence_significantly_above_one_raises(self) -> None:
-        with pytest.raises(ValueError, match="confidence must be in"):
-            _remove(confidence=2.0)
+        with pytest.raises(ValueError, match="trust must be in"):
+            _remove(trust=2.0)
 
     def test_confidence_significantly_below_zero_raises(self) -> None:
-        with pytest.raises(ValueError, match="confidence must be in"):
-            _remove(confidence=-1.0)
+        with pytest.raises(ValueError, match="trust must be in"):
+            _remove(trust=-1.0)
 
     def test_rename_without_source_path_raises(self) -> None:
         with pytest.raises(ValueError, match="RENAME.*requires source_path"):
             FieldOperation(
                 op_type=FieldOpType.RENAME,
                 target_path="temperature",
-                confidence=0.9,
+                trust=0.9,
                 rationale="missing source",
                 # source_path intentionally omitted
             )
@@ -220,7 +224,7 @@ class TestFieldOperationValidation:
         op = FieldOperation(
             op_type=FieldOpType.RENAME,
             target_path="x",
-            confidence=0.9,
+            trust=0.9,
             rationale="root-level rename",
             source_path="",
         )
@@ -239,7 +243,7 @@ class TestFieldOperationValidation:
         op = FieldOperation(
             op_type=op_type,
             target_path="some_field",
-            confidence=0.9,
+            trust=0.9,
             rationale="no source needed",
         )
         assert op.source_path is None
@@ -258,7 +262,7 @@ class TestFieldOperationValidation:
         op = FieldOperation(
             op_type=op_type,
             target_path="some_field",
-            confidence=0.9,
+            trust=0.9,
             rationale="source provided anyway",
             source_path="original_field",
         )
@@ -300,7 +304,7 @@ class TestFieldOperationImmutability:
         op = FieldOperation(
             op_type=FieldOpType.SET_DEFAULT,
             target_path="x",
-            confidence=1.0,
+            trust=1.0,
             rationale="r",
             value=42,
         )
@@ -323,7 +327,7 @@ class TestFieldOperationEquality:
         assert _rename() == _rename()
 
     def test_different_confidence_not_equal(self) -> None:
-        assert _rename(confidence=0.8) != _rename(confidence=0.9)
+        assert _rename(trust=0.8) != _rename(trust=0.9)
 
     def test_different_source_not_equal(self) -> None:
         assert _rename(source="a") != _rename(source="b")
@@ -332,13 +336,13 @@ class TestFieldOperationEquality:
         assert _rename(target="x") != _rename(target="y")
 
     def test_different_op_type_not_equal(self) -> None:
-        op1 = FieldOperation(FieldOpType.COERCE, "x", 0.9, "r")
-        op2 = FieldOperation(FieldOpType.REMOVE, "x", 0.9, "r")
+        op1 = FieldOperation(FieldOpType.COERCE, "x", "r", trust=0.9)
+        op2 = FieldOperation(FieldOpType.REMOVE, "x", "r", trust=0.9)
         assert op1 != op2
 
     def test_set_default_with_different_values_not_equal(self) -> None:
-        op1 = FieldOperation(FieldOpType.SET_DEFAULT, "f", 1.0, "r", value=1)
-        op2 = FieldOperation(FieldOpType.SET_DEFAULT, "f", 1.0, "r", value=2)
+        op1 = FieldOperation(FieldOpType.SET_DEFAULT, "f", "r", trust=1.0, value=1)
+        op2 = FieldOperation(FieldOpType.SET_DEFAULT, "f", "r", trust=1.0, value=2)
         assert op1 != op2
 
     def test_not_equal_to_none(self) -> None:
@@ -370,7 +374,7 @@ class TestFieldOperationHashability:
     def test_can_be_stored_in_set(self) -> None:
         op1 = _rename()
         op2 = _rename()  # duplicate
-        op3 = _rename(confidence=0.99)  # different
+        op3 = _rename(trust=0.99)  # different
         s = {op1, op2, op3}
         assert len(s) == 2
 
@@ -414,24 +418,43 @@ class TestFieldOperationAllOpTypes:
         op = FieldOperation(
             op_type=op_type,
             target_path="target_field",
-            confidence=0.9,
+            trust=0.9,
             rationale=f"Testing {op_type.value}",
             source_path=source,
         )
         assert op.op_type is op_type
 
     @pytest.mark.parametrize(
-        "confidence",
+        "trust",
         [0.0, 0.01, 0.5, 0.7, 0.99, 1.0],
     )
-    def test_boundary_and_typical_confidence_values(self, confidence: float) -> None:
-        op = _remove(confidence=confidence)
-        assert op.confidence == confidence
+    def test_boundary_and_typical_confidence_values(self, trust: float) -> None:
+        op = _remove(trust=trust)
+        assert op.confidence == trust
 
     @pytest.mark.parametrize(
-        "confidence",
+        "trust",
         [-0.001, -1.0, 1.001, 2.0, float("inf")],
     )
-    def test_out_of_range_confidence_values_raise(self, confidence: float) -> None:
+    def test_out_of_range_confidence_values_raise(self, trust: float) -> None:
         with pytest.raises(ValueError):
-            _remove(confidence=confidence)
+            _remove(trust=trust)
+
+
+class TestEvidenceRangeValidation:
+    """Every evidence score is a [0, 1] quantity; nothing else is meaningful."""
+
+    @pytest.mark.parametrize(
+        "label", ["name_match", "value_preserved", "schema_authority", "margin"]
+    )
+    @pytest.mark.parametrize("score", [-0.01, 1.01, 2.0, -1.0])
+    def test_out_of_range_scores_raise(self, label: str, score: float) -> None:
+        with pytest.raises(ValueError, match=f"RepairEvidence.{label} must be in"):
+            RepairEvidence(**{label: score})
+
+    @pytest.mark.parametrize("score", [0.0, 0.5, 1.0])
+    def test_boundary_scores_are_accepted(self, score: float) -> None:
+        assert RepairEvidence(name_match=score).name_match == score
+
+    def test_none_means_not_applicable_and_is_never_range_checked(self) -> None:
+        assert RepairEvidence().applicable_scores == ()

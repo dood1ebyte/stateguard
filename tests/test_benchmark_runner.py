@@ -151,20 +151,20 @@ class TestRunCase:
         outcome = runner.run_case(case)
         assert outcome.passed is True
 
-    def test_confidences_recorded(self) -> None:
+    def test_trusts_recorded(self) -> None:
         outcome = runner.run_case(SUCCESS_CASE)
-        assert len(outcome.confidences) >= 1
-        assert all(0.0 <= c <= 1.0 for c in outcome.confidences)
+        assert len(outcome.trusts) >= 1
+        assert all(0.0 <= c <= 1.0 for c in outcome.trusts)
 
-    def test_average_confidence_property(self) -> None:
+    def test_average_trust_property(self) -> None:
         outcome = runner.run_case(SUCCESS_CASE)
-        assert outcome.average_confidence is not None
-        assert outcome.average_confidence == sum(outcome.confidences) / len(outcome.confidences)
+        assert outcome.average_trust is not None
+        assert outcome.average_trust == sum(outcome.trusts) / len(outcome.trusts)
 
-    def test_average_confidence_none_when_no_operations(self) -> None:
+    def test_average_trust_none_when_no_operations(self) -> None:
         outcome = runner.run_case(ALREADY_VALID_CASE)
-        assert outcome.confidences == []
-        assert outcome.average_confidence is None
+        assert outcome.trusts == []
+        assert outcome.average_trust is None
 
     def test_malformed_schema_does_not_crash_runner(self) -> None:
         case = {
@@ -208,28 +208,48 @@ class TestRunBenchmark:
         assert summary.passed_cases == 3
         assert summary.failed_cases == 0
 
-    def test_repaired_cases_excludes_already_valid_and_failed(self) -> None:
+    def test_only_repair_scenarios_count_as_repairable(self) -> None:
+        """
+        An already-valid case has nothing to repair, and the deliberately
+        unrecoverable case exists to prove StateGuard refuses to guess --
+        repairing it would be a bug. Neither belongs in the denominator.
+        """
         summary = runner.run_benchmark([SUCCESS_CASE, ALREADY_VALID_CASE, FAILED_CASE])
-        # only SUCCESS_CASE actually got repaired
-        assert summary.repaired_cases == 1
+        assert summary.repairable_cases == 1
+        assert summary.repaired_correctly == 1
 
-    def test_repair_rate_computation(self) -> None:
+    def test_repair_rate_is_recall_over_repairable_cases(self) -> None:
+        """
+        Dividing by total_cases made 1/3 the *maximum* achievable score on a
+        suite where every case behaved correctly.
+        """
         summary = runner.run_benchmark([SUCCESS_CASE, ALREADY_VALID_CASE, FAILED_CASE])
-        assert summary.repair_rate == pytest.approx(1 / 3)
+        assert summary.repair_rate == pytest.approx(1.0)
+
+    def test_precision_is_reported(self) -> None:
+        summary = runner.run_benchmark([SUCCESS_CASE, ALREADY_VALID_CASE, FAILED_CASE])
+        assert summary.attempted_repairs == 1
+        assert summary.false_positives == 0
+        assert summary.precision == pytest.approx(1.0)
+
+    def test_precision_is_none_when_nothing_was_attempted(self) -> None:
+        summary = runner.run_benchmark([ALREADY_VALID_CASE, FAILED_CASE])
+        assert summary.attempted_repairs == 0
+        assert summary.precision is None
 
     def test_repair_rate_zero_for_empty_list(self) -> None:
         summary = runner.run_benchmark([])
         assert summary.total_cases == 0
         assert summary.repair_rate == 0.0
 
-    def test_average_confidence_across_cases(self) -> None:
+    def test_average_trust_across_cases(self) -> None:
         summary = runner.run_benchmark([SUCCESS_CASE, ALREADY_VALID_CASE])
-        assert summary.average_confidence is not None
-        assert 0.0 <= summary.average_confidence <= 1.0
+        assert summary.average_trust is not None
+        assert 0.0 <= summary.average_trust <= 1.0
 
-    def test_average_confidence_none_when_nothing_repaired(self) -> None:
+    def test_average_trust_none_when_nothing_repaired(self) -> None:
         summary = runner.run_benchmark([ALREADY_VALID_CASE, FAILED_CASE])
-        assert summary.average_confidence is None
+        assert summary.average_trust is None
 
     def test_mismatched_case_counted_as_failed(self) -> None:
         bad_case = dict(SUCCESS_CASE)
@@ -268,9 +288,13 @@ class TestSummaryToDict:
             "total_cases",
             "passed_cases",
             "failed_cases",
-            "repaired_cases",
+            "repairable_cases",
+            "repaired_correctly",
             "repair_rate",
-            "average_confidence",
+            "attempted_repairs",
+            "false_positives",
+            "precision",
+            "average_trust",
             "outcomes",
         ):
             assert key in d
@@ -288,7 +312,7 @@ class TestSummaryToDict:
             "expected_status",
             "actual_status",
             "passed",
-            "average_confidence",
+            "average_trust",
             "error",
         ):
             assert key in outcome_dict
@@ -473,10 +497,62 @@ class TestRealBenchmarkCases:
         failing = [o for o in summary.outcomes if not o.passed]
         assert failing == [], f"Failing cases: {[(o.name, o.error) for o in failing]}"
 
-    def test_shipped_repair_rate_is_reasonable(self) -> None:
+    def test_every_repairable_shipped_case_is_repaired(self) -> None:
         cases_dir = _REPO_ROOT / "benchmarks" / "cases"
         cases = runner.load_cases(cases_dir)
         summary = runner.run_benchmark(cases)
-        # 7 of 9 shipped cases are repair scenarios (excludes already_valid
-        # and the deliberately-unrecoverable case).
-        assert summary.repair_rate == pytest.approx(7 / 9)
+
+        assert summary.repair_rate == pytest.approx(1.0)
+
+    def test_no_shipped_case_is_repaired_that_should_not_be(self) -> None:
+        """
+        Precision, not repair rate, is the number that catches a regression
+        that matters: a case repairing when its expected_result says it must
+        not is a silently wrong repair.
+        """
+        cases_dir = _REPO_ROOT / "benchmarks" / "cases"
+        summary = runner.run_benchmark(runner.load_cases(cases_dir))
+
+        assert summary.false_positives == 0
+        assert summary.precision == pytest.approx(1.0)
+
+
+class TestRepairRateDetectsDegradation:
+    """
+    ``repair_rate`` counts a repairable case only when it *passed*.
+
+    Asking only whether the outcome landed somewhere in {success, partial}
+    meant a case degrading from success to partial still counted, so the
+    headline number stayed at 100% through the regression it exists to catch.
+    """
+
+    def test_a_case_that_degrades_to_partial_does_not_count(self) -> None:
+        degraded = dict(SUCCESS_CASE)
+        # The payload can be renamed but not coerced, so the case that expects
+        # SUCCESS actually lands on PARTIAL.
+        degraded["expected_schema"] = {
+            "fields": [
+                {"path": "temperature", "type": "float"},
+                {
+                    "path": "station",
+                    "type": "string",
+                    "constraints": [{"type": "min_length", "value": 99}],
+                },
+            ]
+        }
+        degraded["broken_payload"] = {"temp_celsius": 31.5, "station": "KBOS"}
+
+        summary = runner.run_benchmark([degraded])
+        assert summary.outcomes[0].actual_status == "partial"
+        assert summary.outcomes[0].passed is False
+        assert summary.repairable_cases == 1
+        assert summary.repaired_correctly == 0
+        assert summary.repair_rate == pytest.approx(0.0)
+
+    def test_a_case_below_its_declared_min_confidence_does_not_count(self) -> None:
+        strict = dict(SUCCESS_CASE)
+        strict["expected_result"] = {"status": "success", "min_confidence": 0.999}
+        summary = runner.run_benchmark([strict])
+        assert summary.outcomes[0].actual_status == "success"
+        assert summary.outcomes[0].passed is False
+        assert summary.repair_rate == pytest.approx(0.0)

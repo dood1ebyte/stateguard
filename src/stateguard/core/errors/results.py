@@ -24,6 +24,7 @@ from stateguard.core.errors.violations import ContractViolation
 from stateguard.logging.logger import RepairLogEntry
 
 __all__ = [
+    "AmbiguousRepair",
     "RepairAttempt",
     "RepairResult",
     "RepairStatus",
@@ -57,12 +58,20 @@ class RepairStatus(StrEnum):
     ALREADY_VALID:
         The input data passed contract validation without any repair.
         The engine exits immediately; ``RepairResult.attempts`` is empty.
+    AMBIGUOUS:
+        A repair *was* found, but the evidence did not justify applying it
+        unsupervised, and nothing else resolved the violation either.
+        Distinct from ``FAILED``, which means no repair was found at all —
+        the difference matters because an ambiguous result is actionable:
+        ``RepairResult.ambiguous`` carries the candidates so a caller can
+        re-prompt, a reviewer can choose, or Shadow Mode can display them.
     """
 
     SUCCESS = "success"
     PARTIAL = "partial"
     FAILED = "failed"
     ALREADY_VALID = "already_valid"
+    AMBIGUOUS = "ambiguous"
 
 
 # ---------------------------------------------------------------------------
@@ -125,17 +134,41 @@ class RepairAttempt:
     attempt_number:
         1-indexed position of this attempt within the repair session.
     strategy_name:
-        ``IRepairStrategy.name`` of the strategy that was executed.
+        ``IRepairStrategy.name`` of the strategy that **acted** -- the one
+        whose proposals reached ``applied_operations``.  An attempt may
+        consult several: the engine walks applicable strategies in priority
+        order until one has something it can apply, because otherwise a
+        single uncertain rename would suppress a certain, schema-declared
+        fill from a lower-priority strategy.  See ``considered_strategies``.
+    considered_strategies:
+        ``IRepairStrategy.name`` for every strategy consulted during this
+        attempt, in the order they were tried.  ``strategy_name`` is always
+        the last entry.  Without this the operation lists below could not be
+        attributed: a proposal carried over from a passed-over strategy is
+        indistinguishable from one made by the strategy that acted.
     violations_targeted:
-        ``violation_id`` values of the violations this strategy addressed.
+        ``violation_id`` values of the violations this attempt addressed.
     proposed_operations:
-        All ``FieldOperation`` objects returned by the strategy's
-        ``propose()`` method.
+        Every ``FieldOperation`` returned by ``propose()`` across **all**
+        of ``considered_strategies``, not only ``strategy_name``.  Proposals
+        from a passed-over strategy are kept because they were genuinely
+        considered, and an abstention recorded by one must not be erased by
+        whichever strategy ends up being selected.
     applied_operations:
-        Subset of ``proposed_operations`` where
-        ``confidence >= RepairConfig.min_confidence_threshold``.
+        Subset of ``proposed_operations`` that ``TrustPolicy`` cleared for
+        application *and* that actually changed the payload.  These always
+        come from ``strategy_name``.
     rejected_operations:
-        Subset of ``proposed_operations`` that fell below the threshold.
+        Subset of ``proposed_operations`` whose evidence was too weak to
+        consider a repair at all, plus any that turned out to change nothing
+        when applied.  May span ``considered_strategies``.
+    abstained_operations:
+        Subset of ``proposed_operations`` that ``TrustPolicy`` withheld -- a
+        real repair was found, but not confidently enough to apply it
+        unsupervised.  Without this an abstained operation appeared in
+        neither list and the attempt read as "the strategy did nothing".
+        Also collected across the whole run on ``RepairResult.ambiguous``.
+        May span ``considered_strategies``.
     data_before:
         Deep copy of the working data dict *before* operations were applied.
     data_after:
@@ -160,9 +193,49 @@ class RepairAttempt:
     data_after: dict[str, Any]
     succeeded: bool
 
-    # Auto-generated fields
+    # Optional / auto-generated fields
+    abstained_operations: list[FieldOperation] = field(default_factory=list)
+    considered_strategies: list[str] = field(default_factory=list)
     attempt_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     attempted_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
+
+
+# ---------------------------------------------------------------------------
+# AmbiguousRepair
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AmbiguousRepair:
+    """
+    A repair the engine found but declined to apply on its own authority.
+
+    This is the abstain region of the trust model made visible.  A binary
+    apply/reject threshold has to force every borderline case to one side, so
+    it either guesses or silently drops the proposal — and the caller learns
+    nothing either way.  Surfacing the candidates instead turns "I'm not sure"
+    into something a caller can act on.
+
+    Attributes
+    ----------
+    target_path:
+        The field the proposed repair would have written.
+    candidates:
+        The operations considered, ranked by ``trust`` descending.  Usually
+        one; more when several strategies proposed competing fixes.
+    reason:
+        Why none was applied — the trust achieved against the bar its risk
+        tier requires.
+    """
+
+    target_path: str
+    candidates: list[FieldOperation]
+    reason: str
+
+    @property
+    def best(self) -> FieldOperation | None:
+        """The highest-trust candidate, or ``None`` if there were none."""
+        return self.candidates[0] if self.candidates else None
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +302,7 @@ class RepairResult:
 
     # Optional / auto-generated
     repaired_output: dict[str, Any] | None = None
+    ambiguous: list[AmbiguousRepair] = field(default_factory=list)
     repaired_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
     # ------------------------------------------------------------------
@@ -254,3 +328,19 @@ class RepairResult:
     def is_already_valid(self) -> bool:
         """``True`` when ``status`` is ``RepairStatus.ALREADY_VALID``."""
         return self.status is RepairStatus.ALREADY_VALID
+
+    @property
+    def is_ambiguous(self) -> bool:
+        """``True`` when ``status`` is ``RepairStatus.AMBIGUOUS``."""
+        return self.status is RepairStatus.AMBIGUOUS
+
+    @property
+    def has_ambiguous_repairs(self) -> bool:
+        """
+        ``True`` when any proposal landed in the abstain band.
+
+        Distinct from :attr:`is_ambiguous`: a run can abstain on one field and
+        still repair another, ending ``SUCCESS`` or ``PARTIAL`` while carrying
+        candidates worth surfacing.
+        """
+        return bool(self.ambiguous)

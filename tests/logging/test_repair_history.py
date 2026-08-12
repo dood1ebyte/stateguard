@@ -56,7 +56,7 @@ def _make_operation(
     op_type: FieldOpType = FieldOpType.RENAME,
     target_path: str = "temperature",
     source_path: str | None = "temp_celsius",
-    confidence: float = 0.8,
+    trust: float = 0.8,
 ) -> FieldOperation:
     kwargs: dict[str, Any] = {}
     if op_type is FieldOpType.RENAME:
@@ -66,7 +66,7 @@ def _make_operation(
     return FieldOperation(
         op_type=op_type,
         target_path=target_path,
-        confidence=confidence,
+        trust=trust,
         rationale="test rationale",
         **kwargs,
     )
@@ -237,7 +237,8 @@ class TestRecordFieldContent:
             "field_path",
             "field_before",
             "field_after",
-            "confidence",
+            "trust",
+            "risk",
             "success",
             "attempt_number",
             "op_type",
@@ -265,12 +266,12 @@ class TestRecordFieldContent:
         recorder.record(result)
         assert recorder.read_all()[0]["strategy"] == "ExactAliasStrategy"
 
-    def test_confidence_matches(self, recorder: RepairHistoryRecorder) -> None:
-        op = _make_operation(confidence=0.92)
+    def test_trust_matches(self, recorder: RepairHistoryRecorder) -> None:
+        op = _make_operation(trust=0.92)
         attempt = _make_attempt(applied_operations=[op])
         result = _make_result(attempts=[attempt])
         recorder.record(result)
-        assert recorder.read_all()[0]["confidence"] == pytest.approx(0.92)
+        assert recorder.read_all()[0]["trust"] == pytest.approx(0.92)
 
     def test_op_type_matches(self, recorder: RepairHistoryRecorder) -> None:
         op = _make_operation(op_type=FieldOpType.RENAME)
@@ -321,7 +322,7 @@ class TestRecordFieldContent:
         self, recorder: RepairHistoryRecorder
     ) -> None:
         op = _make_operation(
-            op_type=FieldOpType.COERCE, target_path="count", source_path=None, confidence=0.95
+            op_type=FieldOpType.COERCE, target_path="count", source_path=None, trust=0.95
         )
         attempt = _make_attempt(
             applied_operations=[op],
@@ -415,7 +416,8 @@ class TestRecordNoAttempts:
         assert record["field_path"] is None
         assert record["field_before"] is None
         assert record["field_after"] is None
-        assert record["confidence"] is None
+        assert record["trust"] is None
+        assert record["risk"] is None
         assert record["attempt_number"] is None
         assert record["op_type"] is None
 
@@ -468,7 +470,7 @@ class TestRecordMultipleAttempts:
             op_type=FieldOpType.COERCE,
             target_path="address.country.population",
             source_path=None,
-            confidence=0.95,
+            trust=0.95,
         )
         attempt1 = _make_attempt(
             strategy_name="FuzzyFieldMatchStrategy", applied_operations=[op1], attempt_number=1

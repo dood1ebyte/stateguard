@@ -111,7 +111,7 @@ def make_operation(
     return FieldOperation(
         op_type=op_type,
         target_path=target_path,
-        confidence=confidence,
+        trust=confidence,
         rationale=rationale,
         **kwargs,
     )
