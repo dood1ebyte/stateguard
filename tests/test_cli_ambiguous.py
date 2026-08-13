@@ -158,3 +158,58 @@ class TestJsonOutput:
     ) -> None:
         _run(*files(CLEAN_SCHEMA, {"x": "hi"}), "--json")
         assert json.loads(capsys.readouterr().out)["ambiguous"] == []
+
+
+# ===========================================================================
+# Telling competing candidates apart
+# ===========================================================================
+
+
+ENUM_COLLISION_SCHEMA: dict[str, Any] = {
+    "fields": [
+        {
+            "path": "status",
+            "type": "string",
+            "constraints": [{"type": "enum_values", "value": ["in_progress", "in progress"]}],
+        }
+    ]
+}
+ENUM_COLLISION_PAYLOAD: dict[str, Any] = {"status": "IN PROGRESS"}
+
+
+class TestCandidatesAreDistinguishable:
+    """
+    The ambiguous block exists so a caller can *choose*. Rendering the
+    competing candidates identically makes that impossible: two enum
+    candidates both printed as a bare ``set_value`` line, with no indication
+    of what either would write.
+    """
+
+    def test_human_output_names_the_value_each_candidate_would_write(
+        self, files: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _run(*files(ENUM_COLLISION_SCHEMA, ENUM_COLLISION_PAYLOAD))
+        out = capsys.readouterr().out
+        assert "→ 'in_progress'" in out
+        assert "→ 'in progress'" in out
+
+    def test_human_output_names_the_key_a_rename_would_read_from(
+        self, files: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A rename's discriminator is its source, not a value."""
+        _run(*files(CONTESTED_SCHEMA, CONTESTED_PAYLOAD))
+        out = capsys.readouterr().out
+        assert "← user_email" in out
+
+    def test_json_carries_the_value_for_each_candidate(
+        self, files: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """
+        An agent re-prompting on an ambiguous result reads this. Without
+        ``value`` the two candidates are byte-identical JSON objects.
+        """
+        _run(*files(ENUM_COLLISION_SCHEMA, ENUM_COLLISION_PAYLOAD), "--json")
+        payload = json.loads(capsys.readouterr().out)
+        candidates = payload["ambiguous"][0]["candidates"]
+        assert {c["value"] for c in candidates} == {"in_progress", "in progress"}
+        assert len({json.dumps(c, sort_keys=True) for c in candidates}) == 2

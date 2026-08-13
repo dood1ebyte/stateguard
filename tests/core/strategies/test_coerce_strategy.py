@@ -12,14 +12,13 @@ from stateguard.core.errors.operations import (
     RepairRisk,
 )
 from stateguard.core.errors.results import RepairStatus
+from stateguard.core.paths import NOT_FOUND, get_nested_value
 from stateguard.core.errors.violations import ViolationSeverity, ViolationType
 from stateguard.core.models.contract import ContractSpec, FieldSpec
 from stateguard.core.models.field_types import FieldType, UnionMember
 from stateguard.core.strategies.coerce import (
-    _NOT_FOUND,
     TypeCoercionStrategy,
     _coercion_evidence,
-    _get_nested_value,
     _is_float_string,
     _is_integer_string,
     json_loads_strict,
@@ -646,24 +645,24 @@ class TestProposeNested:
 
 class TestGetNestedValue:
     def test_top_level_key(self) -> None:
-        assert _get_nested_value({"a": 1}, "a") == 1
+        assert get_nested_value({"a": 1}, "a") == 1
 
     def test_nested_key(self) -> None:
-        assert _get_nested_value({"a": {"b": 2}}, "a.b") == 2
+        assert get_nested_value({"a": {"b": 2}}, "a.b") == 2
 
     def test_missing_top_level_key(self) -> None:
-        assert _get_nested_value({"a": 1}, "b") is _NOT_FOUND
+        assert get_nested_value({"a": 1}, "b") is NOT_FOUND
 
     def test_missing_nested_key(self) -> None:
-        assert _get_nested_value({"a": {"b": 2}}, "a.c") is _NOT_FOUND
+        assert get_nested_value({"a": {"b": 2}}, "a.c") is NOT_FOUND
 
     def test_intermediate_not_a_dict(self) -> None:
-        assert _get_nested_value({"a": "not a dict"}, "a.b") is _NOT_FOUND
+        assert get_nested_value({"a": "not a dict"}, "a.b") is NOT_FOUND
 
     def test_value_none_is_distinct_from_not_found(self) -> None:
-        result = _get_nested_value({"a": None}, "a")
+        result = get_nested_value({"a": None}, "a")
         assert result is None
-        assert result is not _NOT_FOUND
+        assert result is not NOT_FOUND
 
 
 class TestIsIntegerString:

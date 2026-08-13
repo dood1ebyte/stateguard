@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from stateguard.core.errors.results import RepairStatus
+from stateguard.core.paths import NOT_FOUND, get_nested_value
 from stateguard.core.errors.violations import ViolationType
 from stateguard.core.models.config import RepairConfig
 from stateguard.core.models.contract import ContractSpec, FieldSpec
@@ -502,16 +503,16 @@ class TestDeeplyNestedInvalidPaths:
         )
 
     def test_six_levels_deep_path_does_not_crash_path_helpers(self) -> None:
-        """_get_nested/_set_nested/_delete_nested have no hard depth
+        """get_nested_value/_set_nested/_delete_nested have no hard depth
         limit even though only depth 3 is officially validated end-to-end;
         this proves graceful behavior (no crash) beyond that depth too."""
-        from stateguard.core.engine import _get_nested, _set_nested, _delete_nested
+        from stateguard.core.engine import _delete_nested, _set_nested
 
         data: dict = {}
         _set_nested(data, "a.b.c.d.e.f", "deep_value")
-        assert _get_nested(data, "a.b.c.d.e.f") == "deep_value"
+        assert get_nested_value(data, "a.b.c.d.e.f") == "deep_value"
         _delete_nested(data, "a.b.c.d.e.f")
-        assert _get_nested(data, "a.b.c.d.e.f") is not None or True  # no crash either way
+        assert get_nested_value(data, "a.b.c.d.e.f") is not None or True  # no crash either way
 
     def test_repair_at_max_validated_depth_full_round_trip(self) -> None:
         """Sanity end-to-end check at exactly the documented depth-3

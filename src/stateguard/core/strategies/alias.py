@@ -19,7 +19,7 @@ from stateguard.core.errors.operations import (
 )
 from stateguard.core.errors.violations import ContractViolation, ViolationType
 from stateguard.core.interfaces.strategy import IRepairStrategy
-from stateguard.core.models.contract import ContractSpec, FieldSpec
+from stateguard.core.models.contract import ContractSpec, find_field_spec
 
 __all__ = ["ExactAliasStrategy"]
 
@@ -27,27 +27,6 @@ __all__ = ["ExactAliasStrategy"]
 # ---------------------------------------------------------------------------
 # Path helpers (private to this module)
 # ---------------------------------------------------------------------------
-
-
-def _find_field_spec(contract: ContractSpec, full_path: str) -> FieldSpec | None:
-    """
-    Locate the ``FieldSpec`` for a dot-notation *full_path* within *contract*,
-    recursing into ``nested_spec`` for nested paths.
-
-    ``FieldSpec.path`` for fields inside a nested contract stores only the
-    local segment (e.g. ``"zip_code"``), while violation field paths are
-    fully qualified (e.g. ``"address.zip_code"``).  This helper bridges
-    the two.
-    """
-    local, _, rest = full_path.partition(".")
-    for field_spec in contract.fields:
-        if field_spec.path == local:
-            if not rest:
-                return field_spec
-            if field_spec.nested_spec is not None:
-                return _find_field_spec(field_spec.nested_spec, rest)
-            return None
-    return None
 
 
 def _split_path(full_path: str) -> tuple[str, str]:
@@ -112,7 +91,7 @@ class ExactAliasStrategy(IRepairStrategy):
         for violation in violations:
             if violation.violation_type is not ViolationType.MISSING_REQUIRED_FIELD:
                 continue
-            field_spec = _find_field_spec(contract, violation.field_path)
+            field_spec = find_field_spec(contract, violation.field_path)
             if field_spec is not None and field_spec.known_aliases:
                 return True
         return False
@@ -129,7 +108,7 @@ class ExactAliasStrategy(IRepairStrategy):
             if violation.violation_type is not ViolationType.MISSING_REQUIRED_FIELD:
                 continue
 
-            field_spec = _find_field_spec(contract, violation.field_path)
+            field_spec = find_field_spec(contract, violation.field_path)
             if field_spec is None or not field_spec.known_aliases:
                 continue
 

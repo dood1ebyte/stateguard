@@ -93,8 +93,9 @@ from stateguard.core.errors.violations import (
 )
 from stateguard.core.interfaces.adapter import IContractAdapter
 from stateguard.core.models.config import RepairConfig
-from stateguard.core.models.contract import ContractSpec, FieldSpec
+from stateguard.core.models.contract import ContractSpec, find_field_spec
 from stateguard.core.models.field_types import FieldType, UnionMember
+from stateguard.core.paths import NOT_FOUND, get_nested_value
 from stateguard.core.strategies.coerce import (
     _array_wrap_is_safe,
     _parsed_array_matches,
@@ -116,16 +117,6 @@ __all__ = ["RepairEngine"]
 # ---------------------------------------------------------------------------
 # Path navigation helpers (private to this module)
 # ---------------------------------------------------------------------------
-
-
-class _NotFound:
-    """Sentinel distinguishing 'path does not exist' from a value of None."""
-
-    def __repr__(self) -> str:
-        return "NOT_FOUND"
-
-
-_NOT_FOUND = _NotFound()
 
 
 class _CoerceFailed:
@@ -349,19 +340,6 @@ def _normalise_root_payload(data: Any) -> tuple[dict[str, Any] | None, str]:
     return None, ""
 
 
-def _get_nested(data: dict[str, Any], path: str) -> Any:
-    """Return the value at dot-notation *path* in *data*, or ``_NOT_FOUND``."""
-    parts = path.split(".")
-    current: Any = data
-    for part in parts[:-1]:
-        if not isinstance(current, dict) or part not in current:
-            return _NOT_FOUND
-        current = current[part]
-    if not isinstance(current, dict) or parts[-1] not in current:
-        return _NOT_FOUND
-    return current[parts[-1]]
-
-
 def _set_nested(data: dict[str, Any], path: str, value: Any) -> None:
     """
     Set *value* at dot-notation *path* in *data*, creating intermediate
@@ -388,25 +366,6 @@ def _delete_nested(data: dict[str, Any], path: str) -> None:
         current = current[part]
     if isinstance(current, dict) and parts[-1] in current:
         del current[parts[-1]]
-
-
-def _find_field_spec(contract: ContractSpec, full_path: str) -> FieldSpec | None:
-    """
-    Locate the ``FieldSpec`` for a dot-notation *full_path* within *contract*,
-    recursing into ``nested_spec`` for nested paths.
-
-    Used by ``_apply_coerce`` to determine the declared ``FieldType`` for a
-    ``COERCE`` operation's target.
-    """
-    local, _, rest = full_path.partition(".")
-    for field_spec in contract.fields:
-        if field_spec.path == local:
-            if not rest:
-                return field_spec
-            if field_spec.nested_spec is not None:
-                return _find_field_spec(field_spec.nested_spec, rest)
-            return None
-    return None
 
 
 def _coerce_value(
@@ -1350,13 +1309,13 @@ class RepairEngine:
         if op.op_type is FieldOpType.COERCE:
             return self._apply_coerce(data, op, contract)
         if op.op_type is FieldOpType.SET_DEFAULT or op.op_type is FieldOpType.SET_VALUE:
-            existing = _get_nested(data, op.target_path)
-            if existing is not _NOT_FOUND and _identical(existing, op.value):
+            existing = get_nested_value(data, op.target_path)
+            if existing is not NOT_FOUND and _identical(existing, op.value):
                 return False
             _set_nested(data, op.target_path, op.value)
             return True
         if op.op_type is FieldOpType.REMOVE:
-            existed = _get_nested(data, op.target_path) is not _NOT_FOUND
+            existed = get_nested_value(data, op.target_path) is not NOT_FOUND
             _delete_nested(data, op.target_path)
             return existed
         return False
@@ -1366,8 +1325,8 @@ class RepairEngine:
         """Move the value at ``op.source_path`` to ``op.target_path``."""
         if op.source_path is None:
             return False
-        value = _get_nested(data, op.source_path)
-        if value is _NOT_FOUND:
+        value = get_nested_value(data, op.source_path)
+        if value is NOT_FOUND:
             return False
         _delete_nested(data, op.source_path)
         _set_nested(data, op.target_path, value)
@@ -1380,11 +1339,11 @@ class RepairEngine:
         contract: ContractSpec,
     ) -> bool:
         """Cast the value at ``op.target_path`` to its contract-declared type."""
-        value = _get_nested(data, op.target_path)
-        if value is _NOT_FOUND:
+        value = get_nested_value(data, op.target_path)
+        if value is NOT_FOUND:
             return False
 
-        field_spec = _find_field_spec(contract, op.target_path)
+        field_spec = find_field_spec(contract, op.target_path)
         if field_spec is None:
             return False
 

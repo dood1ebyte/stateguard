@@ -36,9 +36,12 @@ Only ``Ge``/``Le`` (-> ``MINIMUM``/``MAXIMUM``), ``MinLen``/``MaxLen``
 corresponding ``FieldConstraintType`` in V1 and are not extracted -- this is
 a documented V1 limitation.
 
-``Literal[...]`` annotations produce an ``ENUM_VALUES`` constraint from the
-literal's value tuple, in addition to the ``FieldType`` inferred by
-``PydanticTypeMapper``.
+``Literal[...]`` annotations and ``enum.Enum`` subclasses both produce an
+``ENUM_VALUES`` constraint, in addition to the ``FieldType`` inferred by
+``PydanticTypeMapper``.  For an Enum the constraint holds the member
+*values*, because that is what a payload carries -- see
+``PydanticTypeMapper.get_literal_values``, which also documents why
+``Flag``/``IntFlag`` are excluded.
 
 Defaults
 --------

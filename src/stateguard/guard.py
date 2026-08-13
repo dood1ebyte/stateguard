@@ -34,6 +34,7 @@ from stateguard.core.models.config import GuardConfig
 from stateguard.core.models.contract import ContractSpec
 from stateguard.core.strategies import (
     DefaultValueFillStrategy,
+    EnumNormalizationStrategy,
     ExactAliasStrategy,
     FuzzyFieldMatchStrategy,
     NormalizedNameStrategy,
@@ -113,6 +114,7 @@ class ContractGuard:
                 NormalizedNameStrategy(),
                 FuzzyFieldMatchStrategy(),
                 TypeCoercionStrategy(),
+                EnumNormalizationStrategy(),
                 DefaultValueFillStrategy(),
             ]
         )

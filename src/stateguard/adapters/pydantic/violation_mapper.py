@@ -64,7 +64,7 @@ from stateguard.core.errors.violations import (
     ViolationSeverity,
     ViolationType,
 )
-from stateguard.core.models.contract import ContractSpec, FieldSpec
+from stateguard.core.models.contract import ContractSpec, find_field_spec
 
 if TYPE_CHECKING:
     from pydantic import ValidationError
@@ -174,25 +174,6 @@ def _loc_to_field_path(loc: tuple[Any, ...], contract: ContractSpec) -> str:
     return ".".join(resolved_parts)
 
 
-def _find_field_spec(contract: ContractSpec, full_path: str) -> FieldSpec | None:
-    """
-    Locate the ``FieldSpec`` for a dot-notation *full_path* within *contract*,
-    recursing into ``nested_spec`` for nested paths.
-
-    Duplicated from the repair-strategy modules to keep this adapter
-    self-contained (no core->adapter or adapter->adapter coupling).
-    """
-    local, _, rest = full_path.partition(".")
-    for field_spec in contract.fields:
-        if field_spec.path == local:
-            if not rest:
-                return field_spec
-            if field_spec.nested_spec is not None:
-                return _find_field_spec(field_spec.nested_spec, rest)
-            return None
-    return None
-
-
 # ---------------------------------------------------------------------------
 # PydanticViolationMapper
 # ---------------------------------------------------------------------------
@@ -249,7 +230,7 @@ class PydanticViolationMapper:
         field_path = _loc_to_field_path(loc, contract)
         violation_type = _classify(error_type)
 
-        field_spec = _find_field_spec(contract, field_path)
+        field_spec = find_field_spec(contract, field_path)
         expected_type = field_spec.field_type if field_spec is not None else None
 
         received_value: Any = None

@@ -7,11 +7,10 @@ from dataclasses import replace
 from stateguard.core.trust import TrustDecision, TrustPolicy
 from stateguard.core.errors.operations import FieldOpType, RepairRisk
 from stateguard.core.errors.violations import ViolationSeverity, ViolationType
-from stateguard.core.models.contract import ContractSpec, FieldSpec
+from stateguard.core.models.contract import ContractSpec, FieldSpec, find_field_spec
 from stateguard.core.models.field_types import FieldType
 from stateguard.core.strategies.alias import (
     ExactAliasStrategy,
-    _find_field_spec,
     _get_dict_at_path,
     _split_path,
 )
@@ -373,13 +372,13 @@ class TestProposeNested:
 class TestFindFieldSpec:
     def test_top_level_field_found(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("temperature", FieldType.FLOAT)])
-        spec = _find_field_spec(contract, "temperature")
+        spec = find_field_spec(contract, "temperature")
         assert spec is not None
         assert spec.path == "temperature"
 
     def test_top_level_field_not_found(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("temperature", FieldType.FLOAT)])
-        assert _find_field_spec(contract, "humidity") is None
+        assert find_field_spec(contract, "humidity") is None
 
     def test_nested_field_found(self) -> None:
         inner = ContractSpec(fields=[FieldSpec("city", FieldType.STRING)])
@@ -388,7 +387,7 @@ class TestFindFieldSpec:
                 FieldSpec("address", FieldType.OBJECT, nested_spec=inner),
             ]
         )
-        spec = _find_field_spec(contract, "address.city")
+        spec = find_field_spec(contract, "address.city")
         assert spec is not None
         assert spec.path == "city"
 
@@ -398,7 +397,7 @@ class TestFindFieldSpec:
                 FieldSpec("address", FieldType.OBJECT),  # no nested_spec
             ]
         )
-        assert _find_field_spec(contract, "address.city") is None
+        assert find_field_spec(contract, "address.city") is None
 
     def test_deeply_nested_field(self) -> None:
         level2 = ContractSpec(fields=[FieldSpec("code", FieldType.STRING)])
@@ -412,7 +411,7 @@ class TestFindFieldSpec:
                 FieldSpec("address", FieldType.OBJECT, nested_spec=level1),
             ]
         )
-        spec = _find_field_spec(contract, "address.country.code")
+        spec = find_field_spec(contract, "address.country.code")
         assert spec is not None
         assert spec.path == "code"
 
@@ -423,7 +422,7 @@ class TestFindFieldSpec:
                 FieldSpec("address", FieldType.OBJECT, nested_spec=inner),
             ]
         )
-        assert _find_field_spec(contract, "billing.city") is None
+        assert find_field_spec(contract, "billing.city") is None
 
 
 class TestSplitPath:
