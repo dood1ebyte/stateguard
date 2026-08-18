@@ -25,6 +25,12 @@ Supported annotation shapes:
   common type (``STRING`` if all values are ``str``, ``INTEGER`` if all
   ``int``, etc.); literal *values* are surfaced via ``get_literal_values``
   for the extractor to build an ``ENUM_VALUES`` constraint.
+* ``enum.Enum`` subclasses (including ``IntEnum`` and ``class X(str, Enum)``)
+  -> treated exactly like the ``Literal`` of their member *values*.  A real
+  Enum previously fell through every branch to ``FieldType.ANY`` with no
+  constraint at all, so StateGuard could not see the restriction that a
+  ``Literal`` spelling of the same thing made plainly visible.
+  ``enum.Flag``/``IntFlag`` are excluded -- see ``get_literal_values``.
 * ``Annotated[X, ...]`` -> unwrapped to ``X`` before any of the above.
 * ``Any`` -> ``FieldType.ANY``
 * ``Union`` of multiple non-``None`` types (e.g. ``Union[int, str]``,
@@ -49,6 +55,7 @@ Explicitly NOT supported in V1 (per finalized scope):
 from __future__ import annotations
 
 import datetime
+import enum
 import types
 import typing
 import uuid
@@ -144,14 +151,68 @@ class PydanticTypeMapper:
     @classmethod
     def get_literal_values(cls, annotation: Any) -> tuple[Any, ...] | None:
         """
-        Return the value tuple for ``Literal[...]`` annotations, or ``None``
-        if *annotation* (after unwrapping ``Optional``/``Annotated``) is not
-        a ``Literal``.
+        Return the allowed value tuple for a closed-set annotation, or ``None``
+        if *annotation* (after unwrapping ``Optional``/``Annotated``) does not
+        declare one.
+
+        Two annotation shapes declare a closed set, and they mean the same
+        thing to a payload arriving over the wire:
+
+        * ``Literal["open", "done"]`` -> ``("open", "done")``;
+        * an ``enum.Enum`` subclass -> its member **values**, in definition
+          order.  ``Status.OPEN`` is not what a JSON payload carries --
+          ``"open"`` is -- so the values are what the ``ENUM_VALUES``
+          constraint has to hold for ``ContractValidator`` to check them and
+          for ``EnumNormalizationStrategy`` to repair against them.
+
+        Member *aliases* (two names bound to one value) collapse naturally:
+        iterating an ``Enum`` yields canonical members only, so the tuple
+        carries each value once.
+
+        Excluded
+        --------
+        ``enum.Flag`` / ``enum.IntFlag`` are deliberately **not** treated as a
+        closed set.  Their members are designed to be combined (``A | B``),
+        and a combined value is legitimately valid while not being any single
+        member -- so an ``ENUM_VALUES`` constraint built from the members
+        would reject correct data.  They keep the previous behaviour
+        (``FieldType.ANY``, no constraint) and defer to Pydantic's own
+        validation.
+
+        An Enum with no members declares no restriction and is treated the
+        same way, rather than producing an empty set that nothing can satisfy.
         """
         inner, _ = cls.unwrap_optional(annotation)
+
         if typing.get_origin(inner) is typing.Literal:
             return typing.get_args(inner)
+
+        if cls._is_closed_enum(inner):
+            return tuple(member.value for member in inner)
+
         return None
+
+    @staticmethod
+    def _is_closed_enum(annotation: Any) -> bool:
+        """
+        ``True`` if *annotation* is an ``Enum`` whose members are a closed set.
+
+        The ``get_origin`` check is not redundant.  ``issubclass`` raises
+        ``TypeError`` on a parameterised generic, and ``isinstance(list[int],
+        type)`` was ``True`` before Python 3.11 — so on the low end of this
+        package's supported range (``requires-python = ">=3.11"``) a
+        ``list[Status]`` annotation could reach ``issubclass`` and raise.
+        This runs *before* ``map_annotation``'s origin handling, unlike
+        ``_is_basemodel_subclass``, so it cannot rely on generics having been
+        filtered out already.
+        """
+        if typing.get_origin(annotation) is not None:
+            return False
+        if not (isinstance(annotation, type) and issubclass(annotation, enum.Enum)):
+            return False
+        if issubclass(annotation, enum.Flag):
+            return False  # combinable; see get_literal_values
+        return len(annotation) > 0
 
     # ------------------------------------------------------------------
     # Primary mapping
@@ -305,7 +366,11 @@ class PydanticTypeMapper:
     @staticmethod
     def _literal_field_type(values: tuple[Any, ...]) -> FieldType:
         """
-        Infer a ``FieldType`` for a ``Literal[...]``'s value tuple.
+        Infer a ``FieldType`` for a closed set's value tuple.
+
+        Shared by ``Literal[...]`` and ``Enum``, which is the point: a
+        ``str``-valued Enum and the ``Literal`` of the same strings describe
+        the same payload and must map to the same ``FieldType``.
 
         If all values share a common primitive type, that type is used.
         Mixed-type or empty literals fall back to ``FieldType.ANY``.

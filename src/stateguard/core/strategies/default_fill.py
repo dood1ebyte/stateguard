@@ -21,7 +21,7 @@ from stateguard.core.errors.operations import (
 )
 from stateguard.core.errors.violations import ContractViolation, ViolationType
 from stateguard.core.interfaces.strategy import IRepairStrategy
-from stateguard.core.models.contract import MISSING, ContractSpec, FieldSpec
+from stateguard.core.models.contract import MISSING, ContractSpec, find_field_spec
 
 __all__ = ["DefaultValueFillStrategy"]
 
@@ -29,25 +29,6 @@ __all__ = ["DefaultValueFillStrategy"]
 # ---------------------------------------------------------------------------
 # Path helper (private to this module)
 # ---------------------------------------------------------------------------
-
-
-def _find_field_spec(contract: ContractSpec, full_path: str) -> FieldSpec | None:
-    """
-    Locate the ``FieldSpec`` for a dot-notation *full_path* within *contract*,
-    recursing into ``nested_spec`` for nested paths.
-
-    See ``stateguard.core.strategies.alias._find_field_spec`` for the
-    rationale; duplicated here to keep each strategy module self-contained.
-    """
-    local, _, rest = full_path.partition(".")
-    for field_spec in contract.fields:
-        if field_spec.path == local:
-            if not rest:
-                return field_spec
-            if field_spec.nested_spec is not None:
-                return _find_field_spec(field_spec.nested_spec, rest)
-            return None
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +66,7 @@ class DefaultValueFillStrategy(IRepairStrategy):
         for violation in violations:
             if violation.violation_type is not ViolationType.MISSING_REQUIRED_FIELD:
                 continue
-            field_spec = _find_field_spec(contract, violation.field_path)
+            field_spec = find_field_spec(contract, violation.field_path)
             if field_spec is not None and field_spec.default is not MISSING:
                 return True
         return False
@@ -102,7 +83,7 @@ class DefaultValueFillStrategy(IRepairStrategy):
             if violation.violation_type is not ViolationType.MISSING_REQUIRED_FIELD:
                 continue
 
-            field_spec = _find_field_spec(contract, violation.field_path)
+            field_spec = find_field_spec(contract, violation.field_path)
             if field_spec is None or field_spec.default is MISSING:
                 continue
 

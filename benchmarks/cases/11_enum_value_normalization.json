@@ -1,0 +1,28 @@
+{
+  "name": "enum_value_normalization",
+  "description": "A model echoed enum members back in prose casing -- 'IN PROGRESS' for 'in_progress', 'High' for 'high'. Normalising case and separators recovers the declared member exactly; nothing fuzzier is attempted, so a near-miss like 'in progres' would still be refused.",
+  "expected_schema": {
+    "fields": [
+      {"path": "title", "type": "string"},
+      {
+        "path": "status",
+        "type": "string",
+        "constraints": [{"type": "enum_values", "value": ["open", "in_progress", "done"]}]
+      },
+      {
+        "path": "priority",
+        "type": "string",
+        "constraints": [{"type": "enum_values", "value": ["low", "high"]}]
+      }
+    ]
+  },
+  "broken_payload": {
+    "title": "Ship the adapter",
+    "status": "IN PROGRESS",
+    "priority": "High"
+  },
+  "expected_result": {
+    "status": "success",
+    "min_confidence": 0.8
+  }
+}

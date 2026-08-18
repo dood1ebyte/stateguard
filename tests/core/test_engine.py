@@ -9,15 +9,13 @@ import pytest
 from stateguard.core.engine import (
     RepairEngine,
     _COERCE_FAILED,
-    _NOT_FOUND,
     _coerce_value,
     _delete_nested,
-    _find_field_spec,
-    _get_nested,
     _set_nested,
 )
 from stateguard.core.errors.operations import FieldOperation, FieldOpType, RepairRisk
 from stateguard.core.errors.results import RepairStatus, ValidationResult
+from stateguard.core.paths import NOT_FOUND, get_nested_value
 from stateguard.core.errors.violations import (
     ContractViolation,
     ViolationSeverity,
@@ -25,7 +23,7 @@ from stateguard.core.errors.violations import (
 )
 from stateguard.core.interfaces.adapter import IContractAdapter
 from stateguard.core.models.config import RepairConfig
-from stateguard.core.models.contract import ContractSpec, FieldSpec
+from stateguard.core.models.contract import ContractSpec, FieldSpec, find_field_spec
 from stateguard.core.models.field_types import FieldType, UnionMember
 from stateguard.core.strategies import (
     DefaultValueFillStrategy,
@@ -933,23 +931,23 @@ class TestHashingAndSignatures:
 
 class TestGetSetDeleteNested:
     def test_get_top_level(self) -> None:
-        assert _get_nested({"a": 1}, "a") == 1
+        assert get_nested_value({"a": 1}, "a") == 1
 
     def test_get_nested(self) -> None:
-        assert _get_nested({"a": {"b": 2}}, "a.b") == 2
+        assert get_nested_value({"a": {"b": 2}}, "a.b") == 2
 
     def test_get_missing_returns_not_found(self) -> None:
-        assert _get_nested({"a": 1}, "b") is _NOT_FOUND
+        assert get_nested_value({"a": 1}, "b") is NOT_FOUND
 
     def test_get_missing_nested_returns_not_found(self) -> None:
-        assert _get_nested({"a": {}}, "a.b") is _NOT_FOUND
+        assert get_nested_value({"a": {}}, "a.b") is NOT_FOUND
 
     def test_get_intermediate_not_dict_returns_not_found(self) -> None:
-        assert _get_nested({"a": 1}, "a.b") is _NOT_FOUND
+        assert get_nested_value({"a": 1}, "a.b") is NOT_FOUND
 
     def test_get_deep_intermediate_missing_returns_not_found(self) -> None:
         """A multi-level path where an intermediate key is absent entirely."""
-        assert _get_nested({"a": {}}, "a.b.c") is _NOT_FOUND
+        assert get_nested_value({"a": {}}, "a.b.c") is NOT_FOUND
 
     def test_set_top_level(self) -> None:
         data: dict[str, Any] = {}
@@ -1005,7 +1003,7 @@ class TestGetSetDeleteNested:
 class TestFindFieldSpecEngine:
     def test_top_level(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("a", FieldType.INTEGER)])
-        spec = _find_field_spec(contract, "a")
+        spec = find_field_spec(contract, "a")
         assert spec is not None
         assert spec.field_type is FieldType.INTEGER
 
@@ -1016,18 +1014,18 @@ class TestFindFieldSpecEngine:
                 FieldSpec("address", FieldType.OBJECT, nested_spec=inner),
             ]
         )
-        spec = _find_field_spec(contract, "address.zip_code")
+        spec = find_field_spec(contract, "address.zip_code")
         assert spec is not None
         assert spec.field_type is FieldType.INTEGER
 
     def test_not_found(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("a", FieldType.INTEGER)])
-        assert _find_field_spec(contract, "b") is None
+        assert find_field_spec(contract, "b") is None
 
     def test_matched_path_segment_but_no_nested_spec_for_rest(self) -> None:
         """Field matches the first segment but has no nested_spec to recurse into."""
         contract = ContractSpec(fields=[FieldSpec("address", FieldType.OBJECT)])
-        assert _find_field_spec(contract, "address.city") is None
+        assert find_field_spec(contract, "address.city") is None
 
 
 class TestCoerceValue:

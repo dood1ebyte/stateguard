@@ -32,11 +32,39 @@ from enum import IntEnum, StrEnum
 from typing import Any
 
 __all__ = [
+    "FIDELITY_EXACT",
+    "FIDELITY_NORMALISED",
+    "FIDELITY_WHITESPACE",
     "FieldOpType",
     "FieldOperation",
     "RepairEvidence",
     "RepairRisk",
 ]
+
+
+# ---------------------------------------------------------------------------
+# The value_preserved scale
+# ---------------------------------------------------------------------------
+#
+# These live here, next to the ``RepairEvidence.value_preserved`` field they
+# grade, because the whole point of centralising trust is that one strategy's
+# 0.85 means the same thing as another's.  ``TypeCoercionStrategy`` measures a
+# cast's round trip and ``EnumNormalizationStrategy`` measures a re-spelling;
+# both answer "how much of the received value survived", so both answer it on
+# this scale.
+
+#: Nothing was lost.  Converting back reproduces the input exactly
+#: (``"5"`` -> ``5`` -> ``"5"``), or the difference carries no information at
+#: all (``"DONE"`` against a declared enum member ``"done"``).
+FIDELITY_EXACT = 1.0
+
+#: Only surrounding whitespace differed.
+FIDELITY_WHITESPACE = 0.95
+
+#: The value survived but its *formatting* did not, in a way the value itself
+#: does not depend on: ``"05"`` -> ``5`` -> ``"5"``, or ``"IN PROGRESS"``
+#: rewritten as ``"in_progress"``.
+FIDELITY_NORMALISED = 0.85
 
 
 # ---------------------------------------------------------------------------

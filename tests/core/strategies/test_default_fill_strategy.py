@@ -7,11 +7,10 @@ from dataclasses import replace
 from stateguard.core.trust import TrustDecision, TrustPolicy
 from stateguard.core.errors.operations import FieldOpType, RepairRisk
 from stateguard.core.errors.violations import ViolationSeverity, ViolationType
-from stateguard.core.models.contract import MISSING, ContractSpec, FieldSpec
+from stateguard.core.models.contract import MISSING, ContractSpec, FieldSpec, find_field_spec
 from stateguard.core.models.field_types import FieldType
 from stateguard.core.strategies.default_fill import (
     DefaultValueFillStrategy,
-    _find_field_spec,
 )
 from tests.conftest import make_violation
 
@@ -393,13 +392,13 @@ class TestProposeNested:
 class TestFindFieldSpec:
     def test_top_level_field_found(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("humidity", FieldType.INTEGER)])
-        spec = _find_field_spec(contract, "humidity")
+        spec = find_field_spec(contract, "humidity")
         assert spec is not None
         assert spec.path == "humidity"
 
     def test_top_level_field_not_found(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("humidity", FieldType.INTEGER)])
-        assert _find_field_spec(contract, "temperature") is None
+        assert find_field_spec(contract, "temperature") is None
 
     def test_nested_field_found(self) -> None:
         inner = ContractSpec(fields=[FieldSpec("city", FieldType.STRING)])
@@ -408,7 +407,7 @@ class TestFindFieldSpec:
                 FieldSpec("address", FieldType.OBJECT, nested_spec=inner),
             ]
         )
-        spec = _find_field_spec(contract, "address.city")
+        spec = find_field_spec(contract, "address.city")
         assert spec is not None
         assert spec.path == "city"
 
@@ -418,7 +417,7 @@ class TestFindFieldSpec:
                 FieldSpec("address", FieldType.OBJECT),
             ]
         )
-        assert _find_field_spec(contract, "address.city") is None
+        assert find_field_spec(contract, "address.city") is None
 
     def test_intermediate_segment_not_found(self) -> None:
         inner = ContractSpec(fields=[FieldSpec("city", FieldType.STRING)])
@@ -427,10 +426,10 @@ class TestFindFieldSpec:
                 FieldSpec("address", FieldType.OBJECT, nested_spec=inner),
             ]
         )
-        assert _find_field_spec(contract, "billing.city") is None
+        assert find_field_spec(contract, "billing.city") is None
 
     def test_default_sentinel_returned_correctly(self) -> None:
         contract = ContractSpec(fields=[FieldSpec("humidity", FieldType.INTEGER)])
-        spec = _find_field_spec(contract, "humidity")
+        spec = find_field_spec(contract, "humidity")
         assert spec is not None
         assert spec.default is MISSING

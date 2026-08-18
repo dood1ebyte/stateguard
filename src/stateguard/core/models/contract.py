@@ -22,6 +22,7 @@ __all__ = [
     "MISSING",
     "ContractSpec",
     "FieldSpec",
+    "find_field_spec",
 ]
 
 
@@ -211,3 +212,33 @@ class ContractSpec:
             parts.append(f"{f.path}:{f.field_type.value}:{int(f.required)}")
         canonical = ";".join(parts)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
+# Path lookup
+# ---------------------------------------------------------------------------
+
+
+def find_field_spec(contract: ContractSpec, full_path: str) -> FieldSpec | None:
+    """
+    Locate the ``FieldSpec`` for a dot-notation *full_path* within *contract*.
+
+    Recurses into ``nested_spec`` for nested paths, returning ``None`` when
+    any segment is undeclared or when an intermediate field carries no nested
+    contract to descend into.
+
+    Lives here rather than in any one caller because the answer has to be the
+    same everywhere: ``TypeCoercionStrategy`` uses it to decide what a cast
+    would produce, and ``RepairEngine`` uses it to perform that cast. Two
+    copies of this walk meant those two could disagree about a field's
+    declared type -- which they did, for array-item mismatches.
+    """
+    local, _, rest = full_path.partition(".")
+    for field_spec in contract.fields:
+        if field_spec.path == local:
+            if not rest:
+                return field_spec
+            if field_spec.nested_spec is not None:
+                return find_field_spec(field_spec.nested_spec, rest)
+            return None
+    return None

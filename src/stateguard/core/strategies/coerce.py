@@ -47,6 +47,9 @@ import json
 from typing import Any
 
 from stateguard.core.errors.operations import (
+    FIDELITY_EXACT,
+    FIDELITY_NORMALISED,
+    FIDELITY_WHITESPACE,
     FieldOperation,
     FieldOpType,
     RepairEvidence,
@@ -54,8 +57,9 @@ from stateguard.core.errors.operations import (
 )
 from stateguard.core.errors.violations import ContractViolation, ViolationType
 from stateguard.core.interfaces.strategy import IRepairStrategy
-from stateguard.core.models.contract import ContractSpec, FieldSpec
+from stateguard.core.models.contract import ContractSpec, find_field_spec
 from stateguard.core.models.field_types import FieldType, UnionMember, type_matches
+from stateguard.core.paths import NOT_FOUND, get_nested_value
 
 __all__ = ["TypeCoercionStrategy"]
 
@@ -81,15 +85,13 @@ _COERCIBLE_VIOLATIONS = frozenset({ViolationType.TYPE_MISMATCH, ViolationType.ST
 # cast.  Fidelity is measured instead: convert the value, convert it back, and
 # see how much of the original survived.
 
-#: Converting back reproduces the input exactly: ``"5"`` -> ``5`` -> ``"5"``.
-_FIDELITY_EXACT = 1.0
-
-#: Converting back reproduces the input modulo surrounding whitespace.
-_FIDELITY_WHITESPACE = 0.95
-
-#: Converting back differs from the input, but only in formatting the value
-#: itself does not depend on: ``"05"`` -> ``5`` -> ``"5"``.
-_FIDELITY_NORMALISED = 0.85
+#: The three general rungs live on ``RepairEvidence``'s scale in
+#: ``core.errors.operations`` so that this module's 0.85 and
+#: ``EnumNormalizationStrategy``'s mean the same thing. Only the
+#: coercion-specific rung is defined here.
+_FIDELITY_EXACT = FIDELITY_EXACT
+_FIDELITY_WHITESPACE = FIDELITY_WHITESPACE
+_FIDELITY_NORMALISED = FIDELITY_NORMALISED
 
 #: ``"1"`` -> ``True`` is a reading of the string, not a re-encoding of it.
 _FIDELITY_BOOL_NUMERIC = 0.80
@@ -144,57 +146,6 @@ def _compare_roundtrip(original: str, back: str) -> float:
     if back == original.strip():
         return _FIDELITY_WHITESPACE
     return _FIDELITY_NORMALISED
-
-
-# ---------------------------------------------------------------------------
-# Path helper (private to this module)
-# ---------------------------------------------------------------------------
-
-
-class _NotFound:
-    """Sentinel distinguishing 'path does not exist' from a value of None."""
-
-    def __repr__(self) -> str:
-        return "NOT_FOUND"
-
-
-_NOT_FOUND = _NotFound()
-
-
-def _get_nested_value(data: dict[str, Any], path: str) -> Any:
-    """
-    Navigate *data* via dot-notation *path* and return the value found.
-
-    Returns the module-level ``_NOT_FOUND`` sentinel if any segment of
-    *path* is absent or an intermediate value is not a dict.  This is
-    distinct from a present value of ``None``.
-    """
-    current: Any = data
-    for part in path.split("."):
-        if not isinstance(current, dict) or part not in current:
-            return _NOT_FOUND
-        current = current[part]
-    return current
-
-
-def _find_field_spec(contract: ContractSpec, full_path: str) -> FieldSpec | None:
-    """
-    Locate the ``FieldSpec`` for a dot-notation *full_path* within *contract*,
-    recursing into ``nested_spec`` for nested paths.
-
-    Used to look up ``item_type`` / ``union_members`` for ``ARRAY`` and
-    ``UNION`` coercion targets (the violation only carries the
-    ``expected_type``).
-    """
-    local, _, rest = full_path.partition(".")
-    for field_spec in contract.fields:
-        if field_spec.path == local:
-            if not rest:
-                return field_spec
-            if field_spec.nested_spec is not None:
-                return _find_field_spec(field_spec.nested_spec, rest)
-            return None
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -592,8 +543,8 @@ class TypeCoercionStrategy(IRepairStrategy):
             if violation.expected_type is None:
                 continue
 
-            value = _get_nested_value(data, violation.field_path)
-            if value is _NOT_FOUND:
+            value = get_nested_value(data, violation.field_path)
+            if value is NOT_FOUND:
                 continue
 
             # Measure against the type the *contract* declares for this path,
@@ -604,7 +555,7 @@ class TypeCoercionStrategy(IRepairStrategy):
             # is feasible (json-serialise) but the applier would be casting to
             # ARRAY, so the proposal was scored 1.0 and could never be applied.
             # Reading one source for both keeps them from diverging at all.
-            field_spec = _find_field_spec(contract, violation.field_path)
+            field_spec = find_field_spec(contract, violation.field_path)
             target_type: FieldType = violation.expected_type
             item_type: FieldType | None = None
             union_members: tuple[UnionMember, ...] | None = None

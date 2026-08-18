@@ -105,6 +105,25 @@ def _die(message: str) -> NoReturn:
 # ---------------------------------------------------------------------------
 
 
+def _candidate_discriminator(candidate: Any) -> str:
+    """
+    Render whatever tells one ambiguous candidate apart from its rivals.
+
+    A ``RENAME`` is identified by the key it reads from; a ``SET_VALUE`` or
+    ``SET_DEFAULT`` by the value it would write.  Both are schema- or
+    payload-key data of the kind this human output already prints (violation
+    messages quote received values); the structured repair *log* is what
+    ``RepairConfig.include_values_in_log`` governs, and it is unaffected.
+    """
+    from stateguard.core.errors.operations import FieldOpType  # noqa: PLC0415
+
+    if candidate.source_path:
+        return f"  ← {candidate.source_path}"
+    if candidate.op_type in (FieldOpType.SET_VALUE, FieldOpType.SET_DEFAULT):
+        return f"  → {candidate.value!r}"
+    return ""
+
+
 def _print_human(result: Any, args: argparse.Namespace) -> None:
     """Print a human-readable repair summary to stdout."""
     from stateguard.core.errors.results import RepairStatus  # local import keeps startup fast
@@ -149,9 +168,13 @@ def _print_human(result: Any, args: argparse.Namespace) -> None:
             best = item.best
             print(f"  ? {item.target_path}: {item.reason}")
             for candidate in item.candidates:
-                src = f"  ← {candidate.source_path}" if candidate.source_path else ""
+                # Name what distinguishes this candidate from its rivals: a
+                # rename is identified by where it reads from, a set_value by
+                # what it would write. Printing neither made two competing
+                # enum candidates render as identical lines -- an unusable
+                # list for the one decision this section exists to support.
                 print(
-                    f"      • {candidate.op_type.value}{src}  "
+                    f"      • {candidate.op_type.value}{_candidate_discriminator(candidate)}  "
                     f"(trust {candidate.trust:.2f}, risk {candidate.risk.name})"
                 )
             if best is not None:
@@ -248,6 +271,11 @@ def _print_json(result: Any) -> None:
                     {
                         "op_type": candidate.op_type.value,
                         "source_path": candidate.source_path,
+                        # Without this two competing set_value candidates are
+                        # byte-identical in the JSON, so an agent re-prompting
+                        # on an ambiguous result cannot tell them apart --
+                        # which is the entire purpose of this block.
+                        "value": candidate.value,
                         "trust": candidate.trust,
                         "risk": candidate.risk.name,
                         "notes": list(candidate.evidence.notes),
