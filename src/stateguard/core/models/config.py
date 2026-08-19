@@ -18,11 +18,54 @@ correctly.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 __all__ = [
     "GuardConfig",
     "RepairConfig",
+    "RepairMode",
 ]
+
+
+# ---------------------------------------------------------------------------
+# RepairMode
+# ---------------------------------------------------------------------------
+
+
+class RepairMode(StrEnum):
+    """
+    Whether a planned repair is handed back as committed output or withheld.
+
+    This is the adoption path, not a safety threshold.  Nobody enables
+    automatic mutation of production payloads on day one; ``SHADOW`` lets a
+    team run the engine against real traffic and diff what it *would* have
+    done for a week before flipping the switch.
+
+    Members
+    -------
+    AUTO:
+        Detect, plan, validate the plan, apply.  ``RepairResult`` carries the
+        result on ``repaired_output``.  The default, and exactly the behaviour
+        that existed before modes were introduced.
+    SHADOW:
+        Detect, plan, validate the plan, **report**.  The engine does all the
+        same work — including applying operations to its own working copy,
+        which is the only way to know whether the plan actually validates —
+        but the outcome arrives on ``RepairResult.proposed_output`` and
+        ``repaired_output`` is ``None``.  A caller that pipes
+        ``repaired_output`` into production therefore gets nothing rather than
+        silently getting mutated data.
+
+    What this is *not*
+    ------------------
+    A confidence setting.  How much evidence a repair needs before it is
+    applied is ``TrustPolicy``'s job, and it is identical in both modes: the
+    same operations are proposed, scored, applied, abstained on, and rejected.
+    The only difference is whether the result is presented as committed.
+    """
+
+    AUTO = "auto"
+    SHADOW = "shadow"
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +149,12 @@ class GuardConfig:
         Engine-level repair settings.  Defaults to ``RepairConfig()`` with all
         default values.  Each ``GuardConfig`` instance owns its own
         ``RepairConfig`` (created via ``default_factory``).
+    mode:
+        Whether a planned repair is committed to the caller (``AUTO``,
+        the default) or withheld for review (``SHADOW``).  See
+        ``RepairMode``.  This deliberately sits here rather than on
+        ``RepairConfig``: it does not change what the engine repairs or how
+        confident it has to be, only what the caller is handed back.
     strict_mode:
         Controls how unexpected fields (keys present in the data but absent
         from the contract) are treated.
@@ -119,4 +168,15 @@ class GuardConfig:
     """
 
     repair: RepairConfig = field(default_factory=RepairConfig)
+    mode: RepairMode = RepairMode.AUTO
     strict_mode: bool = False
+
+    def __post_init__(self) -> None:
+        # ``RepairMode`` is a ``StrEnum``, so ``GuardConfig(mode="shadow")``
+        # is the natural thing to write and only mypy objects. Left
+        # uncoerced it defeats the mode silently: the engine tests
+        # ``self._mode is RepairMode.SHADOW``, which is ``False`` for a plain
+        # string, so it takes the AUTO branch and *commits* a repair the
+        # caller asked it to withhold. Coercing here also rejects a typo'd
+        # mode at construction rather than at repair time.
+        self.mode = RepairMode(self.mode)

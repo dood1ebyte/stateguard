@@ -8,6 +8,7 @@ what was applied, and what remains unresolved.
 Layer 1 — depends on:
   stateguard.core.errors.violations
   stateguard.core.errors.operations
+  stateguard.core.models.config
   stateguard.logging.logger
 """
 
@@ -21,6 +22,7 @@ from typing import Any
 
 from stateguard.core.errors.operations import FieldOperation
 from stateguard.core.errors.violations import ContractViolation
+from stateguard.core.models.config import RepairMode
 from stateguard.logging.logger import RepairLogEntry
 
 __all__ = [
@@ -275,13 +277,36 @@ class RepairResult:
     contract_id:
         The ``ContractSpec.contract_id`` that was validated against.
     repaired_output:
-        The repaired data dict, or ``None``.
+        The repaired data, **committed**, or ``None``.
 
         * ``SUCCESS``       → non-``None`` dict that passes full validation.
         * ``PARTIAL``       → non-``None`` when ``allow_partial_repair=True``;
                               ``None`` when ``allow_partial_repair=False``.
         * ``FAILED``        → always ``None``.
         * ``ALREADY_VALID`` → the original input (no repair was needed).
+
+        **Always ``None`` under ``RepairMode.SHADOW``**, whatever the status:
+        shadow withholds the repair, so a caller that pipes this field into
+        production gets nothing rather than silently getting mutated data.
+        The payload is on ``proposed_output`` instead.
+    proposed_output:
+        What ``repaired_output`` *would* have carried had the run been in
+        ``AUTO`` — set only under ``RepairMode.SHADOW``, and ``None`` in
+        ``AUTO`` (where the payload was committed and lives on
+        ``repaired_output``).
+
+        The two fields are never both populated, so exactly one of them
+        answers "what did the engine decide the payload should be" and the
+        choice of field answers "was it committed".  Rehydrated by the
+        adapter identically to ``repaired_output``, so flipping a deployment
+        from ``SHADOW`` to ``AUTO`` changes which field carries the value and
+        nothing about the value itself.
+    mode:
+        The ``RepairMode`` this result was produced under.  Recorded so that
+        an audit trail, a telemetry consumer, or a log reader can tell a
+        committed repair from a withheld one — the operation-level records
+        are otherwise identical, because in both modes the engine really does
+        apply the operations to its own working copy.
     repaired_at:
         UTC timestamp, auto-set at construction.
 
@@ -302,6 +327,8 @@ class RepairResult:
 
     # Optional / auto-generated
     repaired_output: dict[str, Any] | None = None
+    proposed_output: dict[str, Any] | None = None
+    mode: RepairMode = RepairMode.AUTO
     ambiguous: list[AmbiguousRepair] = field(default_factory=list)
     repaired_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
@@ -333,6 +360,18 @@ class RepairResult:
     def is_ambiguous(self) -> bool:
         """``True`` when ``status`` is ``RepairStatus.AMBIGUOUS``."""
         return self.status is RepairStatus.AMBIGUOUS
+
+    @property
+    def is_shadow(self) -> bool:
+        """
+        ``True`` when this run withheld its repair rather than committing it.
+
+        Deliberately reports the *mode*, not whether ``proposed_output`` is
+        populated: a shadow run that found nothing to repair is still a shadow
+        run, and a caller checking "was anything committed" needs an answer
+        that does not depend on whether the payload happened to be broken.
+        """
+        return self.mode is RepairMode.SHADOW
 
     @property
     def has_ambiguous_repairs(self) -> bool:

@@ -213,3 +213,66 @@ class TestCandidatesAreDistinguishable:
         candidates = payload["ambiguous"][0]["candidates"]
         assert {c["value"] for c in candidates} == {"in_progress", "in progress"}
         assert len({json.dumps(c, sort_keys=True) for c in candidates}) == 2
+
+
+# ===========================================================================
+# Shadow mode reporting
+# ===========================================================================
+
+
+SHADOW_SCHEMA: dict[str, Any] = {"fields": [{"path": "temperature", "type": "float"}]}
+SHADOW_PAYLOAD: dict[str, Any] = {"temp_celsius": "31.5"}
+
+
+class TestShadowOutput:
+    """
+    Shadow's whole point is that nothing was committed. Output that says
+    "Repaired payload" is exactly the misreading the mode exists to prevent.
+    """
+
+    def test_human_output_labels_the_payload_as_not_applied(
+        self, files: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _run(*files(SHADOW_SCHEMA, SHADOW_PAYLOAD), "--shadow")
+        out = capsys.readouterr().out
+        assert "Proposed payload (SHADOW — not applied):" in out
+        assert "Repaired payload" not in out
+
+    def test_auto_still_says_repaired(self, files: Any, capsys: pytest.CaptureFixture[str]) -> None:
+        _run(*files(SHADOW_SCHEMA, SHADOW_PAYLOAD))
+        out = capsys.readouterr().out
+        assert "Repaired payload:" in out
+        assert "SHADOW" not in out
+
+    def test_json_moves_the_payload_and_names_the_mode(
+        self, files: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _run(*files(SHADOW_SCHEMA, SHADOW_PAYLOAD), "--shadow", "--json")
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["mode"] == "shadow"
+        assert payload["status"] == "success"
+        assert payload["repaired_output"] is None
+        assert payload["proposed_output"] == {"temperature": 31.5}
+
+    def test_json_in_auto_reports_the_mode_too(
+        self, files: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _run(*files(SHADOW_SCHEMA, SHADOW_PAYLOAD), "--json")
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["mode"] == "auto"
+        assert payload["repaired_output"] == {"temperature": 31.5}
+        assert payload["proposed_output"] is None
+
+    def test_exit_code_is_unchanged_by_mode(self, files: Any) -> None:
+        """
+        A shadow run still reports whether a repair was found -- that is what
+        makes it usable in CI as a canary before flipping to auto.
+        """
+        paths = files(SHADOW_SCHEMA, SHADOW_PAYLOAD)
+        assert _run(*paths, "--shadow") == _run(*paths) == 0
+
+    def test_shadow_with_nothing_to_propose(
+        self, files: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _run(*files(SHADOW_SCHEMA, {"wholly_unrelated": 1}), "--shadow")
+        assert "Proposed payload: (none — no repair found)" in capsys.readouterr().out
