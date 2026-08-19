@@ -65,8 +65,8 @@ You listed confidence first. I'd put it third. Three reasons:
 | 4 | F — normalized / case-insensitive matching | ✅ **DONE** |
 | 4b | Phase 4 review follow-ups (15 findings) | ✅ **DONE** |
 | 5 | E — enum extraction + enum repair strategy | ✅ **DONE** |
-| 6 | H — Shadow / Auto modes | 1.5d |
-| 7 | Calibration harness + false-positive corpus | 2d |
+| 6 | H — Shadow / Auto modes | ✅ **DONE** |
+| 7 | Calibration harness + false-positive corpus | ✅ **DONE** |
 
 **Total: ~15.5 days.** Phases 1, 2, 4 are independent and parallelisable if
 two people are on it.
@@ -1030,7 +1030,85 @@ different and riskier feature.
 
 ---
 
-## Phase 6 — Shadow Mode / Auto Mode (1.5 days)
+## Phase 6 — Shadow Mode / Auto Mode ✅ COMPLETE
+
+**Status:** implemented and verified on Python 3.13.14 / pydantic 2.13.4.
+
+| | |
+|---|---|
+| Tests | **2,041 passing** (+38), 0 regressions |
+| Coverage | **99%** total (99.05%); `config.py`, `results.py`, `repair_history.py` **100%** |
+| ruff / format / mypy --strict | clean |
+| Benchmarks / isolation | 11/11, 7/7 |
+
+**Measured** — same schema, same payload `{"temp_celsius": "31.5"}`:
+
+| | `AUTO` | `SHADOW` |
+|---|---|---|
+| `status` | `SUCCESS` | `SUCCESS` |
+| `repaired_output` | `{"temperature": 31.5, …}` | **`None`** |
+| `proposed_output` | `None` | `{"temperature": 31.5, …}` |
+| applied operations | rename, coerce, default-fill | *identical* |
+| trust scores | 1.00 / 1.00 / 1.00 | *identical* |
+| CLI heading | `Repaired payload:` | `Proposed payload (SHADOW — not applied):` |
+| exit code | 0 | 0 |
+
+**Files changed**
+
+| File | Change |
+|---|---|
+| `core/models/config.py` | `RepairMode`; `GuardConfig.mode`, default `AUTO` |
+| `core/errors/results.py` | `RepairResult.proposed_output`, `.mode`, `.is_shadow` |
+| `core/engine.py` | `mode` param; `_present()`; `mode` on the terminal telemetry event |
+| `guard.py` | Passes the mode; rehydrates whichever field carries the payload |
+| `cli.py` | `--shadow`; mode-aware heading; `mode` + `proposed_output` in JSON |
+| `logging/repair_history.py` | `mode` on every record |
+
+### The one real design decision
+
+Everything upstream of the result is **identical** in both modes: the same
+violations are detected, the same operations proposed, scored, applied to the
+engine's working copy and revalidated. Shadow's plan is known to be sound for
+exactly the reason auto's is — it was tried. `_present()` then chooses which
+field the caller finds it on, and the two are never both populated.
+
+That non-negotiable equivalence is what makes a shadow rollout informative;
+`TestShadowIsTheSameEngine` pins status, payload, applied operations and trust
+scores as equal across modes.
+
+**`repaired_output` is `None` under `SHADOW` for every status, including
+`ALREADY_VALID`.** Carving out the case where nothing needed fixing would
+make the invariant conditional, and a conditional safety property is the kind
+that gets forgotten. Code written against `repaired_output` gets `None` and
+fails visibly rather than quietly receiving uncommitted data.
+
+**Mode is not a confidence setting.** `TrustPolicy` is untouched and identical
+in both modes — thresholds live on the policy, per the proposal.
+
+### Why the engine knows about the mode
+
+The plan said "not new engine work — it's a decision about what the caller
+gets back", and behaviourally that holds. But the mode still has to *reach*
+the engine, because operation-level telemetry and history records are
+byte-identical in both modes — shadow really does apply, to its own copy. A
+team watching a shadow rollout would otherwise see `OPERATION_APPLIED` events
+and a full history file with no way to tell nothing was committed. `mode` now
+rides on the terminal telemetry event and on every history record.
+
+### Fixed in passing
+
+`logging/repair_history.py` carries its own `_NotFound` / `_get_nested_value`
+— a sixth copy that Phase 5's consolidation deliberately should not have
+touched, because `core.errors.results` imports `logging.logger` and a runtime
+`logging -> core` edge would invert that dependency. Phase 5's test-rewrite
+script had nevertheless redirected its tests at the shared helper, orphaning
+the copy and dropping it to 98%. Tests restored to the real target and the
+reason for the duplicate written down so the next consolidation pass leaves
+it alone.
+
+---
+
+### Original plan
 
 Not on your list; flagging because it is **the cheapest high-value item in the
 proposal.**
@@ -1059,7 +1137,134 @@ their data on day one; Shadow Mode is what makes the first install possible.
 
 ---
 
-## Phase 7 — Calibration + false-positive corpus (2 days)
+## Phase 7 — Calibration + false-positive corpus ✅ COMPLETE
+
+**Status:** implemented and verified on Python 3.13.14.
+
+| | |
+|---|---|
+| Tests | **2,091 passing** (+50), 0 regressions |
+| Coverage | **99%** total |
+| ruff / format / mypy --strict | clean |
+| Benchmarks / isolation | 11/11, 7/7 |
+| Corpus | **80 labelled cases**, 75 pass, 5 documented gaps |
+| Precision over applied operations | **90.9%** (40/44) |
+| Expected calibration error | **0.050** |
+
+**Reliability curve** — applied operations bucketed by trust:
+
+| bucket | n | correct | accuracy | expected | gap |
+|---|---:|---:|---:|---:|---:|
+| [0.75, 0.80) | 3 | 2 | 66.7% | 77.5% | +10.8% |
+| [0.80, 0.85) | 7 | 6 | 85.7% | 82.5% | −3.2% |
+| [0.85, 0.90) | 6 | 5 | 83.3% | 87.5% | +4.2% |
+| [0.90, 0.95) | 3 | 2 | 66.7% | 92.5% | +25.8% |
+| [0.95, 1.00) | 25 | 25 | 100.0% | 97.5% | −2.5% |
+
+An ECE of 0.050 means the score is usable as a rough probability. It is
+**overconfident in the middle** (0.75–0.95) and exact at the top, which is
+the shape the findings below explain — every operation above 0.95 is a
+declared or measured-reversible repair, and every miss sits in the fuzzy
+band.
+
+> These numbers were initially published as ECE 0.045 with `[0.90, 0.95)` at
+> 80%. A review caught that `int(trust / 0.05)` misbuckets exact multiples of
+> 0.05 — `0.95 / 0.05` is `18.999999999999996` in binary float — so two
+> trust-0.95 operations were filed one bucket too low. Fixed in
+> `reliability_curve`, with the band-boundary values (0.60, 0.70, 0.85, 0.95)
+> pinned by test. The table above is the corrected measurement.
+
+**Files added**
+
+| File | Purpose |
+|---|---|
+| `benchmarks/calibration/must_apply.json` | 35 cases a reviewer would sign off unsupervised |
+| `benchmarks/calibration/must_abstain.json` | 10 cases that must surface, not apply |
+| `benchmarks/calibration/must_refuse.json` | **35 cases — the false-positive block** |
+| `benchmarks/calibrate.py` | Harness: verdict judging, per-operation scoring, reliability curve, ECE |
+| `tests/test_calibration_harness.py` | 50 tests — the harness makes a correctness claim, so its own scoring is tested |
+| `.github/workflows/ci.yml` | Corpus runs in CI |
+
+### The corpus caught two defects
+
+Both were fixed; both were invisible to the 11-case benchmark suite.
+
+1. **Array wrap produced silently-wrong data.** `{"tags": "[1, 2]"}` against
+   `array<string>` became `["[1, 2]"]` — a one-element list containing raw
+   JSON text, which validates cleanly. This is precisely the outcome
+   `coerce.py`'s own docstring says parse-before-wrap exists to prevent; the
+   ordering only helped while the parse *succeeded and the elements fit*.
+   When the parse succeeded but items mismatched, control fell through to
+   wrap. A string that is a serialised array names its author's intent, so
+   `_array_wrap_is_safe` now refuses it outright. Precision 85.7% → **90.9%**
+   from this one fix.
+
+2. **Five corpus cases were mislabelled by me**, which is the harness earning
+   its keep in the other direction: `int` is already valid in a `float` field
+   (no violation, nothing to coerce), and `required: false` makes an absent
+   field a non-violation so no default fills it.
+
+### The finding that matters: uncontested renames are unguarded
+
+Four `refuse` cases still apply, and they share one mechanism.
+
+When there is exactly **one** missing field and **one** unexpected key there
+is no competitor, so `margin = 1.0`, the margin factor is 1.0, and **trust
+collapses to raw name similarity**. The only thing between a payload and a
+rename is `jaro_winkler >= 0.75`.
+
+| target ← candidate | J-W | trust | verdict |
+|---|---:|---:|---|
+| `is_archived` ← `is_active` | 0.923 | 0.923 | **applied** — must refuse |
+| `max_price` ← `min_price` | 0.867 | 0.867 | **applied** — must refuse |
+| `last_name` ← `first_name` | 0.826 | 0.826 | **applied** — must refuse |
+| `temperature` ← `temp_celsius` | 0.809 | 0.809 | applied — **must apply** |
+| `updated_at` ← `created_at` | 0.752 | 0.752 | **applied** — must refuse |
+| `output_path` ← `input_path` | 0.717 | 0.717 | abstained ✓ |
+| `order_id` ← `user_id` | 0.713 | 0.713 | abstained ✓ |
+| `end_date` ← `start_date` | 0.575 | 0.575 | rejected ✓ |
+
+**The must-refuse ceiling (0.923) sits above the must-apply floor (0.809).**
+No threshold on name similarity separates them — which is exactly what
+`trust.py`'s own docstring says ("name similarity alone cannot separate them
+at any threshold"), except the Phase 3 calibration assumed competition would
+always be present to do the discriminating. For the single-field case there
+is none, and the model degenerates to the thing it was built to replace.
+
+Winkler's prefix bonus actively makes this worse: it rewards the shared
+`is_a` prefix that makes `is_active`/`is_archived` look alike.
+
+**Not fixed here, deliberately.** Raising `INFERRED.apply_at` above 0.923
+would break `temp_celsius` (0.809), the headline case. Separating them needs a
+*new evidence signal* — token-head comparison, or the semantic check that is
+explicitly Stage 2 — not a moved threshold. Redesigning the fuzzy evidence
+model is a phase, not a Phase 7 line item. The corpus now measures it, and the
+four cases are marked `known_gap` so a fix would be detected immediately.
+
+### Still open: the enum-collision floor
+
+Carried from Phase 5 and now reproduced by the corpus. A collision where every
+candidate needs separator rewriting ties at fidelity 0.85; 0.85 × the 0.70 tie
+factor = **0.595**, just under `INFERRED.reject_below` of 0.60, so both
+candidates are rejected rather than surfaced. The reading that resolves it:
+`REJECT` should mean "this is not a repair at all", and a normalisation onto a
+declared member *is* a repair whose target is merely unknown — so it should
+never be rejected on margin alone. That is a change to how collisions reach
+the caller, not a change to a band, and it belongs with the fuzzy-model work
+above.
+
+### Closed: the LOSSY tier is no longer inert
+
+Phase 6 recorded that both `LOSSY` producers reported `value_preserved = 1.0`,
+so the tier's 0.95 bar had never fired. Half of that is now fixed — the array
+wrap refuses the JSON-array-string case rather than scoring it 1.0. The
+remaining `LOSSY` path (dict → JSON string) still scores 1.0, and the corpus
+contains no case where that is the wrong answer, so there is nothing to
+recalibrate against yet. Recorded rather than guessed at.
+
+---
+
+### Original plan
 
 **Without this, "trust score" is a claim you cannot defend.** The proposal's
 own criterion — *"validated against a set of known-ambiguous vs.

@@ -66,6 +66,9 @@ class ContractGuard:
         schemas are translated and how repaired data is rehydrated.
     config:
         Guard-level configuration.  Defaults to ``GuardConfig()``.
+        ``GuardConfig.mode`` selects ``AUTO`` (repair and commit, the
+        default) or ``SHADOW`` (repair, validate the plan, and report it on
+        ``RepairResult.proposed_output`` without committing).
     telemetry:
         Optional telemetry hook.  Defaults to ``NoopTelemetry`` (disabled) --
         StateGuard collects no telemetry unless a hook is explicitly
@@ -228,6 +231,11 @@ class ContractGuard:
             ``wrap`` is not attempted).  On ``FAILED``, ``repaired_output``
             is ``None``.
 
+            Under ``GuardConfig(mode=RepairMode.SHADOW)`` every one of those
+            payloads moves to ``proposed_output`` and ``repaired_output`` is
+            ``None`` throughout -- the repair is planned and validated but
+            never handed back as committed.  See ``RepairMode``.
+
         Notes
         -----
         If a ``history`` recorder was supplied at construction time, this
@@ -246,8 +254,16 @@ class ContractGuard:
                 # subclass must still never be allowed to break a repair.
                 self._history.record(result)
 
-        if result.status in _WRAPPABLE_STATUSES and result.repaired_output is not None:
-            result.repaired_output = self._adapter.wrap(contract, result.repaired_output)
+        # Rehydrate whichever field carries the payload. A shadow preview is
+        # wrapped exactly as auto would have wrapped it, so switching a
+        # deployment from SHADOW to AUTO changes which field holds the value
+        # and nothing about the value itself -- which is the only way a week
+        # of shadow diffing tells you anything about what auto would do.
+        if result.status in _WRAPPABLE_STATUSES:
+            if result.repaired_output is not None:
+                result.repaired_output = self._adapter.wrap(contract, result.repaired_output)
+            elif result.proposed_output is not None:
+                result.proposed_output = self._adapter.wrap(contract, result.proposed_output)
 
         return result
 
@@ -305,4 +321,5 @@ class ContractGuard:
             logger=RepairLogger(),
             telemetry=self._telemetry,
             policy=self._policy,
+            mode=self._config.mode,
         )

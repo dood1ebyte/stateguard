@@ -37,6 +37,12 @@ where no
 attempts occurred at all (``ALREADY_VALID`` or an immediate ``FAILED``
 with no applicable strategy), exactly one summary record is written
 instead, with the operation-specific fields set to ``None``.
+
+Every record carries ``mode``.  Under ``RepairMode.SHADOW`` the operations
+are real -- proposed, scored and applied to the engine's working copy, which
+is the only way to know the plan validates -- so the records are otherwise
+indistinguishable from a committed run.  ``mode`` is what tells a reader
+which of the two they are looking at.
 """
 
 from __future__ import annotations
@@ -77,7 +83,15 @@ DEFAULT_HISTORY_PATH = Path.home() / ".stateguard" / "repairs.jsonl"
 
 
 class _NotFound:
-    """Sentinel distinguishing 'path does not exist' from a value of None."""
+    """
+    Sentinel distinguishing 'path does not exist' from a value of ``None``.
+
+    A deliberate duplicate of ``stateguard.core.paths.NOT_FOUND`` rather than
+    an oversight.  ``core.errors.results`` imports ``logging.logger``, so
+    everything this module needs from ``core`` is ``TYPE_CHECKING``-only; a
+    runtime ``logging -> core`` import would invert that dependency for the
+    sake of six lines.  Keep the copy.
+    """
 
     def __repr__(self) -> str:
         return "NOT_FOUND"
@@ -220,6 +234,11 @@ class RepairHistoryRecorder:
             "timestamp": timestamp,
             "contract_id": result.contract_id,
             "status": result.status.value,
+            # Operation records are byte-identical in both modes -- shadow
+            # really does apply its operations, to the engine's own copy --
+            # so without this a history file gives no way to tell a committed
+            # repair from one that was only ever previewed.
+            "mode": result.mode.value,
         }
 
         if not result.attempts:
