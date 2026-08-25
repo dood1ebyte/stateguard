@@ -249,6 +249,85 @@ class TestUnexpectedField:
 
 
 # ===========================================================================
+# Non-string keys
+# ===========================================================================
+
+
+class TestNonStringKeys:
+    """
+    ``ContractViolation.field_path`` is declared ``str`` and must actually be
+    one, whatever the payload's keys are.
+
+    A payload that arrives already as a ``dict`` never passes through root
+    recovery, so ``_pairs_to_dict``'s ``isinstance(key, str)`` guard -- which
+    rejects exactly this shape on the wire form -- never sees it.  Root keys
+    used to reach ``field_path`` untouched, and the engine's violation hash
+    then sorted ``int`` against ``str`` and raised.  JSON cannot produce this;
+    msgpack, CBOR and YAML all can.
+    """
+
+    NON_STRING_KEYS: list[tuple[str, Any, str]] = [
+        ("int", 7, "7"),
+        ("bool", True, "True"),
+        ("none", None, "None"),
+        ("float", 1.5, "1.5"),
+        ("tuple", ("a", "b"), "('a', 'b')"),
+    ]
+
+    @pytest.mark.parametrize(
+        ("label", "key", "expected_path"),
+        NON_STRING_KEYS,
+        ids=[c[0] for c in NON_STRING_KEYS],
+    )
+    def test_root_key_is_reported_as_a_string_path(
+        self, validator: ContractValidator, label: str, key: Any, expected_path: str
+    ) -> None:
+        contract = ContractSpec(fields=[FieldSpec("a", FieldType.STRING)])
+        result = validator.validate(contract, {"a": "x", key: 1})
+
+        unexpected = [
+            v for v in result.violations if v.violation_type is ViolationType.UNEXPECTED_FIELD
+        ]
+        assert [v.field_path for v in unexpected] == [expected_path]
+        assert all(isinstance(v.field_path, str) for v in result.violations)
+
+    def test_every_violation_path_is_a_string_when_keys_are_mixed(
+        self, validator: ContractValidator
+    ) -> None:
+        """The mixed set is the one that used to crash: int paths beside str ones."""
+        contract = ContractSpec(
+            fields=[FieldSpec("a", FieldType.STRING), FieldSpec("b", FieldType.INTEGER)]
+        )
+        result = validator.validate(contract, {7: "x", "c": 1})
+
+        assert all(isinstance(v.field_path, str) for v in result.violations)
+        assert {"7", "c"} <= {v.field_path for v in result.violations}
+
+    def test_received_value_still_comes_from_the_original_key(
+        self, validator: ContractValidator
+    ) -> None:
+        """Only the *path* is coerced -- the value is still read at the real key."""
+        contract = ContractSpec(fields=[FieldSpec("a", FieldType.STRING)])
+        result = validator.validate(contract, {"a": "x", 7: "payload"})
+
+        assert _find(result.violations, "7").received_value == "payload"
+
+    def test_nested_non_string_key_is_also_a_string_path(
+        self, validator: ContractValidator
+    ) -> None:
+        """
+        The nested branch already coerced via its f-string, so this was never
+        broken -- asserted so the two branches cannot drift apart.
+        """
+        inner = ContractSpec(fields=[FieldSpec("inner", FieldType.STRING)])
+        contract = ContractSpec(fields=[FieldSpec("outer", FieldType.OBJECT, nested_spec=inner)])
+        result = validator.validate(contract, {"outer": {"inner": "x", 7: 1}})
+
+        assert all(isinstance(v.field_path, str) for v in result.violations)
+        assert _find(result.violations, "outer.7").violation_type is ViolationType.UNEXPECTED_FIELD
+
+
+# ===========================================================================
 # Type mismatch
 # ===========================================================================
 

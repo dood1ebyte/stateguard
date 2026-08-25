@@ -211,6 +211,101 @@ class TestNeverRaises:
         assert result.status is RepairStatus.FAILED
 
 
+# ===========================================================================
+# Object roots whose keys are not strings
+# ===========================================================================
+
+
+NON_STRING_KEYS: list[tuple[str, Any]] = [
+    ("int_key", 7),
+    ("bool_key", True),
+    ("none_key", None),
+    ("float_key", 1.5),
+    ("tuple_key", ("x", "y")),
+]
+
+# Field names long enough for fuzzy matching to be meaningful, unlike SCHEMA's
+# single letters.
+DRIFT_SCHEMA = {
+    "fields": [
+        {"path": "temperature", "type": "float"},
+        {"path": "humidity", "type": "integer"},
+    ]
+}
+
+
+class TestNonStringKeysDoNotRaise:
+    """
+    A ``dict`` root with non-string keys is an *object* root, so it never
+    passes through the recovery path above -- and therefore never through
+    ``_pairs_to_dict``'s ``isinstance(key, str)`` guard, which rejects exactly
+    this shape when it arrives as a pair list.
+
+    Such a key reached ``ContractViolation.field_path`` uncoerced, and
+    ``_compute_violation_hash`` sorted it against the string paths of the
+    other violations::
+
+        TypeError: '<' not supported between instances of 'int' and 'str'
+
+    That needed two violations to bite, so it required a *drifted* payload --
+    a missing field beside the stray key -- which is the case StateGuard
+    exists to handle.  JSON cannot express it; msgpack, CBOR and YAML can.
+    """
+
+    @pytest.mark.parametrize(("label", "key"), NON_STRING_KEYS, ids=[c[0] for c in NON_STRING_KEYS])
+    def test_repair_returns_a_result(self, guard: ContractGuard, label: str, key: Any) -> None:
+        assert guard.repair(SCHEMA, {"a": 1, key: "x"}).status in set(RepairStatus)
+
+    @pytest.mark.parametrize(("label", "key"), NON_STRING_KEYS, ids=[c[0] for c in NON_STRING_KEYS])
+    def test_validate_returns_a_result(self, guard: ContractGuard, label: str, key: Any) -> None:
+        assert guard.validate(SCHEMA, {"a": 1, key: "x"}).is_valid is False
+
+    def test_minimal_crash_reproduction(self, guard: ContractGuard) -> None:
+        """One missing required field plus one non-string key -- the exact repro."""
+        result = guard.repair(SCHEMA, {"a": 1, 7: "x"})
+        assert result.status in set(RepairStatus)
+
+    def test_all_non_string_keys_still_hash_when_no_string_key_is_present(
+        self, guard: ContractGuard
+    ) -> None:
+        """``{1: ..., 2: ...}`` -- every path non-string, both fields missing."""
+        assert guard.repair(SCHEMA, {1: "a", 2: "b"}).status in set(RepairStatus)
+
+    def test_real_drift_is_still_repaired_alongside_a_non_string_key(
+        self, guard: ContractGuard
+    ) -> None:
+        """
+        The stray key must not cost the payload its repair: ``temp_celsius``
+        still becomes ``temperature``.
+        """
+        result = guard.repair(DRIFT_SCHEMA, {"temp_celsius": 31.5, "humidity": 80, 7: "stray"})
+
+        assert result.status is RepairStatus.SUCCESS
+        assert result.repaired_output["temperature"] == 31.5
+
+    def test_non_string_key_is_reported_not_repaired(self, guard: ContractGuard) -> None:
+        """
+        Dotted-path lookup is string-keyed, so the coerced path resolves to
+        nothing and every applier no-ops.  The key is surfaced as an
+        unexpected field and otherwise left exactly as it was -- reported,
+        never guessed at, and never silently moved into a real field.
+        """
+        result = guard.repair(DRIFT_SCHEMA, {"temp_celsius": 31.5, "humidity": 80, 7: "stray"})
+        repaired = result.repaired_output
+
+        # Untouched: still under its own key, still its own value.
+        assert repaired[7] == "stray"
+        # And it never leaked into a field the contract declares.
+        assert repaired["temperature"] == 31.5
+        assert repaired["humidity"] == 80
+
+    def test_caller_data_with_non_string_keys_is_not_mutated(self, guard: ContractGuard) -> None:
+        payload = {"temp_celsius": 31.5, "humidity": 80, 7: "stray"}
+        before = dict(payload)
+        guard.repair(DRIFT_SCHEMA, payload)
+        assert payload == before
+
+
 class TestCallerDataIsNeverMutated:
     """
     The recovery helpers return *shallow* copies, so without a deepcopy after

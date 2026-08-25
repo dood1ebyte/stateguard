@@ -1328,9 +1328,19 @@ class RepairEngine:
         Used for no-progress detection: if two consecutive iterations
         produce the same hash, the repair loop is making no progress and
         terminates.
+
+        ``field_path`` is projected through ``str`` before sorting.  It is
+        declared ``str`` on ``ContractViolation``, but violations reach here
+        from ``IContractAdapter.validate`` -- a documented extension point --
+        so this sort is the one place where a single adapter returning a
+        stray non-string path takes the whole engine down with a ``TypeError``
+        rather than producing a bad repair.  ``str`` of a ``str`` is itself,
+        so this changes no existing hash; it only makes the ordering total.
+        The in-tree source of that bug is fixed at its root in
+        ``ContractValidator._full_path``.
         """
         signatures = sorted(
-            (v.field_path, v.violation_type.value, v.severity.value) for v in violations
+            (str(v.field_path), v.violation_type.value, v.severity.value) for v in violations
         )
         return hashlib.sha256(repr(signatures).encode("utf-8")).hexdigest()
 

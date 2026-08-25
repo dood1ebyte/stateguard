@@ -92,15 +92,29 @@ class RepairConfig:
         since one repair routinely *exposes* the next rather than resolving
         everything at once.
     min_confidence_threshold:
-        Minimum confidence score ``[0.0, 1.0]`` required for a
-        ``FieldOperation`` to be applied.  Operations below this threshold are
-        recorded as *rejected* in the ``RepairAttempt`` audit trail but not
-        applied to the data.  Must be in ``(0.0, 1.0]``.
+        Minimum trust score ``[0.0, 1.0]`` required for a ``FieldOperation``
+        to be applied.  Reaches the engine as ``TrustPolicy(minimum_trust=...)``:
+        a floor beneath every risk tier that can only *raise* a tier's
+        ``apply_at``, never lower it.  Must be in ``(0.0, 1.0]``.
+
+        An operation held back by this floor is **ambiguous, not rejected** --
+        it lands on ``RepairResult.ambiguous`` with its candidates, and a run
+        that resolves nothing else reports ``RepairStatus.AMBIGUOUS``.  Only
+        evidence below the tier's own ``reject_below`` is rejected outright.
+        Raising this dial therefore converts auto-applied repairs into ones
+        the caller is asked to confirm; it does not discard them.
     score_collision_margin:
-        When ``FuzzyFieldMatchStrategy`` finds two candidate target fields
-        within this margin of each other (e.g. both score 0.80 and 0.78), it
-        refuses to propose either rename and instead logs a warning.  This
-        prevents silent wrong-field repairs.  Must be in ``(0.0, 1.0)``.
+        The margin over the runner-up at which a competing candidate stops
+        casting doubt.  Reaches the engine as
+        ``TrustPolicy(margin_full_credit=...)``.  Must be in ``(0.0, 1.0)``.
+
+        This is no longer a veto.  ``FuzzyFieldMatchStrategy`` used to refuse
+        a rename outright when two targets scored within this margin; it now
+        reports the margin as evidence and ``TrustPolicy`` *scales* trust by
+        it, so a contested match degrades into the ambiguous band and is
+        handed back to the caller instead of silently disappearing.  Lowering
+        this value grants full credit to narrower wins and so applies more
+        repairs; raising it makes contested matches abstain.
     allow_partial_repair:
         If ``True`` (default), a ``RepairResult`` with some violations
         resolved and some remaining is returned as ``RepairStatus.PARTIAL``
