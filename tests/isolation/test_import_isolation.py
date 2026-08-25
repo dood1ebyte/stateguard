@@ -144,6 +144,57 @@ class TestCoreImportIsolation:
         assert rc == 0, f"subprocess failed:\n{stderr}"
         assert json.loads(stdout) == []
 
+    def test_jsonschema_adapter_loads_only_stdlib_and_self(self) -> None:
+        """
+        The JSON Schema adapter must stay inside the zero-dependency
+        guarantee.
+
+        Unlike the Pydantic adapter, this one has no framework to depend on:
+        an MCP tool definition arriving over the wire is just a ``dict``, so
+        the adapter reads it with nothing but stdlib. That is what lets the
+        whole MCP surface ship without widening the dependency footprint
+        (``MCP_ADAPTER_PLAN.md`` §4), and it only stays true if it is
+        enforced -- a stray ``import jsonschema`` added for convenience would
+        silently take it away.
+        """
+        rc, stdout, stderr = _run("""
+            import sys, json
+
+            baseline = set(sys.modules)
+            import stateguard.adapters.jsonschema
+            new_mods = set(sys.modules) - baseline
+
+            third_party = []
+            for name in new_mods:
+                root = name.split(".")[0]
+                if root == "stateguard" or root.startswith("_"):
+                    continue
+                if root in sys.stdlib_module_names:
+                    continue
+                third_party.append(root)
+
+            print(json.dumps(sorted(set(third_party))))
+        """)
+        assert rc == 0, f"Import-check subprocess failed:\n{stderr}"
+        third_party = json.loads(stdout)
+        assert third_party == [], (
+            "stateguard.adapters.jsonschema loaded third-party packages: "
+            f"{third_party}\n"
+            "The JSON Schema adapter must depend on stdlib only."
+        )
+
+    def test_jsonschema_adapter_does_not_load_pydantic(self) -> None:
+        """It must not reach the Pydantic adapter to borrow helpers."""
+        rc, stdout, stderr = _run("""
+            import sys, json
+            import stateguard.adapters.jsonschema
+            found = [m for m in sys.modules
+                     if m == "pydantic" or m.startswith("pydantic.")]
+            print(json.dumps(found))
+        """)
+        assert rc == 0, f"subprocess failed:\n{stderr}"
+        assert json.loads(stdout) == []
+
     def test_pydantic_adapter_stub_imports_without_error(self) -> None:
         """The pydantic adapter stub must be importable (even while empty)."""
         rc, _, stderr = _run("import stateguard.adapters.pydantic")

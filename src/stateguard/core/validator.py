@@ -73,6 +73,45 @@ _SIZED_TYPES = (str, list, dict)
 _NUMERIC_TYPES = (int, float)
 
 
+def _pattern_matches(pattern: Any, value: str, full_path: str) -> bool:
+    """
+    Whether *value* satisfies a ``PATTERN`` constraint.
+
+    ``re.search``, not ``re.match`` -- see the call site for why.
+
+    Raises rather than guessing when the *pattern itself* is unusable.  A
+    non-string or uncompilable pattern is a broken **contract**, not broken
+    data, and the two need opposite handling: bad data is what this validator
+    exists to report, while a bad contract means it cannot report anything
+    reliably.  Silently skipping the constraint would under-validate without
+    telling anyone -- and for adapters where ``ContractValidator`` is the
+    source of truth there is no second validator downstream to catch it
+    (``docs/adr/0001-json-schema-source-of-truth.md``).
+
+    Previously these surfaced as a raw ``TypeError`` ("first argument must be
+    string or compiled pattern") or ``re.PatternError`` from inside the
+    match, neither of which named the field at fault.
+
+    ``JSONSchemaAdapter`` screens patterns at extraction time, so a schema
+    from an MCP server fails before any data is processed; this is the
+    backstop for contracts built by hand or by a third-party adapter.
+    """
+    if not isinstance(pattern, str):
+        raise ValueError(
+            f"Field '{full_path}': PATTERN constraint must be a string, "
+            f"got {type(pattern).__name__}: {pattern!r}"
+        )
+    try:
+        # Python caches compiled patterns internally, so this does not
+        # recompile per value.
+        return re.search(pattern, value) is not None
+    except re.error as exc:
+        raise ValueError(
+            f"Field '{full_path}': PATTERN constraint {pattern!r} is not a "
+            f"valid regular expression ({exc})."
+        ) from exc
+
+
 class ContractValidator:
     """
     Detects contract violations between a ``ContractSpec`` and a data dict.
@@ -418,7 +457,18 @@ class ContractValidator:
                 )
 
         elif ctype is FieldConstraintType.PATTERN:
-            if isinstance(value, str) and re.match(bound, value) is None:
+            # ``re.search``, not ``re.match``.  A pattern constraint is an
+            # *unanchored* partial match in both systems that produce one:
+            # JSON Schema defers to ECMA-262, and Pydantic's ``Field(pattern=)``
+            # searches too.  ``re.match`` anchors at the start, so it rejected
+            # values both of those accept -- ``"abc123"`` against ``"[0-9]+"``
+            # was reported as a constraint violation while Pydantic's own
+            # validator, the documented source of truth on that path, accepted
+            # it.  That is a false violation, and a false violation is worse
+            # than a missed one here: it can trigger a repair of a field that
+            # was never broken.  An anchored pattern is unaffected, since
+            # ``^...$`` matches identically under either function.
+            if isinstance(value, str) and _pattern_matches(bound, value, full_path) is False:
                 return self._constraint_violation(
                     full_path,
                     f"Field '{full_path}' value {value!r} does not match pattern {bound!r}.",

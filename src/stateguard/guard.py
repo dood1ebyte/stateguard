@@ -145,6 +145,7 @@ class ContractGuard:
         config: GuardConfig | None = None,
         telemetry: ITelemetryHook | None = None,
         history: RepairHistoryRecorder | None = None,
+        policy: TrustPolicy | None = None,
     ) -> ContractGuard:
         """
         Construct a ``ContractGuard`` using ``PydanticAdapter``.
@@ -170,6 +171,7 @@ class ContractGuard:
             config=config,
             telemetry=telemetry,
             history=history,
+            policy=policy,
         )
 
     @classmethod
@@ -178,6 +180,7 @@ class ContractGuard:
         config: GuardConfig | None = None,
         telemetry: ITelemetryHook | None = None,
         history: RepairHistoryRecorder | None = None,
+        policy: TrustPolicy | None = None,
     ) -> ContractGuard:
         """
         Construct a ``ContractGuard`` using ``DictContractAdapter``.
@@ -198,6 +201,50 @@ class ContractGuard:
             config=config,
             telemetry=telemetry,
             history=history,
+            policy=policy,
+        )
+
+    @classmethod
+    def with_json_schema(
+        cls,
+        config: GuardConfig | None = None,
+        telemetry: ITelemetryHook | None = None,
+        history: RepairHistoryRecorder | None = None,
+        policy: TrustPolicy | None = None,
+    ) -> ContractGuard:
+        """
+        Construct a ``ContractGuard`` using ``JSONSchemaAdapter``.
+
+        Use this to repair payloads against a JSON Schema document -- an MCP
+        tool's ``inputSchema``, or any hand-written schema dict.  Requires no
+        extra dependencies: a schema arriving over the wire is just a
+        ``dict``, so the adapter reads it with stdlib alone.
+
+        ``repair()`` takes the schema document as its *schema* argument::
+
+            guard = ContractGuard.with_json_schema()
+            result = guard.repair(tool["inputSchema"], arguments)
+
+        On ``SUCCESS`` / ``ALREADY_VALID``, ``RepairResult.repaired_output``
+        is a plain ``dict[str, Any]`` -- there is no framework-native type to
+        rehydrate into.
+
+        Important
+        ---------
+        This adapter validates with StateGuard's own ``ContractValidator``,
+        so a ``SUCCESS`` is **not** a claim of JSON Schema compliance.  The
+        supported subset is ``MCP_ADAPTER_PLAN.md`` §5; anything outside it
+        raises rather than being ignored.  See
+        ``docs/adr/0001-json-schema-source-of-truth.md``.
+        """
+        from stateguard.adapters.jsonschema import JSONSchemaAdapter  # noqa: PLC0415
+
+        return cls(
+            adapter=JSONSchemaAdapter(),
+            config=config,
+            telemetry=telemetry,
+            history=history,
+            policy=policy,
         )
 
     # ------------------------------------------------------------------

@@ -1193,3 +1193,69 @@ class TestUnionFields:
         contract = ContractSpec(fields=[FieldSpec("content", FieldType.UNION)])
         result = ContractValidator().validate(contract, {"content": {"anything": 1}})
         assert result.is_valid is True
+
+
+# ===========================================================================
+# Pattern constraint semantics and robustness
+# ===========================================================================
+
+
+class TestPatternConstraint:
+    """
+    ``PATTERN`` is unanchored, and an unusable pattern is a contract bug.
+
+    Both systems that produce a pattern constraint treat it as an unanchored
+    partial match -- JSON Schema defers to ECMA-262, and Pydantic's
+    ``Field(pattern=...)`` searches. Anchoring it rejected values both of
+    those accept, which is a *false* violation: worse than a missed one,
+    because it can trigger a repair of a field that was never broken.
+    """
+
+    @staticmethod
+    def _contract(pattern: Any) -> ContractSpec:
+        return ContractSpec(
+            fields=[
+                FieldSpec(
+                    "code",
+                    FieldType.STRING,
+                    constraints=[FieldConstraint(FieldConstraintType.PATTERN, pattern)],
+                )
+            ]
+        )
+
+    def test_pattern_is_unanchored(self, validator: ContractValidator) -> None:
+        """``'abc123'`` matches ``'[0-9]+'`` -- Pydantic accepts this too."""
+        assert validator.validate(self._contract("[0-9]+"), {"code": "abc123"}).is_valid
+
+    def test_anchored_pattern_still_anchors(self, validator: ContractValidator) -> None:
+        """``^...$`` must behave identically under search."""
+        result = validator.validate(self._contract("^[0-9]+$"), {"code": "abc123"})
+        assert result.is_valid is False
+        assert _find(result.violations, "code").violation_type is (
+            ViolationType.VALUE_CONSTRAINT_VIOLATION
+        )
+
+    def test_non_matching_value_still_violates(self, validator: ContractValidator) -> None:
+        result = validator.validate(self._contract("[0-9]+"), {"code": "abc"})
+        assert result.is_valid is False
+
+    def test_non_string_value_is_not_pattern_checked(self, validator: ContractValidator) -> None:
+        """A type mismatch is reported as one; the pattern does not also fire."""
+        result = validator.validate(self._contract("[0-9]+"), {"code": 5})
+        assert ViolationType.TYPE_MISMATCH in _violation_types(result.violations)
+
+    def test_uncompilable_pattern_names_the_field(self, validator: ContractValidator) -> None:
+        """
+        Previously surfaced as a bare ``re.PatternError`` from inside the
+        match, naming neither the field nor the constraint.
+        """
+        with pytest.raises(ValueError, match="not a valid regular expression"):
+            validator.validate(self._contract("(["), {"code": "x"})
+
+    @pytest.mark.parametrize("pattern", [5, None, ["a"]], ids=["int", "none", "list"])
+    def test_non_string_pattern_names_the_field(
+        self, validator: ContractValidator, pattern: Any
+    ) -> None:
+        """Previously a bare ``TypeError`` from ``re``."""
+        with pytest.raises(ValueError, match="must be a string"):
+            validator.validate(self._contract(pattern), {"code": "x"})

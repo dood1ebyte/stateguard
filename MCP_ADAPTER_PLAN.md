@@ -263,19 +263,58 @@ P1-1 (enum repair) is also closed — `EnumNormalizationStrategy` shipped in
 `CORE_HARDENING_PLAN.md` Phase 5, so §8's "nothing repairs them today" no
 longer holds.
 
-### Phase 1 — JSON Schema core (5 days)
+### Phase 1 — JSON Schema core ✅ COMPLETE
 
-| # | Task | Est. |
+**Status:** closed 2026-08-25. 137 tests in `tests/adapters/jsonschema/`.
+
+| # | Task | Status |
 |---|---|---|
-| 1.1 | `refs.py` — `$ref`/`$defs` resolution with a `seen` set for cycle detection | 1d |
-| 1.2 | `type_mapper.py` — §5 table, incl. `type` arrays and `anyOf`/`oneOf` → `UnionMember` | 1.5d |
-| 1.3 | `extractor.py` — recursive walk → `ContractSpec`, constraints, defaults, `strict_mode` | 1.5d |
-| 1.4 | `adapter.py` + `ContractGuard.with_json_schema()` | 0.5d |
-| 1.5 | Unknown-keyword rejection + structured error messages | 0.5d |
+| 1.1 | `refs.py` — `$ref`/`$defs` resolution + cycle detection | ✅ |
+| 1.2 | `type_mapper.py` — §5 table, `type` arrays, `anyOf`/`oneOf` → `UnionMember` | ✅ |
+| 1.3 | `extractor.py` — recursive walk → `ContractSpec`, constraints, defaults, `strict_mode` | ✅ |
+| 1.4 | `adapter.py` + `ContractGuard.with_json_schema()` | ✅ (also threaded `policy` through the other two factories) |
+| 1.5 | Unknown-keyword rejection + structured error messages | ✅ folded into `extractor.py` |
 
-**Exit:** `JSONSchemaAdapter` extracts a correct `ContractSpec` from a
-Pydantic-generated JSON Schema (with `$defs`), and a self-referential schema
-raises a clear error instead of hanging.
+**Exit criterion met.** A Pydantic-generated schema with `$defs` extracts and
+repairs; a self-referential schema raises `SchemaReferenceError` rather than
+hanging. Both cycle shapes are mutation-tested.
+
+**Better than planned.** §8 lists enum drift as the #1 real MCP failure and
+"nothing repairs them today"; enum normalisation shipped with the core
+hardening, so `"Celsius"` → `"celsius"` now repairs through this adapter for
+free. §7's "be honest about what it does not repair" caveat is obsolete for
+enums.
+
+**One divergence from the Pydantic adapter, on purpose.** This extractor
+emits `NOT_NULL` for non-nullable fields; `PydanticExtractor` does not.
+Pydantic's own validator rejects a stray `None`, so it needs no constraint —
+this adapter is its own source of truth (ADR-0001), and without it
+`ContractValidator` accepts `{"location": null}` against
+`{"location": {"type": "string"}}`.
+
+**Two seam findings, recorded as `xfail(strict=True)` in
+`tests/adapters/jsonschema/test_end_to_end.py`, both needing a decision:**
+
+1. **`additionalProperties: false` is silently discarded.**
+   `ContractGuard._extract_contract` rebuilds the `ContractSpec` with
+   `GuardConfig.strict_mode` whenever it differs, so the schema's own
+   strictness loses to the config default of `False`. Pydantic never hits
+   this — `extra='forbid'` is enforced by its validator, not by
+   `strict_mode` — but here `strict_mode` is the *only* enforcement path.
+   Options: make `GuardConfig.strict_mode` a floor (strict if either says
+   so, mirroring how `minimum_trust` already works), or tri-state it so
+   "unset" defers to the schema.
+2. **An optional field's declared `default` is not materialised.** The
+   engine repairs identically; the difference is `wrap()` —
+   `PydanticAdapter.wrap` calls `model_validate`, which applies defaults,
+   while this adapter returns a plain dict, as `DictContractAdapter` does.
+   Defensible (the payload is valid without it, and the server applies its
+   own default) but the two adapters visibly disagree on the same schema.
+   Note this makes §7's demo step 3 inaccurate as written.
+
+This is the "is `IContractAdapter` the right seam" evidence §11 hoped for:
+the interface itself held up, but `GuardConfig`'s relationship to
+adapter-derived contract settings did not.
 
 ### Phase 2 — MCP layer (1.5 days)
 
@@ -365,10 +404,11 @@ strong argument for scheduling them immediately after, as Phase 5.
 | **Double-encoded `arguments`** — models emit JSON strings constantly | High | Needs §3.2. Same treatment: Phase 5 |
 | **Recursive `$ref` hangs the process** | High | Cycle detection is Phase 1.1, non-negotiable. Also fixes the same latent bug in the Pydantic extractor |
 | **Property names containing `.`** break path navigation silently | Medium | Detect in the extractor; raise a clear "unsupported property name" error. Must fail loudly, never repair wrongly |
-| **`pattern` semantics + ReDoS** | Medium | `re.match` is anchored; JSON Schema `pattern` is unanchored. Fix to `re.search` in this work, and bound or reject pathological patterns from untrusted schemas |
+| **`pattern` semantics + ReDoS** | Medium | ✅ **Closed.** `ContractValidator` now uses `re.search` (the old `re.match` produced *false* violations and disagreed with Pydantic itself on the shipped path); an unusable pattern raises a clear error naming the field instead of a bare `re` exception; and `jsonschema/patterns.py` refuses the nested-quantifier family at extraction, so `(a+)+$` never reaches a match. The screen is a documented heuristic, not a proof — overlapping alternation like `(a\|a)+` is not caught |
 | **Confident wrong rename** on near-miss param names | Medium | Phase 4.3 false-positive corpus. This is the failure that damages trust most |
 | **MCP spec drift** | Medium | Pin the spec revision in the adapter docstring. Verify `outputSchema`/`structuredContent` against the live spec before Phase 5 |
 | **Scope creep into real JSON Schema** | Medium | §5's reject-list is the contract. Unknown keyword ⇒ error, not silence |
+| **`$id` on a subschema rebases `$ref` resolution** | Medium | ✅ **Closed.** Was silently misresolving: a nested `$id` scope resolved `#/$defs/A` against the document root instead of the subschema, returning the *wrong* target with no error. Now refused at extraction; root-level `$id` stays allowed since it does not change what `#` addresses |
 
 ---
 
