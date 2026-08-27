@@ -92,7 +92,7 @@ from stateguard.core.errors.violations import (
     ViolationType,
 )
 from stateguard.core.interfaces.adapter import IContractAdapter
-from stateguard.core.models.config import RepairConfig
+from stateguard.core.models.config import RepairConfig, RepairMode
 from stateguard.core.models.contract import ContractSpec, find_field_spec
 from stateguard.core.models.field_types import FieldType, UnionMember
 from stateguard.core.paths import NOT_FOUND, get_nested_value
@@ -479,6 +479,7 @@ class RepairEngine:
         logger: RepairLogger,
         telemetry: ITelemetryHook | None = None,
         policy: TrustPolicy | None = None,
+        mode: RepairMode = RepairMode.AUTO,
     ) -> None:
         self._registry = registry
         self._config = config
@@ -486,6 +487,36 @@ class RepairEngine:
         self._telemetry: ITelemetryHook = telemetry if telemetry is not None else NoopTelemetry()
         self._core_validator = ContractValidator()
         self._policy = policy if policy is not None else TrustPolicy()
+        self._mode = mode
+
+    # ------------------------------------------------------------------
+    # Presentation
+    # ------------------------------------------------------------------
+
+    def _present(
+        self, produced: dict[str, Any] | None
+    ) -> tuple[
+        dict[str, Any] | None,
+        dict[str, Any] | None,
+    ]:
+        """
+        Split the payload the loop produced into ``(committed, proposed)``.
+
+        This is the whole of Shadow Mode.  Everything upstream is identical in
+        both modes -- the same violations are detected, the same operations
+        proposed, scored, applied to the working copy and revalidated -- so
+        the plan is known to be sound in shadow for exactly the reason it is
+        in auto: it was tried.  What differs is only which field the caller
+        finds it on.
+
+        The fields are never both populated.  That is the safety property:
+        code written against ``repaired_output`` gets ``None`` under shadow
+        and fails visibly, rather than quietly receiving data nobody meant to
+        commit.
+        """
+        if self._mode is RepairMode.SHADOW:
+            return None, produced
+        return produced, None
 
     # ------------------------------------------------------------------
     # Ambiguity
@@ -738,7 +769,9 @@ class RepairEngine:
                 TelemetryEventType.REPAIR_COMPLETED,
                 status=valid_status.value,
                 attempts=0,
+                mode=self._mode.value,
             )
+            valid_committed, valid_proposed = self._present(deepcopy(working_data))
             return RepairResult(
                 status=valid_status,
                 original_input=original_input,
@@ -747,7 +780,9 @@ class RepairEngine:
                 attempts=[],
                 repair_log=self._logger.entries,
                 contract_id=contract.contract_id,
-                repaired_output=deepcopy(working_data),
+                repaired_output=valid_committed,
+                proposed_output=valid_proposed,
+                mode=self._mode,
             )
 
         initial_violations = list(initial_result.violations)
@@ -1030,24 +1065,31 @@ class RepairEngine:
             else:
                 status = RepairStatus.FAILED
 
-        # --- Determine repaired_output ------------------------------------------
+        # --- Determine the payload, and which field carries it -------------------
         if status is RepairStatus.SUCCESS:
-            repaired_output: dict[str, Any] | None = deepcopy(working_data)
+            produced: dict[str, Any] | None = deepcopy(working_data)
         elif status is RepairStatus.PARTIAL:
             # PARTIAL only ever occurs when allow_partial_repair is True
-            # (see status determination above), so repaired_output is
-            # always set here.
-            repaired_output = deepcopy(working_data)
+            # (see status determination above), so the payload is always set.
+            produced = deepcopy(working_data)
         else:
-            repaired_output = None
+            produced = None
+
+        repaired_output, proposed_output = self._present(produced)
 
         # --- Final telemetry ------------------------------------------------------
+        # ``mode`` rides on the terminal event because the operation-level
+        # events are identical in both modes -- shadow really does apply its
+        # operations, to the engine's own copy -- so without it a telemetry
+        # consumer watching a shadow rollout cannot tell that nothing was
+        # committed.
         if status in (RepairStatus.FAILED, RepairStatus.AMBIGUOUS):
             self._emit(
                 contract,
                 TelemetryEventType.REPAIR_FAILED,
                 status=status.value,
                 attempts=len(attempts),
+                mode=self._mode.value,
             )
         else:
             self._emit(
@@ -1055,6 +1097,7 @@ class RepairEngine:
                 TelemetryEventType.REPAIR_COMPLETED,
                 status=status.value,
                 attempts=len(attempts),
+                mode=self._mode.value,
             )
 
         return RepairResult(
@@ -1066,6 +1109,8 @@ class RepairEngine:
             repair_log=self._logger.entries,
             contract_id=contract.contract_id,
             repaired_output=repaired_output,
+            proposed_output=proposed_output,
+            mode=self._mode,
             ambiguous=ambiguous,
         )
 
@@ -1105,6 +1150,11 @@ class RepairEngine:
             TelemetryEventType.REPAIR_FAILED,
             status=RepairStatus.FAILED.value,
             attempts=0,
+            # Carried here for the same reason as the other terminal emits:
+            # a dashboard filtering shadow traffic by this field would
+            # otherwise drop every unrepairable-root failure, which is the
+            # class of failure a shadow rollout most wants to see.
+            mode=self._mode.value,
         )
 
         return RepairResult(
@@ -1116,6 +1166,7 @@ class RepairEngine:
             repair_log=self._logger.entries,
             contract_id=contract.contract_id,
             repaired_output=None,
+            mode=self._mode,
         )
 
     # ------------------------------------------------------------------
@@ -1277,9 +1328,19 @@ class RepairEngine:
         Used for no-progress detection: if two consecutive iterations
         produce the same hash, the repair loop is making no progress and
         terminates.
+
+        ``field_path`` is projected through ``str`` before sorting.  It is
+        declared ``str`` on ``ContractViolation``, but violations reach here
+        from ``IContractAdapter.validate`` -- a documented extension point --
+        so this sort is the one place where a single adapter returning a
+        stray non-string path takes the whole engine down with a ``TypeError``
+        rather than producing a bad repair.  ``str`` of a ``str`` is itself,
+        so this changes no existing hash; it only makes the ordering total.
+        The in-tree source of that bug is fixed at its root in
+        ``ContractValidator._full_path``.
         """
         signatures = sorted(
-            (v.field_path, v.violation_type.value, v.severity.value) for v in violations
+            (str(v.field_path), v.violation_type.value, v.severity.value) for v in violations
         )
         return hashlib.sha256(repr(signatures).encode("utf-8")).hexdigest()
 

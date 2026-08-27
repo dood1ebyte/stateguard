@@ -1,0 +1,780 @@
+{
+  "verdict": "repair",
+  "description": "Repairs a competent reviewer would sign off on unsupervised. `expected_payload` is the payload as it should look once StateGuard is done. A case here that does not repair is a miss (hurts recall); a case that repairs to the wrong value is a false positive (hurts precision).",
+  "cases": [
+    {
+      "name": "alias_declared_temp",
+      "description": "The contract itself names 'temp' as an alias for 'temperature'.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float",
+            "known_aliases": [
+              "temp"
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "temp": 31.5
+      },
+      "expected_payload": {
+        "temperature": 31.5
+      }
+    },
+    {
+      "name": "alias_declared_nested",
+      "description": "A declared alias one level down.",
+      "schema": {
+        "fields": [
+          {
+            "path": "address",
+            "type": "object",
+            "nested": {
+              "fields": [
+                {
+                  "path": "zip_code",
+                  "type": "string",
+                  "known_aliases": [
+                    "zip"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "payload": {
+        "address": {
+          "zip": "400001"
+        }
+      },
+      "expected_payload": {
+        "address": {
+          "zip_code": "400001"
+        }
+      }
+    },
+    {
+      "name": "normalized_camel_to_snake",
+      "description": "Same identifier, different naming convention.",
+      "schema": {
+        "fields": [
+          {
+            "path": "user_id",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "UserID": "u-1"
+      },
+      "expected_payload": {
+        "user_id": "u-1"
+      }
+    },
+    {
+      "name": "normalized_camel_first_name",
+      "description": "firstName is first_name written in camelCase.",
+      "schema": {
+        "fields": [
+          {
+            "path": "first_name",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "firstName": "Arnav"
+      },
+      "expected_payload": {
+        "first_name": "Arnav"
+      }
+    },
+    {
+      "name": "normalized_kebab_upper",
+      "description": "SCREAMING-KEBAB for snake_case.",
+      "schema": {
+        "fields": [
+          {
+            "path": "zip_code",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "ZIP-CODE": "400001"
+      },
+      "expected_payload": {
+        "zip_code": "400001"
+      }
+    },
+    {
+      "name": "normalized_spaced",
+      "description": "A space where an underscore belongs.",
+      "schema": {
+        "fields": [
+          {
+            "path": "user_id",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "user id": "u-1"
+      },
+      "expected_payload": {
+        "user_id": "u-1"
+      }
+    },
+    {
+      "name": "fuzzy_temp_celsius",
+      "description": "The canonical schema-drift case: abbreviation plus a unit suffix, with no competing field.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float"
+          }
+        ]
+      },
+      "payload": {
+        "temp_celsius": 31.5
+      },
+      "expected_payload": {
+        "temperature": 31.5
+      }
+    },
+    {
+      "name": "fuzzy_zipcode",
+      "description": "A missing separator.",
+      "schema": {
+        "fields": [
+          {
+            "path": "zip_code",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "zipcode": "400001"
+      },
+      "expected_payload": {
+        "zip_code": "400001"
+      }
+    },
+    {
+      "name": "fuzzy_truncated_code",
+      "description": "One dropped character, nothing else it could mean.",
+      "schema": {
+        "fields": [
+          {
+            "path": "code",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "cod": "IN"
+      },
+      "expected_payload": {
+        "code": "IN"
+      }
+    },
+    {
+      "name": "fuzzy_dropped_vowel",
+      "description": "'cty' is 'city' with a vowel dropped.",
+      "schema": {
+        "fields": [
+          {
+            "path": "city",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "cty": "Mumbai"
+      },
+      "expected_payload": {
+        "city": "Mumbai"
+      }
+    },
+    {
+      "name": "coerce_digit_string_to_int",
+      "description": "\"5\" -> 5 round-trips exactly.",
+      "schema": {
+        "fields": [
+          {
+            "path": "count",
+            "type": "integer"
+          }
+        ]
+      },
+      "payload": {
+        "count": "5"
+      },
+      "expected_payload": {
+        "count": 5
+      }
+    },
+    {
+      "name": "coerce_negative_string_to_int",
+      "description": "Negative integers are still integers.",
+      "schema": {
+        "fields": [
+          {
+            "path": "delta",
+            "type": "integer"
+          }
+        ]
+      },
+      "payload": {
+        "delta": "-5"
+      },
+      "expected_payload": {
+        "delta": -5
+      }
+    },
+    {
+      "name": "coerce_zero_padded_to_int",
+      "description": "\"05\" means 5; the padding is formatting, not value.",
+      "schema": {
+        "fields": [
+          {
+            "path": "count",
+            "type": "integer"
+          }
+        ]
+      },
+      "payload": {
+        "count": "05"
+      },
+      "expected_payload": {
+        "count": 5
+      }
+    },
+    {
+      "name": "coerce_decimal_string_to_float",
+      "description": "\"31.5\" -> 31.5.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float"
+          }
+        ]
+      },
+      "payload": {
+        "temperature": "31.5"
+      },
+      "expected_payload": {
+        "temperature": 31.5
+      }
+    },
+    {
+      "name": "coerce_integer_string_to_float",
+      "description": "A float field given an integer-looking string.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float"
+          }
+        ]
+      },
+      "payload": {
+        "temperature": "30"
+      },
+      "expected_payload": {
+        "temperature": 30.0
+      }
+    },
+    {
+      "name": "coerce_true_word",
+      "description": "The string spells the boolean out.",
+      "schema": {
+        "fields": [
+          {
+            "path": "active",
+            "type": "boolean"
+          }
+        ]
+      },
+      "payload": {
+        "active": "true"
+      },
+      "expected_payload": {
+        "active": true
+      }
+    },
+    {
+      "name": "coerce_false_word_mixed_case",
+      "description": "Case-insensitive boolean words.",
+      "schema": {
+        "fields": [
+          {
+            "path": "active",
+            "type": "boolean"
+          }
+        ]
+      },
+      "payload": {
+        "active": "False"
+      },
+      "expected_payload": {
+        "active": false
+      }
+    },
+    {
+      "name": "coerce_numeric_true",
+      "description": "\"1\" as a boolean is a reading, but a conventional one.",
+      "schema": {
+        "fields": [
+          {
+            "path": "active",
+            "type": "boolean"
+          }
+        ]
+      },
+      "payload": {
+        "active": "1"
+      },
+      "expected_payload": {
+        "active": true
+      }
+    },
+    {
+      "name": "coerce_numeric_false",
+      "description": "\"0\" as a boolean.",
+      "schema": {
+        "fields": [
+          {
+            "path": "active",
+            "type": "boolean"
+          }
+        ]
+      },
+      "payload": {
+        "active": "0"
+      },
+      "expected_payload": {
+        "active": false
+      }
+    },
+    {
+      "name": "parse_json_object",
+      "description": "A model returned a nested object as a JSON string.",
+      "schema": {
+        "fields": [
+          {
+            "path": "metadata",
+            "type": "object"
+          }
+        ]
+      },
+      "payload": {
+        "metadata": "{\"source\": \"sensor-7\"}"
+      },
+      "expected_payload": {
+        "metadata": {
+          "source": "sensor-7"
+        }
+      }
+    },
+    {
+      "name": "parse_json_array",
+      "description": "A JSON array string for an array field. Must parse, not wrap.",
+      "schema": {
+        "fields": [
+          {
+            "path": "tags",
+            "type": "array",
+            "item_type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "tags": "[\"indoor\", \"calibrated\"]"
+      },
+      "expected_payload": {
+        "tags": [
+          "indoor",
+          "calibrated"
+        ]
+      }
+    },
+    {
+      "name": "wrap_single_value_in_array",
+      "description": "A bare value where a typed array is declared.",
+      "schema": {
+        "fields": [
+          {
+            "path": "tags",
+            "type": "array",
+            "item_type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "tags": "indoor"
+      },
+      "expected_payload": {
+        "tags": [
+          "indoor"
+        ]
+      }
+    },
+    {
+      "name": "enum_case_only",
+      "description": "The member spelled in upper case.",
+      "schema": {
+        "fields": [
+          {
+            "path": "status",
+            "type": "string",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": [
+                  "open",
+                  "in_progress",
+                  "done"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "status": "DONE"
+      },
+      "expected_payload": {
+        "status": "done"
+      }
+    },
+    {
+      "name": "enum_title_case",
+      "description": "Prose casing, which is how models echo enum members back.",
+      "schema": {
+        "fields": [
+          {
+            "path": "status",
+            "type": "string",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": [
+                  "open",
+                  "in_progress",
+                  "done"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "status": "Open"
+      },
+      "expected_payload": {
+        "status": "open"
+      }
+    },
+    {
+      "name": "enum_spaced_separator",
+      "description": "A space where the member uses an underscore.",
+      "schema": {
+        "fields": [
+          {
+            "path": "status",
+            "type": "string",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": [
+                  "open",
+                  "in_progress",
+                  "done"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "status": "IN PROGRESS"
+      },
+      "expected_payload": {
+        "status": "in_progress"
+      }
+    },
+    {
+      "name": "enum_kebab_separator",
+      "description": "A hyphen where the member uses an underscore.",
+      "schema": {
+        "fields": [
+          {
+            "path": "status",
+            "type": "string",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": [
+                  "open",
+                  "in_progress",
+                  "done"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "status": "in-progress"
+      },
+      "expected_payload": {
+        "status": "in_progress"
+      }
+    },
+    {
+      "name": "enum_surrounding_whitespace",
+      "description": "Stray whitespace around an otherwise exact member.",
+      "schema": {
+        "fields": [
+          {
+            "path": "status",
+            "type": "string",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": [
+                  "open",
+                  "done"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "status": "  done  "
+      },
+      "expected_payload": {
+        "status": "done"
+      }
+    },
+    {
+      "name": "default_fill_declared",
+      "description": "A missing field the contract declares a default for.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float"
+          },
+          {
+            "path": "humidity",
+            "type": "integer",
+            "default": 60
+          }
+        ]
+      },
+      "payload": {
+        "temperature": 31.5
+      },
+      "expected_payload": {
+        "temperature": 31.5,
+        "humidity": 60
+      }
+    },
+    {
+      "name": "default_fill_null_default",
+      "description": "A declared default of null is a value, not an absence.",
+      "schema": {
+        "fields": [
+          {
+            "path": "note",
+            "type": "string",
+            "default": null
+          }
+        ]
+      },
+      "payload": {},
+      "expected_payload": {
+        "note": null
+      }
+    },
+    {
+      "name": "chain_rename_then_coerce",
+      "description": "The rename exposes a type mismatch the next pass fixes. Both must land in one call.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float"
+          }
+        ]
+      },
+      "payload": {
+        "temp_celsius": "31.5"
+      },
+      "expected_payload": {
+        "temperature": 31.5
+      }
+    },
+    {
+      "name": "chain_rename_coerce_enum_default",
+      "description": "Four issues, four strategies, one call.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float"
+          },
+          {
+            "path": "status",
+            "type": "string",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": [
+                  "open",
+                  "in_progress"
+                ]
+              }
+            ]
+          },
+          {
+            "path": "humidity",
+            "type": "integer",
+            "default": 50
+          }
+        ]
+      },
+      "payload": {
+        "temp_celsius": "31.5",
+        "status": "IN PROGRESS"
+      },
+      "expected_payload": {
+        "temperature": 31.5,
+        "status": "in_progress",
+        "humidity": 50
+      }
+    },
+    {
+      "name": "root_json_string",
+      "description": "The whole payload arrived as a JSON string.",
+      "schema": {
+        "fields": [
+          {
+            "path": "a",
+            "type": "integer"
+          }
+        ]
+      },
+      "payload": "{\"a\": 1}",
+      "expected_payload": {
+        "a": 1
+      }
+    },
+    {
+      "name": "root_single_element_array",
+      "description": "The object arrived wrapped in a one-element array.",
+      "schema": {
+        "fields": [
+          {
+            "path": "a",
+            "type": "integer"
+          }
+        ]
+      },
+      "payload": [
+        {
+          "a": 1
+        }
+      ],
+      "expected_payload": {
+        "a": 1
+      }
+    },
+    {
+      "name": "nested_fuzzy_two_level",
+      "description": "A fuzzy rename one level down.",
+      "schema": {
+        "fields": [
+          {
+            "path": "address",
+            "type": "object",
+            "nested": {
+              "fields": [
+                {
+                  "path": "zip_code",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "payload": {
+        "address": {
+          "zipcode": "400001"
+        }
+      },
+      "expected_payload": {
+        "address": {
+          "zip_code": "400001"
+        }
+      }
+    },
+    {
+      "name": "cross_branch_disambiguation",
+      "description": "Two branches each with the same drift. Global assignment must pair them within their own branch.",
+      "schema": {
+        "fields": [
+          {
+            "path": "branch_a",
+            "type": "object",
+            "nested": {
+              "fields": [
+                {
+                  "path": "code",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          {
+            "path": "branch_b",
+            "type": "object",
+            "nested": {
+              "fields": [
+                {
+                  "path": "code",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "payload": {
+        "branch_a": {
+          "cod": "AA"
+        },
+        "branch_b": {
+          "cod": "BB"
+        }
+      },
+      "expected_payload": {
+        "branch_a": {
+          "code": "AA"
+        },
+        "branch_b": {
+          "code": "BB"
+        }
+      }
+    }
+  ]
+}

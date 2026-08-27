@@ -41,14 +41,24 @@ For each case, the runner records:
 
 Aggregated across the whole suite:
 
-- **Total cases**
-- **Passed / Failed** cases
-- **Repaired cases** — count of cases whose `actual_status` is `success`
-  or `partial` (i.e. StateGuard did *something* to the payload)
-- **Repair rate** — `repaired_cases / total_cases`
-- **Average confidence** — mean of every applied operation's confidence
-  across the whole run (not just repaired cases — `already_valid` and
-  `failed` cases simply contribute zero operations to this average)
+- **Total cases**, **Passed / Failed**
+- **Repair rate** — `repaired_correctly / repairable_cases`, i.e. recall.
+  A case is *repairable* when its own `expected_result` says so; cases
+  expecting `already_valid` have nothing to repair, and the case expecting
+  `failed` exists to prove StateGuard refuses to guess. Dividing by
+  `total_cases` counted both as repair failures, which made 77.8% the
+  *maximum* achievable score on a suite where every case behaved correctly.
+  A case counts in the numerator only when it **passed**, so a degradation
+  from `success` to `partial` moves the number.
+- **Precision** — of the cases StateGuard chose to repair, how many it
+  should have. A case that repairs when its `expected_result` says `failed`
+  is a false positive: a silently wrong repair, which is the failure mode
+  that actually costs users data.
+- **Average trust** — mean of every applied operation's trust score. Note
+  this is a *mix* statistic, not a quality one: declared repairs score 1.00
+  by construction, so the average mostly reports which strategies the suite
+  happens to exercise. The calibration harness below is what says whether
+  the number means anything.
 
 ## Case format
 
@@ -100,6 +110,8 @@ Each file in `benchmarks/cases/` is one JSON object:
 | 07 | `unrecoverable` | Safe refusal — no plausible candidate exists |
 | 08 | `already_valid` | Zero-overhead baseline — clean input stays untouched |
 | 09 | `partial_repair` | Mixed fixable + unfixable fields within one payload |
+| 10 | `json_encoded_object` | Structured fields returned as JSON text (parse, don't wrap) |
+| 11 | `enum_value_normalization` | Enum members echoed back in prose casing |
 
 ## Adding a new case
 
@@ -123,3 +135,74 @@ per-case breakdown — useful for diffing behavior across StateGuard
 versions. These files are not checked into version control by default
 (see `.gitignore`); only `benchmarks/results/.gitkeep` is tracked, to
 preserve the directory structure.
+
+
+---
+
+# Calibration harness
+
+`benchmarks/runner.py` answers *"does StateGuard behave correctly on these
+scenarios"*. It cannot answer the question the trust score actually makes:
+**when StateGuard says trust 0.85, is it right about 85% of the time?**
+
+`benchmarks/calibrate.py` answers that one, against a labelled corpus in
+`benchmarks/calibration/`.
+
+```bash
+python benchmarks/calibrate.py
+python benchmarks/calibrate.py --verbose      # explain each known gap
+```
+
+## Why it is separate
+
+The bands in `stateguard.core.trust` were *fitted* to a handful of required
+outcomes. Fitting says "these five cases land on the right side of the line";
+calibration says "the number means what it claims across a corpus you did not
+tune it on". Only the second is a defensible claim, and it needs labelled data
+the case suite does not have.
+
+## Corpus
+
+Three families, ~80 cases, each labelled with a verdict and a ground-truth
+payload:
+
+| File | Verdict | Means |
+|---|---|---|
+| `must_apply.json` | `repair` | A specific repair is correct and should be applied unsupervised |
+| `must_abstain.json` | `abstain` | A repair is findable but must be surfaced, not applied |
+| `must_refuse.json` | `refuse` | **The false-positive block.** A repair is *possible* and doing nothing is correct |
+
+`expected_payload` is the ground truth for every verdict, not just `repair` —
+for `refuse` it is identical to `payload`. Having one ground-truth payload per
+case is what makes per-operation scoring possible.
+
+The `refuse` block is the point. It holds field pairs that are lexically close
+and semantically opposite — `created_at`/`updated_at`, `min_price`/`max_price`,
+`is_active`/`is_archived` — where a rename is entirely plausible and entirely
+wrong. The 11-case benchmark suite has zero of these.
+
+## What it reports
+
+- **Precision** over applied operations — an operation is correct when the
+  *final* payload at its `target_path` matches ground truth. Judging the final
+  state rather than the operation's immediate effect is deliberate: a rename
+  that exposes a type mismatch leaves `"31.5"` behind for the next pass to
+  coerce, and scoring it against that intermediate value would mark a correct
+  field correspondence wrong.
+- **A reliability curve** — applied operations bucketed by trust, with the
+  accuracy of each bucket against its midpoint. A calibrated model has
+  accuracy ≈ midpoint.
+- **Expected calibration error** — the weighted mean gap. The single number
+  that turns "trust score" from a rename into a claim.
+
+## Known gaps
+
+A case may carry `"known_gap": "<why this is currently accepted>"`. Those
+cases do **not** fail the run — a documented gap failing is the corpus doing
+its job. What *does* fail the run is an undocumented failure (a regression) or
+a documented gap that has started passing (a stale marker, which would let the
+next real regression hide behind it).
+
+That split is what lets the harness be a CI gate and an honest record at the
+same time. Without it the only options are deleting the cases the engine gets
+wrong, or leaving the build red forever.

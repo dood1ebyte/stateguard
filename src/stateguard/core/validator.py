@@ -493,6 +493,32 @@ class ContractValidator:
         return path.rsplit(".", 1)[-1]
 
     @staticmethod
-    def _full_path(prefix: str, local_name: str) -> str:
-        """Join *prefix* and *local_name* with a dot, omitting empty prefix."""
-        return f"{prefix}.{local_name}" if prefix else local_name
+    def _full_path(prefix: str, local_name: object) -> str:
+        """
+        Join *prefix* and *local_name* with a dot, omitting empty prefix.
+
+        *local_name* is annotated ``object`` and coerced rather than trusted:
+        one caller (``_check_unexpected_fields``) sources it from the
+        payload's own keys, and a payload that arrives as a ``dict`` never
+        passes through root recovery, so nothing upstream has checked that
+        its keys are strings.  ``_pairs_to_dict`` enforces exactly this
+        invariant on the wire form it accepts; a dict that was already a dict
+        skips that guard entirely.
+
+        Left uncoerced, a non-string key took the empty-prefix branch
+        untouched and landed in ``ContractViolation.field_path``, which is
+        declared ``str``.  The engine then sorted those paths to hash the
+        violation set and raised ``TypeError: '<' not supported between
+        instances of 'int' and 'str'`` -- so ``{"temperature": 1.0, 7: "x"}``
+        crashed ``repair()`` outright.  Non-JSON transports reach this:
+        msgpack, CBOR and YAML all admit non-string keys.
+
+        The nested branch never had the bug -- the f-string already coerces --
+        which is why only root-level keys were affected.
+
+        The resulting path is reported, not repairable: dotted-path lookup is
+        string-keyed, so ``get_nested_value`` returns ``NOT_FOUND`` for it and
+        every applier no-ops.  That is the intended outcome -- an unexpected
+        field the caller can see, rather than a phantom repair.
+        """
+        return f"{prefix}.{local_name}" if prefix else str(local_name)

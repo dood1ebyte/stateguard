@@ -122,3 +122,8 @@ jobs:
 
       - name: Benchmark harness smoke test
         run: python benchmarks/runner.py --no-write
+
+      # Gates on regressions and on stale known_gap markers only -- a
+      # documented gap failing is the corpus doing its job, not CI breaking.
+      - name: Calibration corpus
+        run: python benchmarks/calibrate.py --verbose

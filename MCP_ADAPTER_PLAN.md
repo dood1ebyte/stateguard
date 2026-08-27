@@ -119,15 +119,18 @@ dependency. Three options:
 | Delegate to `ContractValidator` | Zero | **StateGuard's own validator silently becomes the authority.** Anything it doesn't implement goes unvalidated |
 | Vendor a validator | Weeks | Not now |
 
-**Recommendation: option 2 for v1, documented explicitly**, with option 1
-available as an opt-in extra later. Rationale: we control the violation
-vocabulary end-to-end, which is what the repair strategies need, and MCP
-schemas use a narrow enough subset that `ContractValidator` covers it. But
-this must be written down in the adapter's docstring and the README — the
-current `DictContractAdapter` makes this choice *by accident* and nobody
-recorded it.
+**Decided: option 2.** See `docs/adr/0001-json-schema-source-of-truth.md`.
 
-Write the ADR before day 1 of implementation. **~0.5 day.**
+**Correction to this section.** The claim that `DictContractAdapter` "makes
+this choice by accident and nobody recorded it" is **wrong** — it documents the
+delegation deliberately, at both class and method level. The correction
+matters, and it cuts the other way: for the dict adapter `ContractValidator` is
+authoritative *by definition*, because StateGuard owns that contract format and
+there is no external spec to diverge from. JSON Schema is the first case where
+`ContractValidator` stands in for a specification it does not fully implement,
+so the ADR must enumerate the unchecked keywords rather than merely record the
+delegation. That is the real requirement, and it is stricter than what this
+section asked for.
 
 ### Not blockers (despite what it looks like)
 
@@ -235,16 +238,30 @@ silently ignoring them would mean silently under-validating.
 
 ## 6. Phased plan
 
-### Phase 0 — Unblock (1.5 days)
+### Phase 0 — Unblock ✅ COMPLETE
 
-| # | Task | Est. |
-|---|---|---|
-| 0.1 | Fix P0-3 regression guard: compare against previous iteration, not initial | 1d |
-| 0.2 | Write the source-of-truth ADR (§3, P1-3); record option 2 + rationale | 0.5d |
-| 0.3 | *(parallel, 5 min)* P0-1 packaging fix — unrelated but live on PyPI | — |
+**Status:** closed 2026-08-25. 0.1 and 0.3 were absorbed by the core-hardening
+work; only the ADR remained.
 
-**Exit:** a rename→coerce repair returns `SUCCESS`, not `FAILED`. Test this
-explicitly; it is the gate for everything below.
+| # | Task | Est. | Status |
+|---|---|---|---|
+| 0.1 | Fix P0-3 regression guard: compare against previous iteration, not initial | 1d | ✅ landed in `CORE_HARDENING_PLAN.md` Phase 1 (multi-step repair) |
+| 0.2 | Write the source-of-truth ADR (§3, P1-3); record option 2 + rationale | 0.5d | ✅ `docs/adr/0001-json-schema-source-of-truth.md` |
+| 0.3 | *(parallel, 5 min)* P0-1 packaging fix — unrelated but live on PyPI | — | ✅ distribution renamed to `sguard` |
+
+**Exit criterion met.** Verified against the live engine, not assumed — the
+combined rename+coerce case the plan calls the most representative input in
+the category, plus the enum drift §8 flagged as unrepairable at the time:
+
+```
+rename+coerce  -> success | days=5 location='Mumbai'
+enum drift     -> success | unit='celsius' city='Mumbai'
+all three      -> success | unit='celsius' days=5 location='Mumbai'  (4 attempts, one call)
+```
+
+P1-1 (enum repair) is also closed — `EnumNormalizationStrategy` shipped in
+`CORE_HARDENING_PLAN.md` Phase 5, so §8's "nothing repairs them today" no
+longer holds.
 
 ### Phase 1 — JSON Schema core (5 days)
 

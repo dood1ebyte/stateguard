@@ -188,7 +188,16 @@ def _print_human(result: Any, args: argparse.Namespace) -> None:
             print(f"  [{v.severity.value.upper()}] {v.field_path}: {v.violation_type.value}")
         print()
 
-    if result.repaired_output is not None:
+    # Shadow never prints "Repaired payload" -- the whole point is that
+    # nothing was committed, and a heading that says otherwise is exactly the
+    # misreading the mode exists to prevent.
+    if result.is_shadow:
+        if result.proposed_output is not None:
+            print("Proposed payload (SHADOW — not applied):")
+            _dump_output(result.proposed_output)
+        else:
+            print("Proposed payload: (none — no repair found)")
+    elif result.repaired_output is not None:
         print("Repaired payload:")
         _dump_output(result.repaired_output)
     else:
@@ -215,17 +224,14 @@ def _dump_output(obj: Any) -> None:
 
 def _print_json(result: Any) -> None:
     """Print a machine-readable JSON summary to stdout."""
-    try:
-        from pydantic import BaseModel  # noqa: PLC0415
-
-        repaired = result.repaired_output
-        if isinstance(repaired, BaseModel):
-            repaired = repaired.model_dump()
-    except ImportError:
-        repaired = result.repaired_output
+    repaired = _jsonable_output(result.repaired_output)
+    proposed = _jsonable_output(result.proposed_output)
 
     output = {
         "status": result.status.value,
+        # Both fields are always present so a consumer can read one shape
+        # regardless of mode; exactly one of them is ever non-null.
+        "mode": result.mode.value,
         "contract_id": result.contract_id,
         "violations": [
             {
@@ -286,8 +292,18 @@ def _print_json(result: Any) -> None:
             for item in result.ambiguous
         ],
         "repaired_output": repaired,
+        "proposed_output": proposed,
     }
     print(json.dumps(output, indent=2, default=str))
+
+
+def _jsonable_output(payload: Any) -> Any:
+    """Render a repaired/proposed payload as JSON-serialisable data."""
+    try:
+        from pydantic import BaseModel  # noqa: PLC0415
+    except ImportError:
+        return payload
+    return payload.model_dump() if isinstance(payload, BaseModel) else payload
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +312,11 @@ def _print_json(result: Any) -> None:
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
-    from stateguard.core.models.config import GuardConfig, RepairConfig  # noqa: PLC0415
+    from stateguard.core.models.config import (  # noqa: PLC0415
+        GuardConfig,
+        RepairConfig,
+        RepairMode,
+    )
     from stateguard.guard import ContractGuard  # noqa: PLC0415
 
     # Build config from CLI flags
@@ -307,6 +327,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
     config = GuardConfig(
         strict_mode=args.strict,
         repair=repair_config,
+        mode=RepairMode.SHADOW if args.shadow else RepairMode.AUTO,
     )
 
     # Load payload
@@ -424,6 +445,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Enable strict mode: extra fields in the payload that are not "
             "declared in the contract are treated as errors rather than warnings."
+        ),
+    )
+    check.add_argument(
+        "--shadow",
+        action="store_true",
+        default=False,
+        help=(
+            "Shadow mode: detect and plan the repair, validate that the plan "
+            "works, and report it -- but do not present it as applied. The "
+            "payload appears under 'proposed_output' instead of "
+            "'repaired_output'. Exit codes are unchanged, so a shadow run "
+            "still reports whether a repair was found."
         ),
     )
     check.add_argument(

@@ -1,0 +1,248 @@
+{
+  "verdict": "abstain",
+  "description": "A repair is findable and plausible, but the evidence does not justify applying it unsupervised. StateGuard must surface it on `RepairResult.ambiguous` and leave the payload alone. Silently applying is a false positive; silently dropping is worse than either, because the caller learns nothing.",
+  "cases": [
+    {
+      "name": "one_key_two_plausible_homes",
+      "description": "user_email is a strong lexical match for both user_id (0.891) and user_name (0.913). Higher raw similarity than the temp_celsius repair that must succeed -- only the margin separates them.",
+      "schema": {
+        "fields": [
+          {
+            "path": "user_id",
+            "type": "string"
+          },
+          {
+            "path": "user_name",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "user_email": "a@b.com"
+      },
+      "expected_payload": {
+        "user_email": "a@b.com"
+      }
+    },
+    {
+      "name": "contested_key_with_a_decoy_rename",
+      "description": "A second, unrelated rename in the same payload must not make the contested one look unopposed. The legitimate rename still applies; the contested one does not.",
+      "schema": {
+        "fields": [
+          {
+            "path": "user_id",
+            "type": "string"
+          },
+          {
+            "path": "user_name",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "user_email": "a@b.com",
+        "user_names": "arnav"
+      },
+      "expected_payload": {
+        "user_email": "a@b.com",
+        "user_name": "arnav"
+      }
+    },
+    {
+      "name": "contested_key_with_a_declared_default",
+      "description": "Filling the competing field from its default must not resolve the contest -- nothing was learned about where user_email belongs.",
+      "schema": {
+        "fields": [
+          {
+            "path": "user_id",
+            "type": "string"
+          },
+          {
+            "path": "user_name",
+            "type": "string",
+            "default": "anon"
+          }
+        ]
+      },
+      "payload": {
+        "user_email": "a@b.com"
+      },
+      "expected_payload": {
+        "user_email": "a@b.com",
+        "user_name": "anon"
+      }
+    },
+    {
+      "name": "three_fields_one_key",
+      "description": "Three near-equal homes is more ambiguous than two, not less.",
+      "schema": {
+        "fields": [
+          {
+            "path": "user_id",
+            "type": "string"
+          },
+          {
+            "path": "user_name",
+            "type": "string"
+          },
+          {
+            "path": "user_role",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "user_email": "a@b.com"
+      },
+      "expected_payload": {
+        "user_email": "a@b.com"
+      }
+    },
+    {
+      "name": "two_keys_one_field",
+      "description": "Competition from the other side: two unexpected keys equally close to one missing field.",
+      "schema": {
+        "fields": [
+          {
+            "path": "user_id",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "user_ids": "a",
+        "user_idx": "b"
+      },
+      "expected_payload": {
+        "user_ids": "a",
+        "user_idx": "b"
+      }
+    },
+    {
+      "name": "enum_members_collide_on_case",
+      "description": "A contract declaring both 'Done' and 'done' cannot say which was meant by 'DONE'.",
+      "schema": {
+        "fields": [
+          {
+            "path": "status",
+            "type": "string",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": [
+                  "Done",
+                  "done"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "status": "DONE"
+      },
+      "expected_payload": {
+        "status": "DONE"
+      }
+    },
+    {
+      "name": "enum_members_collide_on_space",
+      "description": "'in progress' and 'in_progress' normalise identically; the received value is equally close to both.",
+      "schema": {
+        "fields": [
+          {
+            "path": "status",
+            "type": "string",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": [
+                  "in progress",
+                  "in_progress"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "status": "IN PROGRESS"
+      },
+      "expected_payload": {
+        "status": "IN PROGRESS"
+      }
+    },
+    {
+      "name": "enum_members_collide_on_separator_only",
+      "description": "Every candidate needs separator rewriting, so none is closer than the others. Still two options the caller should get to choose between.",
+      "schema": {
+        "fields": [
+          {
+            "path": "status",
+            "type": "string",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": [
+                  "in_progress",
+                  "in-progress"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "status": "IN PROGRESS"
+      },
+      "expected_payload": {
+        "status": "IN PROGRESS"
+      },
+      "known_gap": "Every candidate needs separator rewriting, so all tie at fidelity 0.85; 0.85 x the 0.70 tie factor = 0.595, just under INFERRED.reject_below (0.60). Both candidates are rejected rather than surfaced. Fixing it by moving the band would be fitting a threshold to a strategy written after it was set."
+    },
+    {
+      "name": "normalized_name_collision",
+      "description": "A contract declaring both user_id and userId has two fields that normalise identically.",
+      "schema": {
+        "fields": [
+          {
+            "path": "user_id",
+            "type": "string"
+          },
+          {
+            "path": "userId",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "USER-ID": "u-1"
+      },
+      "expected_payload": {
+        "USER-ID": "u-1"
+      }
+    },
+    {
+      "name": "near_tie_between_two_targets",
+      "description": "'code' is one character from both 'codes' and 'coded'.",
+      "schema": {
+        "fields": [
+          {
+            "path": "codes",
+            "type": "string"
+          },
+          {
+            "path": "coded",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "code": "X"
+      },
+      "expected_payload": {
+        "code": "X"
+      }
+    }
+  ]
+}

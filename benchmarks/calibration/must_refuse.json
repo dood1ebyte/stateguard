@@ -1,0 +1,704 @@
+{
+  "verdict": "refuse",
+  "description": "The false-positive block. In every case a repair is *possible* -- the names are close, or the value looks castable -- and the correct answer is to do nothing at all. `expected_payload` is therefore always identical to `payload`. Any applied operation here is a silently wrong repair, which is the failure mode that actually costs users data.",
+  "cases": [
+    {
+      "name": "opposites_created_vs_updated",
+      "description": "created_at and updated_at differ by three characters and mean opposite things. Writing a creation timestamp into an update field corrupts an audit trail silently.",
+      "schema": {
+        "fields": [
+          {
+            "path": "updated_at",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "created_at": "2026-08-16T10:00:00Z"
+      },
+      "expected_payload": {
+        "created_at": "2026-08-16T10:00:00Z"
+      },
+      "known_gap": "Uncontested rename: with one missing field and one unexpected key there is no competitor, so margin is 1.0 and trust collapses to raw name similarity (0.752). See the Phase 7 findings -- the must-refuse ceiling (0.923) sits above the must-apply floor (0.809), so no single threshold on name similarity separates these."
+    },
+    {
+      "name": "opposites_min_vs_max_price",
+      "description": "min_price and max_price share seven of nine characters. Swapping them inverts a filter.",
+      "schema": {
+        "fields": [
+          {
+            "path": "max_price",
+            "type": "float"
+          }
+        ]
+      },
+      "payload": {
+        "min_price": 10.0
+      },
+      "expected_payload": {
+        "min_price": 10.0
+      },
+      "known_gap": "Uncontested rename; jaro-winkler 0.867 against a must-apply floor of 0.809. Not separable by threshold."
+    },
+    {
+      "name": "opposites_start_vs_end_date",
+      "description": "start_date / end_date share the '_date' suffix.",
+      "schema": {
+        "fields": [
+          {
+            "path": "end_date",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "start_date": "2026-01-01"
+      },
+      "expected_payload": {
+        "start_date": "2026-01-01"
+      }
+    },
+    {
+      "name": "opposites_first_vs_last_name",
+      "description": "first_name / last_name share '_name'. A person's given name in a surname field is wrong data, not drift.",
+      "schema": {
+        "fields": [
+          {
+            "path": "last_name",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "first_name": "Arnav"
+      },
+      "expected_payload": {
+        "first_name": "Arnav"
+      },
+      "known_gap": "Uncontested rename; jaro-winkler 0.826 against a must-apply floor of 0.809. Not separable by threshold."
+    },
+    {
+      "name": "opposites_is_active_vs_is_archived",
+      "description": "Both boolean, both 'is_a...', opposite meaning.",
+      "schema": {
+        "fields": [
+          {
+            "path": "is_archived",
+            "type": "boolean"
+          }
+        ]
+      },
+      "payload": {
+        "is_active": true
+      },
+      "expected_payload": {
+        "is_active": true
+      },
+      "known_gap": "Uncontested rename; jaro-winkler 0.923 -- the worst case in the corpus. Winkler's prefix bonus actively rewards the shared 'is_a' prefix that makes these two opposites look alike."
+    },
+    {
+      "name": "opposites_sender_vs_receiver_id",
+      "description": "sender_id / receiver_id share the '_id' suffix and the message-routing context.",
+      "schema": {
+        "fields": [
+          {
+            "path": "receiver_id",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "sender_id": "u-1"
+      },
+      "expected_payload": {
+        "sender_id": "u-1"
+      }
+    },
+    {
+      "name": "opposites_input_vs_output_path",
+      "description": "input_path / output_path. Writing the input over the output silently destroys a file.",
+      "schema": {
+        "fields": [
+          {
+            "path": "output_path",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "input_path": "/data/in.csv"
+      },
+      "expected_payload": {
+        "input_path": "/data/in.csv"
+      }
+    },
+    {
+      "name": "wrong_entity_user_vs_order_id",
+      "description": "Both are ids; they identify different things.",
+      "schema": {
+        "fields": [
+          {
+            "path": "order_id",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "user_id": "u-1"
+      },
+      "expected_payload": {
+        "user_id": "u-1"
+      }
+    },
+    {
+      "name": "wrong_entity_billing_vs_shipping_city",
+      "description": "Same field one level down, wrong branch.",
+      "schema": {
+        "fields": [
+          {
+            "path": "shipping",
+            "type": "object",
+            "nested": {
+              "fields": [
+                {
+                  "path": "city",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "payload": {
+        "billing": {
+          "city": "Mumbai"
+        }
+      },
+      "expected_payload": {
+        "billing": {
+          "city": "Mumbai"
+        }
+      }
+    },
+    {
+      "name": "unrelated_names",
+      "description": "No plausible correspondence at all -- the easy end of the block.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float"
+          }
+        ]
+      },
+      "payload": {
+        "humidity": 80.0
+      },
+      "expected_payload": {
+        "humidity": 80.0
+      }
+    },
+    {
+      "name": "value_word_not_a_number",
+      "description": "\"five\" is a number to a human and not to int().",
+      "schema": {
+        "fields": [
+          {
+            "path": "count",
+            "type": "integer"
+          }
+        ]
+      },
+      "payload": {
+        "count": "five"
+      },
+      "expected_payload": {
+        "count": "five"
+      }
+    },
+    {
+      "name": "value_decimal_string_to_int",
+      "description": "\"5.5\" -> 5 would silently discard the fraction.",
+      "schema": {
+        "fields": [
+          {
+            "path": "count",
+            "type": "integer"
+          }
+        ]
+      },
+      "payload": {
+        "count": "5.5"
+      },
+      "expected_payload": {
+        "count": "5.5"
+      }
+    },
+    {
+      "name": "value_superscript_digit",
+      "description": "'²'.isdigit() is True but int('²') raises. A cast that cannot be performed must not be proposed.",
+      "schema": {
+        "fields": [
+          {
+            "path": "count",
+            "type": "integer"
+          }
+        ]
+      },
+      "payload": {
+        "count": "²"
+      },
+      "expected_payload": {
+        "count": "²"
+      }
+    },
+    {
+      "name": "value_maybe_is_not_a_boolean",
+      "description": "Only the four accepted boolean spellings coerce.",
+      "schema": {
+        "fields": [
+          {
+            "path": "active",
+            "type": "boolean"
+          }
+        ]
+      },
+      "payload": {
+        "active": "maybe"
+      },
+      "expected_payload": {
+        "active": "maybe"
+      }
+    },
+    {
+      "name": "value_yes_is_not_a_boolean",
+      "description": "\"yes\" is conventional English, not a JSON boolean. Accepting it is a slippery slope to accepting \"y\", \"on\", \"enabled\".",
+      "schema": {
+        "fields": [
+          {
+            "path": "active",
+            "type": "boolean"
+          }
+        ]
+      },
+      "payload": {
+        "active": "yes"
+      },
+      "expected_payload": {
+        "active": "yes"
+      }
+    },
+    {
+      "name": "value_nan_string",
+      "description": "float(\"nan\") succeeds, NaN poisons every downstream comparison, and it is not valid JSON.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float"
+          }
+        ]
+      },
+      "payload": {
+        "temperature": "nan"
+      },
+      "expected_payload": {
+        "temperature": "nan"
+      }
+    },
+    {
+      "name": "value_infinity_string",
+      "description": "Same argument as NaN.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float"
+          }
+        ]
+      },
+      "payload": {
+        "temperature": "-Infinity"
+      },
+      "expected_payload": {
+        "temperature": "-Infinity"
+      }
+    },
+    {
+      "name": "json_scalar_where_object_expected",
+      "description": "\"123\" is valid JSON but parses to an int, not an object.",
+      "schema": {
+        "fields": [
+          {
+            "path": "metadata",
+            "type": "object"
+          }
+        ]
+      },
+      "payload": {
+        "metadata": "123"
+      },
+      "expected_payload": {
+        "metadata": "123"
+      }
+    },
+    {
+      "name": "json_array_where_object_expected",
+      "description": "Parsing succeeds but yields the wrong kind.",
+      "schema": {
+        "fields": [
+          {
+            "path": "metadata",
+            "type": "object"
+          }
+        ]
+      },
+      "payload": {
+        "metadata": "[1, 2]"
+      },
+      "expected_payload": {
+        "metadata": "[1, 2]"
+      }
+    },
+    {
+      "name": "json_duplicate_key",
+      "description": "json.loads keeps the last duplicate silently. There is no fidelity score that honestly describes 'one of these two values is gone'.",
+      "schema": {
+        "fields": [
+          {
+            "path": "metadata",
+            "type": "object"
+          }
+        ]
+      },
+      "payload": {
+        "metadata": "{\"a\": 1, \"a\": 2}"
+      },
+      "expected_payload": {
+        "metadata": "{\"a\": 1, \"a\": 2}"
+      }
+    },
+    {
+      "name": "json_array_wrong_item_types",
+      "description": "The string parses to an array, but its elements do not match the declared item_type.",
+      "schema": {
+        "fields": [
+          {
+            "path": "tags",
+            "type": "array",
+            "item_type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "tags": "[1, 2]"
+      },
+      "expected_payload": {
+        "tags": "[1, 2]"
+      }
+    },
+    {
+      "name": "array_item_type_mismatch",
+      "description": "One bad element in an otherwise valid array is an item-level problem no cast fixes.",
+      "schema": {
+        "fields": [
+          {
+            "path": "tags",
+            "type": "array",
+            "item_type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "tags": [
+          "a",
+          1
+        ]
+      },
+      "expected_payload": {
+        "tags": [
+          "a",
+          1
+        ]
+      }
+    },
+    {
+      "name": "untyped_array_not_wrapped",
+      "description": "Wrapping into an array with no declared item_type is a guess about cardinality with nothing to check it against.",
+      "schema": {
+        "fields": [
+          {
+            "path": "tags",
+            "type": "array"
+          }
+        ]
+      },
+      "payload": {
+        "tags": "indoor"
+      },
+      "expected_payload": {
+        "tags": "indoor"
+      }
+    },
+    {
+      "name": "enum_near_miss_typo",
+      "description": "'in progres' is one character from a member. Levenshtein over enum values is a different and riskier feature than normalising spelling.",
+      "schema": {
+        "fields": [
+          {
+            "path": "status",
+            "type": "string",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": [
+                  "open",
+                  "in_progress"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "status": "in progres"
+      },
+      "expected_payload": {
+        "status": "in progres"
+      }
+    },
+    {
+      "name": "enum_value_not_a_member",
+      "description": "'cancelled' is a perfectly reasonable status that this contract does not declare.",
+      "schema": {
+        "fields": [
+          {
+            "path": "status",
+            "type": "string",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": [
+                  "open",
+                  "done"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "status": "cancelled"
+      },
+      "expected_payload": {
+        "status": "cancelled"
+      }
+    },
+    {
+      "name": "enum_separator_removed_not_mapped",
+      "description": "'onhold' is not 'on_hold' -- enum values are data, and collapsing separators entirely claims a member on thinner evidence than normalisation warrants.",
+      "schema": {
+        "fields": [
+          {
+            "path": "status",
+            "type": "string",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": [
+                  "on_hold",
+                  "open"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "status": "onhold"
+      },
+      "expected_payload": {
+        "status": "onhold"
+      }
+    },
+    {
+      "name": "enum_int_out_of_range",
+      "description": "An integer enum given a value outside the set. Normalisation is a string operation and has nothing to offer.",
+      "schema": {
+        "fields": [
+          {
+            "path": "level",
+            "type": "integer",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": [
+                  1,
+                  2
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "level": 5
+      },
+      "expected_payload": {
+        "level": 5
+      }
+    },
+    {
+      "name": "enum_declared_as_a_bare_string",
+      "description": "A malformed schema: tuple('open') splits into characters, so 'O' would match member 'o'. Refusing beats rewriting data because the schema was wrong.",
+      "schema": {
+        "fields": [
+          {
+            "path": "status",
+            "type": "string",
+            "constraints": [
+              {
+                "type": "enum_values",
+                "value": "open"
+              }
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "status": "O"
+      },
+      "expected_payload": {
+        "status": "O"
+      }
+    },
+    {
+      "name": "root_multi_element_array",
+      "description": "Two objects at the root: no principled element to pick.",
+      "schema": {
+        "fields": [
+          {
+            "path": "a",
+            "type": "integer"
+          }
+        ]
+      },
+      "payload": [
+        {
+          "a": 1
+        },
+        {
+          "a": 2
+        }
+      ],
+      "expected_payload": [
+        {
+          "a": 1
+        },
+        {
+          "a": 2
+        }
+      ]
+    },
+    {
+      "name": "root_bare_scalar",
+      "description": "A single-field contract makes {city: 'Mumbai'} a plausible reading, but it is an inference about intent rather than a re-encoding of structured data.",
+      "schema": {
+        "fields": [
+          {
+            "path": "city",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": "Mumbai",
+      "expected_payload": "Mumbai"
+    },
+    {
+      "name": "root_empty_list",
+      "description": "Recovering an object from [] would mean fabricating one.",
+      "schema": {
+        "fields": [
+          {
+            "path": "a",
+            "type": "integer"
+          }
+        ]
+      },
+      "payload": [],
+      "expected_payload": []
+    },
+    {
+      "name": "object_where_scalar_expected",
+      "description": "A dict for a float field. Nothing safe to do.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float"
+          }
+        ]
+      },
+      "payload": {
+        "temperature": {
+          "value": 31.5
+        }
+      },
+      "expected_payload": {
+        "temperature": {
+          "value": 31.5
+        }
+      }
+    },
+    {
+      "name": "null_where_value_expected",
+      "description": "An explicit null is a deliberate value, not a missing field to fill.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float"
+          }
+        ]
+      },
+      "payload": {
+        "temperature": null
+      },
+      "expected_payload": {
+        "temperature": null
+      }
+    },
+    {
+      "name": "missing_field_with_no_default",
+      "description": "Nothing declares what this field should be, and nothing in the payload resembles it.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float"
+          }
+        ]
+      },
+      "payload": {},
+      "expected_payload": {}
+    },
+    {
+      "name": "int_in_a_float_field_needs_no_repair",
+      "description": "An int is already acceptable where a float is declared, so there is no violation and nothing to coerce. The int->float cast exists for union members; firing it here would be a no-op the audit trail should not claim.",
+      "schema": {
+        "fields": [
+          {
+            "path": "temperature",
+            "type": "float"
+          }
+        ]
+      },
+      "payload": {
+        "temperature": 30
+      },
+      "expected_payload": {
+        "temperature": 30
+      }
+    }
+  ]
+}

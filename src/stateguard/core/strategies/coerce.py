@@ -413,10 +413,26 @@ def _array_wrap_is_safe(value: Any, item_type: FieldType | None) -> bool:
     Refused when the value is already a list (that is an item-level
     problem, not a wrapping problem) and when *item_type* is unknown
     (wrapping into an untyped array would be a guess).
+
+    Also refused when the value is a string that *parses* as a JSON array.
+    Parsing is tried before wrapping precisely so that ``'["a","b"]'``
+    becomes ``["a", "b"]`` rather than ``['["a","b"]']`` -- but that ordering
+    only helps while the parse succeeds *and* the elements fit.  Given
+    ``'[1, 2]'`` against ``item_type=string`` the parse yields the wrong
+    element types, control fell through to here, and wrapping produced
+    ``['[1, 2]']``: a list of one string, which validates cleanly and is
+    exactly the silently-wrong result the ordering exists to prevent.
+
+    A string that is a serialised array names its author's intent.  If its
+    elements do not fit the contract that is an item-level mismatch no cast
+    repairs, and re-reading the text as a single element is never what was
+    meant.
     """
     if isinstance(value, list):
         return False
     if item_type is None:
+        return False
+    if json_parsed(value, list) is not None:
         return False
     return type_matches(value, item_type)
 

@@ -10,7 +10,6 @@ import pytest
 
 from stateguard.core.errors.operations import FieldOperation, FieldOpType
 from stateguard.core.errors.results import RepairAttempt, RepairResult, RepairStatus
-from stateguard.core.paths import NOT_FOUND, get_nested_value
 from stateguard.core.errors.violations import (
     ContractViolation,
     ViolationSeverity,
@@ -20,6 +19,8 @@ from stateguard.logging.logger import RepairLogger
 from stateguard.logging.repair_history import (
     DEFAULT_HISTORY_PATH,
     RepairHistoryRecorder,
+    _get_nested_value,
+    _NOT_FOUND,
     _violation_type_for_path,
 )
 
@@ -584,25 +585,37 @@ class TestReadAll:
 
 
 class TestGetNestedValueHelper:
+    """
+    ``repair_history`` carries its own copy of this helper rather than using
+    ``stateguard.core.paths``. That is deliberate: ``core.errors.results``
+    imports ``logging.logger``, so everything this module needs from ``core``
+    is ``TYPE_CHECKING``-only and a runtime ``logging -> core`` edge would
+    invert the dependency. The copy is what keeps that boundary, so it is
+    tested here rather than through the shared helper.
+    """
+
     def test_top_level(self) -> None:
-        assert get_nested_value({"a": 1}, "a") == 1
+        assert _get_nested_value({"a": 1}, "a") == 1
 
     def test_nested(self) -> None:
-        assert get_nested_value({"a": {"b": 2}}, "a.b") == 2
+        assert _get_nested_value({"a": {"b": 2}}, "a.b") == 2
 
     def test_missing_returns_not_found(self) -> None:
-        assert get_nested_value({"a": 1}, "b") is NOT_FOUND
+        assert _get_nested_value({"a": 1}, "b") is _NOT_FOUND
 
     def test_empty_path_returns_not_found(self) -> None:
-        assert get_nested_value({"a": 1}, "") is NOT_FOUND
+        assert _get_nested_value({"a": 1}, "") is _NOT_FOUND
 
     def test_intermediate_not_dict_returns_not_found(self) -> None:
-        assert get_nested_value({"a": 1}, "a.b") is NOT_FOUND
+        assert _get_nested_value({"a": 1}, "a.b") is _NOT_FOUND
 
     def test_value_none_is_distinct_from_not_found(self) -> None:
-        result = get_nested_value({"a": None}, "a")
+        result = _get_nested_value({"a": None}, "a")
         assert result is None
-        assert result is not NOT_FOUND
+        assert result is not _NOT_FOUND
+
+    def test_the_sentinel_reprs_readably(self) -> None:
+        assert repr(_NOT_FOUND) == "NOT_FOUND"
 
 
 class TestViolationTypeForPathHelper:
