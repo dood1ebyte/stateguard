@@ -254,9 +254,26 @@ class JSONSchemaTypeMapper:
             branch = surviving[0]
             with resolver.resolved(branch) as target:
                 mapped = self.map_schema(target, resolver, path)
+
             # Keep the *unresolved* branch so the extractor's descent stays
-            # guarded -- see the module docstring.
-            mapped.effective_schema = branch
+            # guarded -- see the module docstring -- but only when the
+            # recursive call has not already narrowed further.
+            #
+            # ``target`` is what was handed to ``map_schema``, so identity
+            # here means "it mapped the schema as given". If it came back
+            # pointing somewhere else, this branch was itself a union and the
+            # inner collapse found the schema that actually carries the type,
+            # constraints and default; overwriting would throw that away and
+            # leave the extractor resolving to an ``anyOf`` that carries
+            # none of them. That is what used to happen to a chained
+            # ``Optional[Optional[X]]``: the reject-list screen still fired
+            # per branch, but X's ``minLength`` and ``default`` vanished.
+            #
+            # The inner result is unresolved too, so the guard stays armed
+            # either way, and a genuine A -> B -> A cycle is caught while
+            # mapping rather than while descending.
+            if mapped.effective_schema is target:
+                mapped.effective_schema = branch
             mapped.nullable = mapped.nullable or nullable
             return mapped
 

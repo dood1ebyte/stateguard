@@ -171,6 +171,113 @@ class TestOptionalRefKeepsWhatTheSchemaSaid:
         assert _constraints(spec, "work") == {FieldConstraintType.MIN_LENGTH: 2}
 
 
+class TestChainedOptionalRefs:
+    """
+    ``Optional[Optional[X]]`` -- ``anyOf:[{$ref A},{null}]`` where A is itself
+    ``anyOf:[{$ref B},{null}]``.
+
+    The first fix above left this case behind. ``_map_union`` overwrote
+    ``effective_schema`` with its own branch at every level, so the outermost
+    ``$ref`` won and the extractor resolved it to an ``anyOf`` carrying no
+    constraints. The reject-list screen still fired -- it runs per branch, at
+    every level -- but X's constraints and default vanished, which is the
+    same defect one level deeper.
+    """
+
+    @staticmethod
+    def _chained(leaf: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"f": {"anyOf": [{"$ref": "#/$defs/A"}, {"type": "null"}]}},
+            "$defs": {
+                "A": {"anyOf": [{"$ref": "#/$defs/B"}, {"type": "null"}]},
+                "B": leaf,
+            },
+        }
+
+    @staticmethod
+    def _single(leaf: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"f": {"anyOf": [{"$ref": "#/$defs/B"}, {"type": "null"}]}},
+            "$defs": {"B": leaf},
+        }
+
+    def test_chained_matches_single(self) -> None:
+        """
+        Asserted against the single-level spelling rather than literal
+        values: the two describe the same field, so any divergence is the
+        bug, whatever the values happen to be.
+        """
+        leaf = {"type": "string", "minLength": 3, "default": "bob"}
+        chained = _field(_extract(self._chained(leaf)), "f")
+        single = _field(_extract(self._single(leaf)), "f")
+
+        assert chained.field_type is single.field_type
+        assert chained.default == single.default
+        assert {(c.constraint_type, c.value) for c in chained.constraints} == {
+            (c.constraint_type, c.value) for c in single.constraints
+        }
+
+    def test_constraints_survive_the_chain(self) -> None:
+        spec = _extract(self._chained({"type": "string", "minLength": 3}))
+        assert _constraints(spec, "f") == {FieldConstraintType.MIN_LENGTH: 3}
+
+    def test_default_survives_the_chain(self) -> None:
+        spec = _extract(self._chained({"type": "string", "default": "bob"}))
+        assert _field(spec, "f").default == "bob"
+
+    def test_rejected_keyword_still_refused_through_the_chain(self) -> None:
+        """
+        This half always worked, because the screen runs on every resolved
+        branch regardless of which one wins the ``effective_schema`` race.
+        Pinned so the fix cannot regress it.
+        """
+        with pytest.raises(UnsupportedSchemaError, match="allOf"):
+            _extract(self._chained({"allOf": [{"type": "string"}]}))
+
+    def test_a_genuine_cycle_through_the_chain_is_still_caught(self) -> None:
+        """
+        Keeping the inner branch means the outer pointer is never pushed, so
+        the guard has to catch ``A -> B -> A`` on its own. It does -- while
+        mapping, rather than while descending.
+        """
+        schema = {
+            "type": "object",
+            "properties": {"f": {"anyOf": [{"$ref": "#/$defs/A"}, {"type": "null"}]}},
+            "$defs": {
+                "A": {"anyOf": [{"$ref": "#/$defs/B"}, {"type": "null"}]},
+                "B": {"anyOf": [{"$ref": "#/$defs/A"}, {"type": "null"}]},
+            },
+        }
+        with pytest.raises(SchemaReferenceError):
+            _extract(schema)
+
+    def test_a_three_deep_chain_also_survives(self) -> None:
+        """One level of chaining could be a coincidence; two is the rule."""
+        schema = {
+            "type": "object",
+            "properties": {"f": {"anyOf": [{"$ref": "#/$defs/A"}, {"type": "null"}]}},
+            "$defs": {
+                "A": {"anyOf": [{"$ref": "#/$defs/B"}, {"type": "null"}]},
+                "B": {"anyOf": [{"$ref": "#/$defs/C"}, {"type": "null"}]},
+                "C": {"type": "integer", "minimum": 1, "maximum": 14},
+            },
+        }
+        assert _constraints(_extract(schema), "f") == {
+            FieldConstraintType.MINIMUM: 1,
+            FieldConstraintType.MAXIMUM: 14,
+        }
+
+    def test_chained_optional_object_still_nests(self) -> None:
+        schema = self._chained(
+            {"type": "object", "properties": {"n": {"type": "string"}}, "required": ["n"]}
+        )
+        nested = _field(_extract(schema), "f").nested_spec
+        assert nested is not None
+        assert _field(nested, "n").required is True
+
+
 # ===========================================================================
 # The screen must run everywhere a schema is walked, not just in the extractor
 # ===========================================================================
@@ -417,6 +524,18 @@ class TestRequiredWithoutAProperty:
         """These go through the same path-addressability check as any other."""
         with pytest.raises(UnsupportedSchemaError, match="dot-notation"):
             _extract({"type": "object", "properties": {}, "required": ["a.b"]})
+
+    @pytest.mark.parametrize("name", [123, None, True, ["a"]], ids=repr)
+    def test_a_non_string_required_entry_is_refused(self, name: Any) -> None:
+        """
+        These used to be ``str()``-coerced, which was invisible while such
+        names were dropped. Now that they become real fields, coercion would
+        materialise a field called ``"123"`` that no payload can satisfy on
+        purpose. JSON Schema says ``required`` holds strings; anything else
+        is malformed, and guessing is worse than saying so.
+        """
+        with pytest.raises(UnsupportedSchemaError, match="must contain strings"):
+            _extract({"type": "object", "properties": {}, "required": [name]})
 
 
 class TestAdditionalProperties:

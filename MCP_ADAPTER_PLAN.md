@@ -316,12 +316,36 @@ cause.
 | # | Finding | Fix |
 |---|---|---|
 | 1 | `Optional[$ref]` dropped constraints, defaults **and** the reject list. `anyOf: [{$ref}, {null}]` is what Pydantic emits for every `Optional[X]`; `effective_schema` is a bare `{"$ref": ...}` there, carrying none of them. `allOf` behind such a ref became `FieldType.ANY` — a schema written to forbid a payload accepted every payload | Extractor resolves the effective schema once, in a context that stays open for the whole field |
-| 2 | Rejected keywords inside union branches and array `items` were ignored | Screen moved to `keywords.py`, called by both walkers |
+| 2 | Rejected keywords inside union branches and array `items` were ignored | Screen moved to `keywords.py`, called by both walkers. **Keywords only — see the limitation below** |
 | 3 | A deep-but-finite schema raised `RecursionError` (a `RuntimeError`, so it escaped every caller catching `JSONSchemaError`). Measured: 496 levels | `RefResolver` bounds resolution depth, alongside its two cycle guards |
 | 4 | An untyped `enum` with a `null` member picked up `NOT_NULL`, making `{"m": null}` a **false violation** against a schema that permits null | Nullability inferred from the members on the untyped path |
 | 5 | `additionalProperties` as a schema object silently ignored | Warns; a non-boolean, non-object value raises |
 | 6 | A `required` name with no `properties` entry was dropped, so a payload missing it was reported valid | Emitted as a required `ANY` field |
 | 7 | Tuple-form `items` widened to `ANY` silently, while `exclusiveMinimum` warned | Warns, consistently |
+
+**A second review pass, of the fixes themselves, found two more:**
+
+| # | Finding | Fix |
+|---|---|---|
+| 8 | `JSONSchemaAdapter.wrap` (finding 2 of the seam decisions below) wrote declared defaults **after** the engine finished, so nothing re-checked them. A schema declaring `{"type": "integer", "default": "abc"}` — or a default left stale when a server's `enum` changed, which is the drift this adapter is *for* — had `repair` return `ALREADY_VALID` and `validate` then reject its own output. The engine refuses to do this on the path it controls: `DefaultValueFillStrategy` fills, revalidates, and fails the repair | Defaults screened at extraction against the field's own type and constraints; an unusable one is dropped with a warning rather than refusing the document |
+| 9 | Finding 1's fix missed *chained* optional refs. `anyOf:[{$ref A},{null}]` where A is itself `anyOf:[{$ref B},{null}]` still lost B's constraints and default, because `_map_union` overwrote `effective_schema` at every level and the outermost `$ref` won. The reject list *did* survive, since the screen runs per branch | The overwrite is skipped when the recursive call already narrowed further |
+
+**Known limitation, stated plainly because finding 2's wording overstated it.**
+The screen reaches every subschema's *keywords*. It does not give union
+branches or array elements a `nested_spec`, so the **contents** of an object
+inside a union or an array are not validated at all:
+
+```jsonc
+{"anyOf": [{"type": "string"},
+           {"type": "object", "properties": {"n": {"type": "integer"}},
+            "required": ["n"]}]}
+```
+
+`{"u": {"n": "not-an-int"}}` extracts and validates clean. Same for
+`items: {"type": "object", ...}`. This is pre-existing — `union_members` and
+`item_type` each carry a single `FieldType` and nothing else — not a
+regression from Phase 1b, and not something Phase 1b fixed. It belongs in
+Phase 4's corpus work, where real schemas will show how often it bites.
 
 **Both seam findings decided:**
 
@@ -332,11 +356,18 @@ cause.
    model and the guard disagreed. A schema that declares itself closed now
    stays closed; `GuardConfig.strict_mode=True` can still tighten a format
    with no way to say it. A contract is never *loosened* by configuration.
-2. **`JSONSchemaAdapter.wrap` materialises declared defaults.** Verified
-   against the live engine that `PydanticAdapter.wrap` already does this,
-   including on `ALREADY_VALID` — so this is consistency with shipped
-   behaviour, not a new hazard. Defaults are deep-copied; nested specs are
-   filled too. **This makes §7's demo step 3 true for the first time.**
+2. **`JSONSchemaAdapter.wrap` materialises declared defaults.** Defaults are
+   deep-copied; nested specs are filled too. **This makes §7's demo step 3
+   true for the first time.**
+
+   The original justification here — that `PydanticAdapter.wrap` already
+   does this, so it is consistency rather than a new hazard — was checked
+   and is *half* right. Pydantic does apply defaults, but with
+   `validate_default=False`, so it does not check them either. The
+   behaviours match; the shared behaviour was unsound. It mattered more
+   here, because ADR-0001 makes `ContractValidator` the sole authority on
+   this path and nothing downstream would catch the bad write. Closed by
+   finding 9 above.
 
 ### Phase 2 — MCP layer ✅ COMPLETE
 
@@ -498,7 +529,7 @@ Tighter than the proposal's, and each one is testable. Status as of
 | 1 | `ContractGuard.with_mcp().repair(tool_def, arguments)` repairs a rename + coercion + default-fill payload in one call, returning `SUCCESS` | ✅ all three in one call; `tests/adapters/mcp/test_outcomes.py` |
 | 2 | All 15–20 corpus schemas from real public MCP servers extract without error | ⬜ **Phase 4.1** — the SDK's own generated schemas do, which is the same test at n=2 |
 | 3 | A recursive `$ref` raises a clear diagnostic in under 100ms — no hang | ✅ both cycle shapes, plus a depth bound added in Phase 1b |
-| 4 | An unsupported keyword (`allOf`) raises a named error identifying the keyword and the path | ✅ and, since Phase 1b, from inside union branches, `items`, and behind an `Optional[$ref]` |
+| 4 | An unsupported keyword (`allOf`) raises a named error identifying the keyword and the path | ✅ and, since Phase 1b, from inside union branches, `items`, and behind an `Optional[$ref]` (including a chained one). Keywords only — object *contents* in those positions stay unvalidated; see §6 Phase 1b |
 | 5 | The false-positive corpus produces **zero** wrong repairs; near-misses refuse | ⬜ **Phase 4.3** — the demo shows one refusal (`limit: 999`), which is not a corpus |
 | 6 | `import stateguard.adapters.mcp` pulls in no third-party package | ✅ `tests/isolation/` — no MCP SDK, no pydantic |
 | 7 | The demo runs from a clean checkout in two commands with visible before/after output | ✅ `examples/mcp/`, over real stdio MCP |

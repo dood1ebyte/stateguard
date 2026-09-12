@@ -23,6 +23,20 @@ the under-validation the reject list exists to prevent.  Moving the screen
 here lets both walkers call the same gate, so "every subschema is screened"
 is a property of the design rather than of remembering.
 
+What this does *not* buy
+------------------------
+Screening is about keywords, not contents.  A union branch or an array
+element that is an object still gets no ``nested_spec`` -- ``union_members``
+and ``item_type`` each carry a single ``FieldType`` and nothing else -- so
+its properties are unvalidated::
+
+    {"anyOf": [{"type": "string"},
+               {"type": "object", "properties": {"n": {"type": "integer"}}}]}
+
+``{"n": "not-an-int"}`` passes.  That is a separate, pre-existing gap in the
+contract model, not something this module closes, and it is recorded in
+``MCP_ADAPTER_PLAN.md`` §6 rather than left to be rediscovered.
+
 Screening is idempotent and cheap -- a few dict membership tests -- so a
 subschema reached by two paths being screened twice costs nothing and is
 much safer than reasoning about which path got there first.

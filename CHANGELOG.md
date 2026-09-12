@@ -45,17 +45,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silently relaxed by the config default of `False`, contradicting
   `ContractSpec.strict_mode`'s own documented precedence. A contract is
   never loosened by configuration.
-- Seven under-validation defects in the JSON Schema adapter, found by
-  review before release. Most consequential: for `anyOf: [{$ref}, {null}]`
-  — the shape Pydantic emits for every `Optional[X]` — constraints,
-  declared defaults, and the unsupported-keyword screen were all read off a
-  bare `{"$ref": ...}` and therefore silently dropped; `allOf` behind such a
-  reference produced a field that accepted anything. Also: unsupported
-  keywords inside union branches and array `items` went unscreened; a deep
-  schema raised `RecursionError` instead of a catchable error; an untyped
-  `enum` containing `null` produced a false `NOT_NULL` violation; a
-  `required` name with no `properties` entry was dropped, so a payload
-  missing it was reported valid.
+- Nine under-validation defects in the JSON Schema adapter, found by two
+  rounds of review before release. Most consequential: for
+  `anyOf: [{$ref}, {null}]` — the shape Pydantic emits for every
+  `Optional[X]` — constraints, declared defaults, and the
+  unsupported-keyword screen were all read off a bare `{"$ref": ...}` and
+  therefore silently dropped; `allOf` behind such a reference produced a
+  field that accepted anything. The same loss survived one level deeper, in
+  a chained `Optional[Optional[X]]`, until a second pass caught it. Also:
+  unsupported keywords inside union branches and array `items` went
+  unscreened; a deep schema raised `RecursionError` instead of a catchable
+  error; an untyped `enum` containing `null` produced a false `NOT_NULL`
+  violation; a `required` name with no `properties` entry was dropped, so a
+  payload missing it was reported valid; and a `required` entry that was not
+  a string was coerced rather than refused.
+- A declared `default` that does not satisfy its own field is now dropped
+  with a `SchemaFeatureWarning` instead of being written into the payload.
+  Filling defaults happens after the engine has finished, so nothing
+  re-checked the value: a schema declaring
+  `{"type": "integer", "default": "abc"}` — or a default left stale when a
+  server's `enum` changed — made `repair` return `ALREADY_VALID` and
+  `validate` then reject that same output.
+
+### Known limitation
+
+- Objects inside a union branch or an array element are validated by *type*
+  only; their properties are not. `{"anyOf": [{"type": "string"},
+  {"type": "object", "properties": {"n": {"type": "integer"}}}]}` accepts
+  `{"n": "not-an-int"}`. `union_members` and `item_type` each carry a single
+  `FieldType` and no nested contract. Unsupported *keywords* in those
+  positions are refused; their *contents* are not checked.
 - `FieldType.BYTES` — declared binary fields (e.g. Pydantic `bytes`
   annotations, previously extracted as `ANY`) are now a first-class
   contract type accepting `str | bytes` values, mirroring the lax

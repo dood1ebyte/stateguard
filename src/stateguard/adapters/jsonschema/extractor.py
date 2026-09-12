@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 from stateguard.adapters.jsonschema.errors import (
@@ -58,6 +59,7 @@ from stateguard.core.models.field_types import (
     FieldConstraintType,
     FieldType,
 )
+from stateguard.core.validator import ContractValidator
 
 __all__ = ["JSONSchemaExtractor"]
 
@@ -67,6 +69,8 @@ class JSONSchemaExtractor:
 
     def __init__(self, type_mapper: JSONSchemaTypeMapper | None = None) -> None:
         self._types = type_mapper if type_mapper is not None else JSONSchemaTypeMapper()
+        # Used only to screen declared defaults -- see ``_screened_default``.
+        self._validator = ContractValidator()
 
     # ------------------------------------------------------------------
     # Entry point
@@ -207,6 +211,16 @@ class JSONSchemaExtractor:
 
     @staticmethod
     def _required_names(schema: Mapping[str, Any], where: str) -> frozenset[str]:
+        """
+        The names ``required`` lists, refusing anything that is not a string.
+
+        JSON Schema specifies ``required`` as an array of strings. These used
+        to be ``str()``-coerced, which was invisible while a name with no
+        matching property was silently dropped -- but such names now become
+        real ``ANY`` fields, so ``required: [123]`` would materialise a field
+        called ``"123"`` that no payload can satisfy on purpose. Guessing
+        what a non-string entry meant is worse than saying it is malformed.
+        """
         required = schema.get("required")
         if required is None:
             return frozenset()
@@ -214,7 +228,15 @@ class JSONSchemaExtractor:
             raise UnsupportedSchemaError(
                 f"{where}: 'required' must be a list, got {type(required).__name__}."
             )
-        return frozenset(str(name) for name in required)
+
+        for name in required:
+            if not isinstance(name, str):
+                raise UnsupportedSchemaError(
+                    f"{where}: 'required' must contain strings, got "
+                    f"{type(name).__name__}: {name!r}. A property name is a string; "
+                    f"coercing this one would invent a field the schema never declared."
+                )
+        return frozenset(required)
 
     def _field(
         self,
@@ -258,7 +280,7 @@ class JSONSchemaExtractor:
                 else:
                     screen_keywords(effective, path)
 
-                return FieldSpec(
+                spec = FieldSpec(
                     path=name,
                     field_type=mapped.field_type,
                     required=required,
@@ -268,6 +290,56 @@ class JSONSchemaExtractor:
                     nested_spec=nested_spec,
                     union_members=mapped.union_members,
                 )
+                spec.default = self._screened_default(spec, path)
+                return spec
+
+    def _screened_default(self, spec: FieldSpec, path: str) -> Any:
+        """
+        The declared default if it satisfies its own field, else ``MISSING``.
+
+        A default is the one value in a schema that StateGuard *writes*
+        rather than merely checks: ``JSONSchemaAdapter.wrap`` materialises it
+        into the payload, and it does so after the engine has finished, so
+        nothing downstream re-checks it. A schema that declares
+        ``{"type": "integer", "default": "abc"}`` -- or a default that fell
+        out of an ``enum`` when the server's vocabulary changed, which is
+        exactly the drift this adapter exists for -- would otherwise have
+        StateGuard inject a value that fails the contract it just certified.
+        Confirmed before this screen existed: ``repair`` returned
+        ``ALREADY_VALID`` and ``validate`` then rejected its own output.
+
+        The engine already refuses to do this on the path it controls:
+        ``DefaultValueFillStrategy`` fills, revalidates, and fails the repair
+        when the filled value does not hold up. This restores the same
+        guarantee on the path that bypasses it.
+
+        Dropped with a warning rather than refused, because an unusable
+        default is not a schema this adapter cannot *read* -- validation is
+        unaffected, and every other field still repairs. Refusing the whole
+        document would fail hardest against precisely the drifted servers
+        StateGuard is for. The field simply stops being auto-filled.
+        """
+        if spec.default is MISSING:
+            return MISSING
+
+        probe = ContractSpec(
+            fields=[replace(spec, required=False, default=MISSING)],
+            strict_mode=False,
+        )
+        result = self._validator.validate(probe, {spec.path: spec.default})
+        if result.is_valid:
+            return spec.default
+
+        reasons = "; ".join(violation.message for violation in result.violations)
+        warnings.warn(
+            f"Field '{path}': the declared default {spec.default!r} does not satisfy "
+            f"this field's own schema ({reasons}). It was dropped -- StateGuard will "
+            f"not fill this field, because writing a value that fails the contract "
+            f"would hand back a payload it had just reported valid.",
+            SchemaFeatureWarning,
+            stacklevel=2,
+        )
+        return MISSING
 
     @staticmethod
     def _check_property_name(name: str, path: str) -> None:

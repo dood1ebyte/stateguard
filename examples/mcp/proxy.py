@@ -143,7 +143,17 @@ class RepairingClient:
         self._say(f"  StateGuard: {outcome.action.upper()} -- {outcome.reason}")
 
         if outcome.action is MCPAction.FORWARD:
-            sent = outcome.arguments or {}
+            # Asserted rather than defaulted. FORWARD promises repaired
+            # arguments; ``or {}`` would turn a broken promise into a silent
+            # call with no arguments at all, which the server would answer
+            # with a confusing validation error instead of the real fault.
+            if outcome.arguments is None:
+                raise AssertionError(
+                    f"FORWARD for {name!r} carried no arguments. This is a bug in "
+                    f"outcome_for, not in the payload -- forwarding an empty dict "
+                    f"here would send the server something the model never wrote."
+                )
+            sent = outcome.arguments
         elif outcome.action is MCPAction.HOLD:
             # Shadow: the server sees exactly what the model sent. The
             # repair is reported, not applied -- that is the whole contract
