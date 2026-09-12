@@ -7,9 +7,10 @@ same ContractGuard entrypoint as the existing REST/API demo"*. That is what
 ``TestToolCallDemo`` checks, using the schema and payload written into
 ``MCP_ADAPTER_PLAN.md`` §7 verbatim.
 
-Two tests are ``xfail(strict=True)``. They record seam problems found while
-building this adapter that need a decision rather than a quiet workaround --
-they will fail loudly the moment the behaviour changes, which is the point.
+``TestStrictModeIsAFloor`` and ``TestDeclaredDefaultsAreMaterialised`` were
+``xfail(strict=True)`` while the seam problems they describe were open. Both
+are now decided and enforced -- the strict marker is what made the fixes
+announce themselves rather than passing unnoticed.
 """
 
 from __future__ import annotations
@@ -141,51 +142,131 @@ class TestValidationSemantics:
 
 
 # ===========================================================================
-# Seam findings -- recorded, not worked around
+# Seam findings -- decided, and now enforced
 # ===========================================================================
 
 
-class TestKnownSeamProblems:
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "ContractGuard._extract_contract rebuilds the ContractSpec with "
-            "GuardConfig.strict_mode whenever it differs, so a schema's "
-            "additionalProperties:false is silently overridden by the config "
-            "default of False. The Pydantic adapter never hits this because "
-            "extra='forbid' is enforced by Pydantic's own validator, not by "
-            "strict_mode -- but this adapter has no native validator, so "
-            "strict_mode is the only enforcement path. Needs a decision: make "
-            "GuardConfig.strict_mode a floor (strict if either says so), or "
-            "tri-state it so 'unset' defers to the schema."
-        ),
-    )
-    def test_additional_properties_false_is_enforced(self, guard: ContractGuard) -> None:
-        schema = {
-            "type": "object",
-            "properties": {"a": {"type": "string"}},
-            "additionalProperties": False,
-        }
-        assert guard.repair(schema, {"a": "x", "extra": 1}).status is not (
+class TestStrictModeIsAFloor:
+    """
+    ``GuardConfig.strict_mode`` used to overwrite the adapter's answer in
+    both directions, so a schema's ``additionalProperties: false`` lost to
+    the config default of ``False`` -- while ``ContractSpec.strict_mode``
+    documented the opposite precedence. It composes as a floor now: strict
+    if either says so.
+
+    ``PydanticAdapter`` never surfaced this because Pydantic enforces
+    ``extra='forbid'`` in its own validator rather than through
+    ``strict_mode``. Here ``strict_mode`` is the only enforcement path.
+    """
+
+    CLOSED: dict[str, Any] = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "additionalProperties": False,
+    }
+
+    def test_schema_closes_the_contract_against_a_permissive_config(self) -> None:
+        guard = ContractGuard.with_json_schema(config=GuardConfig(strict_mode=False))
+        assert guard.repair(self.CLOSED, {"a": "x", "extra": 1}).status is not (
             RepairStatus.ALREADY_VALID
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "An optional field with a declared default is not materialised. "
-            "The engine repairs identically either way; the difference is in "
-            "wrap(): PydanticAdapter.wrap calls model_validate, which applies "
-            "defaults, while this adapter (like DictContractAdapter) returns "
-            "a plain dict and nothing applies them. Arguably correct -- the "
-            "payload is valid without it and the server will apply its own "
-            "default -- but it makes the two adapters visibly disagree on the "
-            "same schema. Needs a decision."
-        ),
-    )
-    def test_optional_default_is_materialised(self, guard: ContractGuard) -> None:
+    def test_config_can_still_tighten_an_open_schema(self) -> None:
+        """
+        The floor keeps the config useful for schema formats with no way to
+        declare themselves closed -- it only stops it loosening one that has.
+        """
+        open_schema = {"type": "object", "properties": {"a": {"type": "string"}}}
+        guard = ContractGuard.with_json_schema(config=GuardConfig(strict_mode=True))
+        assert guard.repair(open_schema, {"a": "x", "extra": 1}).status is not (
+            RepairStatus.ALREADY_VALID
+        )
+
+    def test_an_open_schema_and_open_config_stay_open(self) -> None:
+        open_schema = {"type": "object", "properties": {"a": {"type": "string"}}}
+        guard = ContractGuard.with_json_schema(config=GuardConfig(strict_mode=False))
+        assert guard.repair(open_schema, {"a": "x"}).status is RepairStatus.ALREADY_VALID
+
+
+class TestDeclaredDefaultsAreMaterialised:
+    """
+    ``PydanticAdapter.wrap`` calls ``model_validate``, which applies the
+    model's defaults; this adapter returned the dict untouched. The two
+    visibly disagreed on the same schema, and §7's demo narrative -- step 3
+    fills ``unit`` from the schema's default -- did not actually happen.
+    """
+
+    def test_absent_optional_is_filled_from_the_schema(self, guard: ContractGuard) -> None:
         result = guard.repair(WEATHER_SCHEMA, {"location": "Mumbai", "days": 5})
         assert result.repaired_output.get("unit") == "celsius"
+
+    def test_a_supplied_value_is_not_overwritten(self, guard: ContractGuard) -> None:
+        result = guard.repair(
+            WEATHER_SCHEMA, {"location": "Mumbai", "days": 5, "unit": "fahrenheit"}
+        )
+        assert result.repaired_output["unit"] == "fahrenheit"
+
+    def test_a_field_with_no_declared_default_stays_absent(self) -> None:
+        """Filling means *declared* defaults, not inventing values."""
+        schema = {
+            "type": "object",
+            "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+            "required": ["a"],
+        }
+        guard = ContractGuard.with_json_schema()
+        result = guard.repair(schema, {"a": "x"})
+        assert "b" not in result.repaired_output
+
+    def test_mutable_defaults_are_not_shared_between_payloads(self) -> None:
+        """
+        A schema default may be a list or an object. Handing the same
+        instance to every caller would let one payload's mutation surface in
+        the next one's.
+        """
+        schema = {
+            "type": "object",
+            "properties": {"tags": {"type": "array", "default": []}},
+        }
+        guard = ContractGuard.with_json_schema()
+        first = guard.repair(schema, {}).repaired_output
+        first["tags"].append("mutated")
+        second = guard.repair(schema, {}).repaired_output
+        assert second["tags"] == []
+
+    def test_nested_defaults_are_filled_too(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "opts": {
+                    "type": "object",
+                    "properties": {"unit": {"type": "string", "default": "celsius"}},
+                }
+            },
+        }
+        guard = ContractGuard.with_json_schema()
+        result = guard.repair(schema, {"opts": {}})
+        assert result.repaired_output["opts"]["unit"] == "celsius"
+
+    def test_matches_the_pydantic_adapter_on_the_same_contract(self) -> None:
+        """
+        The disagreement this closes, asserted directly rather than
+        described. Both adapters are handed the same logical contract with
+        the same optional-with-default field, and both must return it
+        populated.
+        """
+        pydantic = pytest.importorskip("pydantic")
+
+        class Weather(pydantic.BaseModel):
+            location: str
+            days: int
+            unit: str = "celsius"
+
+        payload = {"location": "Mumbai", "days": 5}
+        through_pydantic = ContractGuard.with_pydantic().repair(Weather, payload)
+        through_schema = ContractGuard.with_json_schema().repair(WEATHER_SCHEMA, payload)
+
+        assert through_pydantic.repaired_output.unit == "celsius"
+        assert through_schema.repaired_output["unit"] == "celsius"
 
 
 # ===========================================================================

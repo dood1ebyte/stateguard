@@ -38,11 +38,16 @@ Zero external dependencies.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from stateguard.adapters.jsonschema.errors import UnsupportedSchemaError
+from stateguard.adapters.jsonschema.errors import (
+    SchemaFeatureWarning,
+    UnsupportedSchemaError,
+)
+from stateguard.adapters.jsonschema.keywords import screen_keywords
 from stateguard.adapters.jsonschema.refs import RefResolver
 from stateguard.core.models.field_types import FieldType, UnionMember
 
@@ -155,6 +160,14 @@ class JSONSchemaTypeMapper:
                 field_type=self._infer_from_values(enum_values),
                 effective_schema=schema,
                 enum_values=enum_values,
+                # With no 'type' to forbid it, a ``null`` member of the enum
+                # is a value the schema genuinely accepts, so the field is
+                # nullable and must not pick up a NOT_NULL constraint.
+                # (``{"type": "string", "enum": [..., null]}`` is the other
+                # case: there the type rules the null member out, so
+                # NOT_NULL stays correct -- which is why this lives on the
+                # untyped path only.)
+                nullable=any(value is None for value in enum_values),
             )
 
         # Genuinely untyped. This is the one legitimate ANY: the schema's
@@ -222,6 +235,11 @@ class JSONSchemaTypeMapper:
 
         for branch in branches:
             with resolver.resolved(branch) as target:
+                # Screened here because the extractor never sees a branch --
+                # it only ever screens the schema that *carries* the
+                # combinator. Without this, a rejected keyword inside one
+                # branch was silently ignored (see ``keywords`` module).
+                screen_keywords(target, path)
                 if target.get("type") == "null":
                     nullable = True
                     continue
@@ -305,12 +323,34 @@ class JSONSchemaTypeMapper:
         single type applied to every element, so per-position typing has no
         representation and ``ANY`` is the honest answer rather than picking
         the first position's type and pretending it covers the rest.
+
+        The tuple form warns on the way past, though. Widening to ``ANY``
+        validates more loosely than the schema asks, which is the same
+        situation ``exclusiveMinimum`` is in, and that one has always warned.
+        Staying silent here made the two inconsistent for no reason a caller
+        could see.
         """
-        items = schema.get("items")
-        if items is None or not isinstance(items, Mapping):
+        if "items" not in schema:
+            return FieldType.ANY
+
+        items = schema["items"]
+        if not isinstance(items, Mapping):
+            warnings.warn(
+                f"Field '{path}': 'items' is a {type(items).__name__}, not a schema "
+                f"object -- element typing was widened to ANY. StateGuard applies "
+                f"one element type to a whole array, so a positional (tuple-form) "
+                f"'items' has no representation, and elements are validated more "
+                f"loosely than the schema specifies.",
+                SchemaFeatureWarning,
+                stacklevel=2,
+            )
             return FieldType.ANY
 
         with resolver.resolved(items) as target:
+            # Same reasoning as the union branches: the extractor descends
+            # through ``properties``, never through ``items``, so this is the
+            # only place an element schema can be screened.
+            screen_keywords(target, f"{path}[]")
             mapped = self.map_schema(target, resolver, f"{path}[]")
 
         # A union of element types has no representation in ``item_type``,

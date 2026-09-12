@@ -40,13 +40,14 @@ just a ``dict``, so nothing here needs a schema library or the MCP SDK.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
 from stateguard.adapters.jsonschema.errors import UnsupportedSchemaError
 from stateguard.adapters.jsonschema.extractor import JSONSchemaExtractor
 from stateguard.core.errors.results import ValidationResult
 from stateguard.core.interfaces.adapter import IContractAdapter
-from stateguard.core.models.contract import ContractSpec
+from stateguard.core.models.contract import MISSING, ContractSpec
 from stateguard.core.validator import ContractValidator
 
 __all__ = ["JSONSchemaAdapter"]
@@ -56,9 +57,9 @@ class JSONSchemaAdapter(IContractAdapter):
     """
     Adapts a JSON Schema ``dict`` to StateGuard's contract model.
 
-    ``extract_contract`` accepts the schema document; ``wrap`` returns the
-    repaired dict unchanged, since there is no framework-native type to
-    rehydrate into (the same position ``DictContractAdapter`` is in).
+    ``extract_contract`` accepts the schema document; ``wrap`` returns a
+    plain dict with the schema's declared defaults applied, since there is
+    no framework-native type to rehydrate into.
     """
 
     def __init__(self, extractor: JSONSchemaExtractor | None = None) -> None:
@@ -110,5 +111,57 @@ class JSONSchemaAdapter(IContractAdapter):
         contract: ContractSpec,
         data: dict[str, Any],
     ) -> dict[str, Any]:
-        """Return a copy of *data* unchanged -- there is no native type."""
-        return dict(data)
+        """
+        Return a copy of *data* with declared defaults materialised.
+
+        There is no framework-native type to rehydrate into, so this is a
+        plain ``dict`` -- but "plain dict" is not the same as "untouched".
+        ``PydanticAdapter.wrap`` calls ``model_validate``, which applies the
+        model's defaults, so a field the schema gives a default reaches the
+        caller populated on that path. Returning the dict unchanged here
+        made the two adapters disagree on the same schema: an absent
+        ``unit`` with ``"default": "celsius"`` came back present through
+        Pydantic and missing through JSON Schema.
+
+        Filling it is the reading the ADR points to. ``ContractValidator``
+        is the source of truth for this adapter, and what the schema says
+        the value *is*, when the caller did not say otherwise, is the
+        declared default.
+
+        This can add a key to a payload that was ``ALREADY_VALID`` -- an
+        optional field is not a violation, so no repair strategy ever sees
+        it. That is not a new behaviour being introduced here: the Pydantic
+        path already does exactly this, verified against the live engine.
+
+        Defaults are deep-copied. A schema's default may be a list or an
+        object, and handing the same instance to every payload would let one
+        caller's mutation show up in the next one's.
+        """
+        return self._with_defaults(contract, data)
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _with_defaults(
+        cls,
+        contract: ContractSpec,
+        data: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Copy *data*, filling declared defaults for absent fields."""
+        result = dict(data)
+
+        for spec in contract.fields:
+            if spec.path not in result:
+                if spec.default is not MISSING:
+                    result[spec.path] = deepcopy(spec.default)
+                continue
+
+            # Present already -- but a nested object may have absent fields
+            # of its own, and the schema declared defaults for those too.
+            value = result[spec.path]
+            if spec.nested_spec is not None and isinstance(value, Mapping):
+                result[spec.path] = cls._with_defaults(spec.nested_spec, value)
+
+        return result

@@ -35,10 +35,39 @@ result = guard.repair(Weather, {"temp_celsius": 31.5, "humidity": 80})
 # result.repaired_output → {"temperature": 31.5, "humidity": 80}
 ```
 
+## Tool-call repair
+
+An MCP tool declares its parameters as JSON Schema, and models drift against
+it constantly — a renamed parameter, a number sent as a string, an enum in
+the wrong case. StateGuard repairs the arguments at the boundary; the server
+is unmodified and unaware, and so is the agent.
+
+```python
+from stateguard import ContractGuard
+from stateguard.adapters.mcp import outcome_for
+
+guard = ContractGuard.with_mcp()
+
+result = guard.repair(tool, {"loc": "Mumbai", "days": "5"})
+outcome = outcome_for(result, {"loc": "Mumbai", "days": "5"})
+# outcome.action    → MCPAction.FORWARD
+# outcome.arguments → {"location": "Mumbai", "days": 5, "unit": "celsius"}
+```
+
+`outcome.action` is one of `FORWARD`, `HOLD` (shadow mode — forward what the
+model sent, log what would have changed), `ESCALATE` (a repair was found but
+not trusted enough to apply unsupervised; the candidates come with it), or
+`REFUSE`. Requires no extra dependencies — a tool definition arriving over
+the wire is just a `dict`.
+
+A runnable before/after demo, over real MCP stdio, is in
+[`examples/mcp/`](examples/mcp/README.md).
+
 ## Installation
 
 **Requirements:** Python 3.11+. No runtime dependencies for the core package;
-`pydantic>=2.0,<3.0` if you install the `pydantic` extra.
+`pydantic>=2.0,<3.0` if you install the `pydantic` extra, and `mcp>=2.0` only
+if you want to run the example MCP proxy.
 
 ```bash
 pip install "sguard[pydantic]"
@@ -88,8 +117,9 @@ guard = ContractGuard.with_pydantic(history=RepairHistoryRecorder())
 ## Architecture
 
 A framework-agnostic core engine with zero external runtime dependencies.
-Pydantic is the first supported adapter; future adapters (LangChain,
-LangGraph, JSON Schema) can be added without modifying the engine.
+Every adapter but Pydantic's is also dependency-free, which is what lets the
+MCP surface ship without widening the install — a tool definition arriving
+over the wire is just a `dict`.
 
 ```
 User Code
@@ -97,7 +127,8 @@ User Code
     ▼
 ContractGuard          ← orchestrator (guard.py)
     │
-    ├── IContractAdapter  ← PydanticAdapter, DictContractAdapter, ...
+    ├── IContractAdapter  ← PydanticAdapter, DictContractAdapter,
+    │       │                JSONSchemaAdapter, MCPToolAdapter
     │       │
     │       └── ContractSpec  ← normalised, framework-agnostic contract
     │
@@ -105,8 +136,12 @@ ContractGuard          ← orchestrator (guard.py)
             │
             ├── ContractValidator
             ├── StrategyRegistry
-            └── Strategies: ExactAlias, FuzzyRename, TypeCoerce, DefaultFill
+            └── Strategies: ExactAlias, NormalizedName, FuzzyRename,
+                            TypeCoerce, EnumNormalize, DefaultFill
 ```
+
+`MCPToolAdapter` delegates to `JSONSchemaAdapter`, which is where the real
+work is: an MCP tool's `inputSchema` *is* JSON Schema.
 
 ## Limitations
 
@@ -117,8 +152,16 @@ ContractGuard          ← orchestrator (guard.py)
   candidates by full dotted-path similarity, not parent-scope. In
   adversarial cases with similar field *and* branch names, this can block
   a valid repair (StateGuard's safe failure mode) rather than guess wrong.
-- **No JSON Schema adapter yet** — the CLI's `--schema` format is a
-  StateGuard-proprietary equivalent, not real JSON Schema.
+- **JSON Schema is a supported subset, not the full spec.** The adapter
+  implements what tool definitions actually emit and *refuses* what it
+  cannot represent (`allOf`, `not`, `if`/`then`/`else`, `patternProperties`,
+  …) rather than ignoring it — so a `SUCCESS` is not a claim of JSON Schema
+  compliance, and the gap is bounded and visible. See
+  [ADR-0001](docs/adr/0001-json-schema-source-of-truth.md). The CLI's
+  `--schema` format remains a StateGuard-proprietary equivalent; pass a real
+  JSON Schema through `ContractGuard.with_json_schema()`.
+- **Tool-call repair covers arguments, not results.** Repairing what a
+  server sends *back* (`outputSchema` / `structuredContent`) is not built.
 
 See [`M9_AUDIT.md`](M9_AUDIT.md) for the full production-readiness audit,
 performance characteristics, and recommended next steps.

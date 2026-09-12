@@ -11,11 +11,16 @@ checks the two adapters against each other directly.
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import pytest
 
-from stateguard.adapters.jsonschema import RefResolver, UnsupportedSchemaError
+from stateguard.adapters.jsonschema import (
+    RefResolver,
+    SchemaFeatureWarning,
+    UnsupportedSchemaError,
+)
 from stateguard.adapters.jsonschema.type_mapper import (
     JSONSchemaTypeMapper,
     MappedType,
@@ -200,14 +205,30 @@ class TestArrays:
     def test_array_without_items_accepts_any_element(self, mapper: JSONSchemaTypeMapper) -> None:
         assert _map(mapper, {"type": "array"}).item_type is FieldType.ANY
 
-    def test_tuple_form_items_collapses_to_any(self, mapper: JSONSchemaTypeMapper) -> None:
+    def test_tuple_form_items_collapses_to_any_with_a_warning(
+        self, mapper: JSONSchemaTypeMapper
+    ) -> None:
         """
         Positional typing has no representation in a single ``item_type``.
         ANY is honest; taking the first position's type would claim coverage
         the contract does not have.
+
+        It warns on the way past, though: widening to ANY validates more
+        loosely than the schema asks, which is the same situation
+        ``exclusiveMinimum`` is in, and that one has always warned.
         """
         schema = {"type": "array", "items": [{"type": "string"}, {"type": "integer"}]}
-        assert _map(mapper, schema).item_type is FieldType.ANY
+        with pytest.warns(SchemaFeatureWarning, match="widened to ANY"):
+            assert _map(mapper, schema).item_type is FieldType.ANY
+
+    def test_absent_items_collapses_to_any_silently(self, mapper: JSONSchemaTypeMapper) -> None:
+        """
+        An array with no ``items`` genuinely accepts any element, so there
+        is nothing being validated more loosely and nothing to warn about.
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", SchemaFeatureWarning)
+            assert _map(mapper, {"type": "array"}).item_type is FieldType.ANY
 
     def test_union_element_type_collapses_to_any(self, mapper: JSONSchemaTypeMapper) -> None:
         """Matches ``PydanticTypeMapper.get_item_type``."""

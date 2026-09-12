@@ -292,61 +292,130 @@ this adapter is its own source of truth (ADR-0001), and without it
 `ContractValidator` accepts `{"location": null}` against
 `{"location": {"type": "string"}}`.
 
-**Two seam findings, recorded as `xfail(strict=True)` in
-`tests/adapters/jsonschema/test_end_to_end.py`, both needing a decision:**
-
-1. **`additionalProperties: false` is silently discarded.**
-   `ContractGuard._extract_contract` rebuilds the `ContractSpec` with
-   `GuardConfig.strict_mode` whenever it differs, so the schema's own
-   strictness loses to the config default of `False`. Pydantic never hits
-   this — `extra='forbid'` is enforced by its validator, not by
-   `strict_mode` — but here `strict_mode` is the *only* enforcement path.
-   Options: make `GuardConfig.strict_mode` a floor (strict if either says
-   so, mirroring how `minimum_trust` already works), or tri-state it so
-   "unset" defers to the schema.
-2. **An optional field's declared `default` is not materialised.** The
-   engine repairs identically; the difference is `wrap()` —
-   `PydanticAdapter.wrap` calls `model_validate`, which applies defaults,
-   while this adapter returns a plain dict, as `DictContractAdapter` does.
-   Defensible (the payload is valid without it, and the server applies its
-   own default) but the two adapters visibly disagree on the same schema.
-   Note this makes §7's demo step 3 inaccurate as written.
+**Two seam findings were recorded as `xfail(strict=True)` in
+`tests/adapters/jsonschema/test_end_to_end.py`. Both are now decided — see
+Phase 1b.**
 
 This is the "is `IContractAdapter` the right seam" evidence §11 hoped for:
 the interface itself held up, but `GuardConfig`'s relationship to
 adapter-derived contract settings did not.
 
-### Phase 2 — MCP layer (1.5 days)
+### Phase 1b — Review findings and seam decisions ✅ COMPLETE
 
-| # | Task | Est. |
+**Status:** closed 2026-09-07. Not in the original plan; added after a review
+of the Phase 1 work found that the adapter's central invariant — *refuse
+rather than under-validate* — leaked in three places, all from one root
+cause.
+
+**Root cause.** The subset screen was a private method on
+`JSONSchemaExtractor`, so it only ran where *that* module walked.
+`type_mapper` walks too — through `anyOf`/`oneOf` branches and through
+`items` — and everything it reached went unscreened. The screen now lives in
+`keywords.py` and both walkers call it.
+
+| # | Finding | Fix |
 |---|---|---|
-| 2.1 | `MCPToolAdapter` — accept a full tool def *or* a bare `inputSchema`; delegate | 0.5d |
-| 2.2 | `ContractGuard.with_mcp()` | 0.25d |
-| 2.3 | Schema cache keyed by tool name + schema hash — **do not use `contract_id`**, it collides (`NEXT_STEPS.md` §4.5) | 0.5d |
-| 2.4 | Error surface: map `RepairStatus` → an MCP-shaped result the caller can act on | 0.25d |
+| 1 | `Optional[$ref]` dropped constraints, defaults **and** the reject list. `anyOf: [{$ref}, {null}]` is what Pydantic emits for every `Optional[X]`; `effective_schema` is a bare `{"$ref": ...}` there, carrying none of them. `allOf` behind such a ref became `FieldType.ANY` — a schema written to forbid a payload accepted every payload | Extractor resolves the effective schema once, in a context that stays open for the whole field |
+| 2 | Rejected keywords inside union branches and array `items` were ignored | Screen moved to `keywords.py`, called by both walkers |
+| 3 | A deep-but-finite schema raised `RecursionError` (a `RuntimeError`, so it escaped every caller catching `JSONSchemaError`). Measured: 496 levels | `RefResolver` bounds resolution depth, alongside its two cycle guards |
+| 4 | An untyped `enum` with a `null` member picked up `NOT_NULL`, making `{"m": null}` a **false violation** against a schema that permits null | Nullability inferred from the members on the untyped path |
+| 5 | `additionalProperties` as a schema object silently ignored | Warns; a non-boolean, non-object value raises |
+| 6 | A `required` name with no `properties` entry was dropped, so a payload missing it was reported valid | Emitted as a required `ANY` field |
+| 7 | Tuple-form `items` widened to `ANY` silently, while `exclusiveMinimum` warned | Warns, consistently |
 
-**Exit:** `guard.repair(tool_def, arguments)` works end to end.
+**Both seam findings decided:**
 
-### Phase 3 — Demo (2.5 days)
+1. **`strict_mode` composes as a floor** — strict if either the schema or
+   the config says so. `ContractGuard._extract_contract` used to let the
+   config overwrite the adapter in *both* directions, and
+   `ContractSpec.strict_mode` documented the opposite precedence, so the
+   model and the guard disagreed. A schema that declares itself closed now
+   stays closed; `GuardConfig.strict_mode=True` can still tighten a format
+   with no way to say it. A contract is never *loosened* by configuration.
+2. **`JSONSchemaAdapter.wrap` materialises declared defaults.** Verified
+   against the live engine that `PydanticAdapter.wrap` already does this,
+   including on `ALREADY_VALID` — so this is consistency with shipped
+   behaviour, not a new hazard. Defaults are deep-copied; nested specs are
+   filled too. **This makes §7's demo step 3 true for the first time.**
 
-| # | Task | Est. |
+### Phase 2 — MCP layer ✅ COMPLETE
+
+**Status:** closed 2026-09-07. 47 tests in `tests/adapters/mcp/`, 99% branch
+coverage.
+
+| # | Task | Status |
 |---|---|---|
-| 3.1 | Minimal MCP server with 2–3 tools (`examples/mcp/server.py`) | 0.5d |
-| 3.2 | `proxy.py` — intercepts `tools/call`, caches `tools/list` schemas, repairs `arguments`, forwards | 1.5d |
-| 3.3 | Before/after script + README with real terminal output | 0.5d |
+| 2.1 | `MCPToolAdapter` — full tool def *or* a bare input schema | ✅ |
+| 2.2 | `ContractGuard.with_mcp()` | ✅ |
+| 2.3 | Schema cache keyed by tool name + schema hash | ✅ `cache.py` |
+| 2.4 | `RepairStatus` → an actionable result | ✅ `outcomes.py` |
 
-**Exit:** the §7 demo runs from a clean checkout with two commands.
+**Exit criterion met.** `guard.repair(tool_def, arguments)` works end to end.
 
-### Phase 4 — Hardening (2 days)
+**On 2.3.** The `contract_id` collision is real and is now asserted rather
+than assumed: `get_weather(location, days)` and `get_traffic(location, days)`
+produce the same id, because it hashes field shapes. The schema *content* is
+in the key too, because a tool that changes its schema keeps its name — that
+is the drift this adapter exists to catch, so keying on the name alone would
+pin the first version seen forever. Bounded LRU: a proxy holds definitions
+from servers it does not control.
+
+**On 2.4.** Four actions, not two. `ESCALATE` is kept distinct from `REFUSE`
+because `AMBIGUOUS` carries candidates an agent can re-prompt with, and
+folding it into failure would discard what the hardening phase built.
+`HOLD` is kept distinct from `FORWARD` because shadow withholds the payload
+on `proposed_output` — a proxy reading the usual field must forward nothing
+rather than apply repairs the caller asked it to withhold.
+
+### Phase 3 — Demo ✅ COMPLETE
+
+**Status:** closed 2026-09-07. `examples/mcp/`, with 11 integration tests in
+`tests/examples/`.
+
+| # | Task | Status |
+|---|---|---|
+| 3.1 | MCP server with 2 tools (`examples/mcp/server.py`) | ✅ |
+| 3.2 | `proxy.py` — caches `tools/list`, repairs `arguments`, forwards | ✅ |
+| 3.3 | Before/after script + README with real terminal output | ✅ |
+
+**Exit criterion met.** `pip install 'sguard[mcp]'` then `python
+examples/mcp/demo.py`. The demo launches the server as a real subprocess and
+speaks MCP over stdio, so it exercises the protocol rather than simulating
+it. Three calls the server rejects now succeed; a fourth (`limit: 999`
+against `maximum: 10`) is refused and never sent.
+
+**Spec drift, as §2 warned.** The plan was written against a May 2026 cutoff.
+The installed SDK is **2.x**, where `FastMCP` was renamed to `MCPServer`.
+More consequentially: on the SDK's `Tool` model, `inputSchema` is a Pydantic
+*alias*, so `tool.input_schema` is the Python attribute and
+`tool.model_dump()` emits snake_case unless the caller passes
+`by_alias=True`. `split_tool_definition` initially refused `input_schema` on
+the mistaken grounds that it was the Anthropic Messages API's spelling; both
+are now accepted, and a test pins the aliasing so the reasoning is revisited
+if the SDK changes.
+
+**Correction to §7.** The fuzzy match on `loc` → `location` scores **0.854**
+(jaro-winkler), not the 0.8125 `_token_prefix_boost` figure written there.
+The repair lands either way; the number was wrong.
+
+### Phase 4 — Hardening (2 days) — NEXT
 
 | # | Task | Est. |
 |---|---|---|
 | 4.1 | Corpus: 15–20 real `inputSchema` blobs from public MCP servers as fixtures | 0.5d |
 | 4.2 | Assert every corpus schema extracts without error and round-trips | 0.5d |
-| 4.3 | **False-positive tests** — near-miss params that must *refuse* (`NEXT_STEPS.md` §7) | 0.5d |
+| 4.3 | **False-positive tests** — near-miss params that must *refuse* | 0.5d |
 | 4.4 | Docs: adapter guide, supported-subset table, the source-of-truth decision | 0.5d |
 
-**Total: 12.5 days.**
+**4.1 is now the highest-value item in the plan.** Every one of Phase 1b's
+seven findings was a schema shape that extracted cleanly while dropping
+something — exactly what a corpus of real schemas surfaces and what
+hand-written fixtures do not. `tests/examples/test_mcp_demo.py` already
+asserts that the MCP SDK's own generated schemas extract without refusal,
+which is 4.1 in miniature and caught nothing only because those schemas are
+simple.
+
+**Total: 12.5 days** (plus ~2.25 unplanned for Phase 1b).
 
 ---
 
@@ -376,23 +445,30 @@ old shape.
 **Without StateGuard:** server returns a validation error; the agent loop
 either retries blindly or fails.
 
-**With StateGuard:**
-1. `FuzzyFieldMatchStrategy` renames `loc` → `location`. *(Verified by hand:
-   `_token_prefix_boost` scores 0.8125 — the token `loc` prefixes `location`,
-   weight 3/8. Clears the 0.7 threshold.)*
-2. `TypeCoercionStrategy` coerces `"5"` → `5`.
+**With StateGuard:** *(all four steps verified running — see
+`examples/mcp/README.md` for the captured transcript)*
+1. `FuzzyFieldMatchStrategy` renames `loc` → `location`. Trust **0.854**
+   (jaro-winkler). *(This section previously claimed 0.8125 from
+   `_token_prefix_boost`; that figure was wrong. The repair lands either
+   way.)*
+2. `TypeCoercionStrategy` coerces `"5"` → `5`. Trust 1.0 — it round-trips
+   exactly.
 3. `DefaultValueFillStrategy` fills `unit` from the schema's `default`.
-4. Call succeeds. Full audit trail with per-operation confidence.
+   **This step did not actually happen until Phase 1b** — the engine had
+   nothing to repair (an absent optional is not a violation) and
+   `JSONSchemaAdapter.wrap` returned the dict untouched.
+4. Call succeeds. Full audit trail with per-operation trust and evidence.
 
 **Steps 1 and 2 are the two-attempt path — this demo does not work until
 Phase 0.1 lands.** That is the concrete reason the regression fix is
 sequenced first.
 
-**Be honest in the demo README about what it does *not* yet repair:**
-`"Celsius"` → `"celsius"` (needs enum normalisation, `NEXT_STEPS.md` §3.3) and
-double-encoded `arguments` as a JSON string (needs `NEXT_STEPS.md` §3.2).
-Both are 0.5–1 day each and both make the MCP story materially stronger —
-strong argument for scheduling them immediately after, as Phase 5.
+**What the demo README says it does *not* repair.** `"Celsius"` →
+`"celsius"` is **no longer on that list** — enum normalisation shipped with
+the core hardening, and the demo now shows it working. Still outstanding:
+double-encoded `arguments` (a model emitting the whole argument object as a
+JSON string), and `outputSchema` / `structuredContent` — repairing what a
+server sends *back*, which §2 scopes out of v1 deliberately.
 
 ---
 
@@ -414,27 +490,32 @@ strong argument for scheduling them immediately after, as Phase 5.
 
 ## 9. Success criteria
 
-Tighter than the proposal's, and each one is testable:
+Tighter than the proposal's, and each one is testable. Status as of
+2026-09-07:
 
-1. `ContractGuard.with_mcp().repair(tool_def, arguments)` repairs a
-   rename + coercion + default-fill payload in one call, returning `SUCCESS`.
-2. All 15–20 corpus schemas from real public MCP servers extract without error.
-3. A recursive `$ref` raises a clear diagnostic in under 100ms — no hang.
-4. An unsupported keyword (`allOf`) raises a named error identifying the
-   keyword and the path.
-5. The false-positive corpus produces **zero** wrong repairs; near-misses
-   refuse.
-6. `import stateguard.adapters.mcp` pulls in no third-party package —
-   enforced by extending the existing CI isolation job.
-7. The demo runs from a clean checkout in two commands with visible
-   before/after output.
+| # | Criterion | Status |
+|---|---|---|
+| 1 | `ContractGuard.with_mcp().repair(tool_def, arguments)` repairs a rename + coercion + default-fill payload in one call, returning `SUCCESS` | ✅ all three in one call; `tests/adapters/mcp/test_outcomes.py` |
+| 2 | All 15–20 corpus schemas from real public MCP servers extract without error | ⬜ **Phase 4.1** — the SDK's own generated schemas do, which is the same test at n=2 |
+| 3 | A recursive `$ref` raises a clear diagnostic in under 100ms — no hang | ✅ both cycle shapes, plus a depth bound added in Phase 1b |
+| 4 | An unsupported keyword (`allOf`) raises a named error identifying the keyword and the path | ✅ and, since Phase 1b, from inside union branches, `items`, and behind an `Optional[$ref]` |
+| 5 | The false-positive corpus produces **zero** wrong repairs; near-misses refuse | ⬜ **Phase 4.3** — the demo shows one refusal (`limit: 999`), which is not a corpus |
+| 6 | `import stateguard.adapters.mcp` pulls in no third-party package | ✅ `tests/isolation/` — no MCP SDK, no pydantic |
+| 7 | The demo runs from a clean checkout in two commands with visible before/after output | ✅ `examples/mcp/`, over real stdio MCP |
+
+**5 of 7 met.** Both open items are Phase 4, and both are about *evidence at
+scale* rather than capability — which is the right thing to still be missing,
+and the reason Phase 4.1 should not be deferred: every Phase 1b finding was
+the kind a real-schema corpus surfaces.
 
 ---
 
 ## 10. Out of scope for this work
 
 - Output-schema repair (direction B) — fast follow, ~1 day
-- Enum normalisation (§3.3) and JSON-string parsing (§3.2) — Phase 5
+- ~~Enum normalisation (§3.3)~~ — shipped with the core hardening; the demo
+  repairs `"Celsius"` → `"celsius"` at trust 1.0
+- JSON-string parsing (§3.2), for double-encoded `arguments` — Phase 5
 - Full JSON Schema draft 2020-12
 - MCP resources, prompts, sampling — tools only
 - Transport-level concerns (auth, stdio vs. HTTP) beyond what the demo proxy

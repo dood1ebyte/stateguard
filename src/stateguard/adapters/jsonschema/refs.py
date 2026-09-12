@@ -20,9 +20,9 @@ guard lives at the single choke point every reference passes through, rather
 than being re-implemented (and eventually forgotten) at each recursive call
 site in the extractor.
 
-Two different cycles
---------------------
-Both must be caught, and they are not the same shape:
+Three ways a walk fails to terminate
+-----------------------------------
+All three must be caught, and they are not the same shape:
 
 * **Reference chain cycle** -- ``A -> B -> A`` where each is a bare
   ``$ref``.  Caught inside a single ``_follow`` call by its own ``seen`` set;
@@ -32,6 +32,19 @@ Both must be caught, and they are not the same shape:
   never ends.  Caught by ``_active``, a stack of the pointers currently being
   expanded, which is why resolution is exposed as a context manager rather
   than a plain function.
+* **Depth exhaustion** -- a schema that is finite but nests thousands of
+  levels deep.  No cycle exists, so neither guard above fires; the walk
+  terminates in principle and runs out of C stack in practice.  Measured on
+  this codebase: 496 levels of plain ``{"type": "object", "properties":
+  {...}}`` nesting raised ``RecursionError`` -- which is a ``RuntimeError``,
+  so it escapes past every caller catching ``JSONSchemaError`` and lands as
+  an unhandled crash in a proxy that was told this input is untrusted.
+  Caught by ``max_depth``.
+
+The depth cap belongs here for the same reason the cycle guards do: every
+descent in both walking modules goes through ``resolved()``, so this is the
+one place a bound can be applied without each recursive call site
+remembering to.
 
 Local references only
 ---------------------
@@ -56,7 +69,20 @@ from stateguard.adapters.jsonschema.errors import (
     UnsupportedSchemaError,
 )
 
-__all__ = ["RefResolver"]
+__all__ = ["DEFAULT_MAX_DEPTH", "RefResolver"]
+
+
+#: Maximum number of nested ``resolved()`` contexts before a schema is
+#: refused as too deep.
+#:
+#: This counts *resolution* contexts, not schema levels: walking one level of
+#: an object costs two or three of them (the property's own subschema, the
+#: branch that survived an optional collapse, the nested object). So 100
+#: contexts is roughly 30-50 levels of real nesting -- far past anything an
+#: MCP tool signature does, and comfortably inside the ~992 contexts measured
+#: to exhaust CPython's default 1000-frame limit, with headroom for a host
+#: that has lowered ``sys.setrecursionlimit``.
+DEFAULT_MAX_DEPTH = 100
 
 
 class RefResolver:
@@ -69,15 +95,25 @@ class RefResolver:
         The complete schema document.  Pointers are resolved against this,
         so it must be the whole thing (the object carrying ``$defs``), not a
         subschema.
+    max_depth:
+        How deeply resolution may nest before the schema is refused.  See
+        ``DEFAULT_MAX_DEPTH`` for what the number counts and why it is not
+        expressed in schema levels.
 
     Not thread-safe and not reusable across concurrent extractions: the
     active-pointer stack is per-traversal state.  Construct one per
     ``extract_contract`` call, which is what ``JSONSchemaExtractor`` does.
     """
 
-    def __init__(self, root: Mapping[str, Any]) -> None:
+    def __init__(
+        self,
+        root: Mapping[str, Any],
+        max_depth: int = DEFAULT_MAX_DEPTH,
+    ) -> None:
         self._root = root
         self._active: list[str] = []
+        self._max_depth = max_depth
+        self._depth = 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -100,12 +136,24 @@ class RefResolver:
         referenced twice as siblings -- two fields of type ``Address`` are
         perfectly legal and must not be mistaken for a cycle.
 
-        A schema with no ``$ref`` is yielded unchanged and pushes nothing.
+        A schema with no ``$ref`` is yielded unchanged, pushes nothing onto
+        the active stack, and still counts one level of depth -- the bound
+        has to hold for schemas that nest without using references at all.
         """
         if not isinstance(schema, Mapping):
             raise UnsupportedSchemaError(
                 f"Expected a schema object, got {type(schema).__name__}. "
                 f"Boolean schemas (`true` / `false`) are not supported."
+            )
+
+        if self._depth >= self._max_depth:
+            raise SchemaReferenceError(
+                f"Schema nests deeper than {self._max_depth} levels of resolution "
+                f"and is refused rather than walked. A schema this deep would "
+                f"exhaust the interpreter stack, which surfaces as an unhandled "
+                f"RecursionError rather than something a caller can act on. "
+                f"Raise RefResolver's 'max_depth' if the schema is genuinely "
+                f"this deep and the stack can take it."
             )
 
         target, pointers = self._follow(schema)
@@ -120,12 +168,14 @@ class RefResolver:
                     f"cannot describe it as a contract."
                 )
 
-        depth = len(self._active)
+        active_depth = len(self._active)
         self._active.extend(pointers)
+        self._depth += 1
         try:
             yield target
         finally:
-            del self._active[depth:]
+            self._depth -= 1
+            del self._active[active_depth:]
 
     # ------------------------------------------------------------------
     # Internals

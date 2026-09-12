@@ -195,6 +195,56 @@ class TestCoreImportIsolation:
         assert rc == 0, f"subprocess failed:\n{stderr}"
         assert json.loads(stdout) == []
 
+    def test_mcp_adapter_loads_only_stdlib_and_self(self) -> None:
+        """
+        The MCP adapter must not drag in the MCP SDK.
+
+        This is the property that makes the whole MCP surface shippable
+        without widening the dependency footprint
+        (``MCP_ADAPTER_PLAN.md`` §4): a tool definition arriving over the
+        wire is just a ``dict``, so reading ``tool["inputSchema"]`` needs
+        nothing but stdlib. Only a runnable *proxy* needs the SDK, and that
+        goes behind an extra -- a boundary that only holds if it is
+        enforced, since ``import mcp`` is the obvious thing to reach for.
+        """
+        rc, stdout, stderr = _run("""
+            import sys, json
+
+            baseline = set(sys.modules)
+            import stateguard.adapters.mcp
+            new_mods = set(sys.modules) - baseline
+
+            third_party = []
+            for name in new_mods:
+                root = name.split(".")[0]
+                if root == "stateguard" or root.startswith("_"):
+                    continue
+                if root in sys.stdlib_module_names:
+                    continue
+                third_party.append(root)
+
+            print(json.dumps(sorted(set(third_party))))
+        """)
+        assert rc == 0, f"Import-check subprocess failed:\n{stderr}"
+        third_party = json.loads(stdout)
+        assert third_party == [], (
+            f"stateguard.adapters.mcp loaded third-party packages: {third_party}\n"
+            "The MCP adapter must depend on stdlib only; only the proxy may "
+            "need the MCP SDK."
+        )
+
+    def test_mcp_adapter_does_not_load_the_mcp_sdk_or_pydantic(self) -> None:
+        rc, stdout, stderr = _run("""
+            import sys, json
+            import stateguard.adapters.mcp
+            found = [m for m in sys.modules
+                     if m in ("mcp", "pydantic")
+                     or m.startswith(("mcp.", "pydantic."))]
+            print(json.dumps(found))
+        """)
+        assert rc == 0, f"subprocess failed:\n{stderr}"
+        assert json.loads(stdout) == []
+
     def test_pydantic_adapter_stub_imports_without_error(self) -> None:
         """The pydantic adapter stub must be importable (even while empty)."""
         rc, _, stderr = _run("import stateguard.adapters.pydantic")

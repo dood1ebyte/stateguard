@@ -8,6 +8,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Tool-call repair for MCP.** `ContractGuard.with_mcp()` repairs the
+  arguments an agent sends to an MCP tool, against the server's declared
+  `inputSchema`. Accepts a full tool definition or a bare input schema, in
+  either spelling of the key (`inputSchema` on the wire, `input_schema` as
+  the Python SDK names it). Extracted contracts are cached on
+  `(tool name, schema content)` — not `contract_id`, which collides between
+  tools with coincidentally identical signatures — so a proxy fetches
+  `tools/list` once, and a server that changes a signature is picked up
+  rather than papered over. `stateguard.adapters.mcp.outcome_for` maps a
+  `RepairResult` onto `FORWARD` / `HOLD` / `ESCALATE` / `REFUSE`. Zero extra
+  dependencies, enforced by an import-isolation test.
+- **A runnable MCP demo** in `examples/mcp/` — an ordinary MCP server, a
+  `RepairingClient` proxy, and a before/after script that speaks real MCP
+  over stdio. Three drifted calls the server rejects now succeed; a fourth
+  is refused rather than repaired, because no honest repair exists for it.
+- **`ContractGuard.with_json_schema()`** and the `JSONSchemaAdapter` behind
+  it: a supported subset of JSON Schema (`MCP_ADAPTER_PLAN.md` §5) with
+  `$ref`/`$defs` resolution, cycle *and* depth guards, and a ReDoS screen on
+  schema-supplied `pattern` values. Keywords outside the subset raise rather
+  than being ignored, so a `SUCCESS` never quietly means "validated less
+  than the schema asked". See `docs/adr/0001-json-schema-source-of-truth.md`.
+
+### Fixed
+- `ContractValidator` now uses `re.search` for `PATTERN` constraints, not
+  `re.match`. JSON Schema defers to ECMA-262 and Pydantic's
+  `Field(pattern=)` searches, so anchoring at the start produced *false*
+  violations — `"abc123"` against `"[0-9]+"` was reported broken while
+  Pydantic, the documented source of truth on that path, accepted it. A
+  false violation can trigger a repair of a field that was never broken. An
+  unusable pattern now raises an error naming the field instead of a bare
+  `re` exception.
+- `GuardConfig.strict_mode` composes with a contract's own `strict_mode` as
+  a **floor** (strict if either says so) rather than overwriting it in both
+  directions. A schema declaring `additionalProperties: false` was being
+  silently relaxed by the config default of `False`, contradicting
+  `ContractSpec.strict_mode`'s own documented precedence. A contract is
+  never loosened by configuration.
+- Seven under-validation defects in the JSON Schema adapter, found by
+  review before release. Most consequential: for `anyOf: [{$ref}, {null}]`
+  — the shape Pydantic emits for every `Optional[X]` — constraints,
+  declared defaults, and the unsupported-keyword screen were all read off a
+  bare `{"$ref": ...}` and therefore silently dropped; `allOf` behind such a
+  reference produced a field that accepted anything. Also: unsupported
+  keywords inside union branches and array `items` went unscreened; a deep
+  schema raised `RecursionError` instead of a catchable error; an untyped
+  `enum` containing `null` produced a false `NOT_NULL` violation; a
+  `required` name with no `properties` entry was dropped, so a payload
+  missing it was reported valid.
 - `FieldType.BYTES` — declared binary fields (e.g. Pydantic `bytes`
   annotations, previously extracted as `ANY`) are now a first-class
   contract type accepting `str | bytes` values, mirroring the lax
