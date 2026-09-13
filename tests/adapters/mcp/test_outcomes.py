@@ -124,28 +124,70 @@ class TestHold:
         arguments = {"loc": "Mumbai", "days": "5"}
         assert _outcome(shadow, arguments).preview == _outcome(auto, arguments).arguments
 
-    def test_an_already_valid_call_forwards_untouched_under_shadow(
+    def test_an_already_valid_call_holds_when_defaults_would_be_filled(
         self, shadow: ContractGuard
     ) -> None:
         """
         Shadow also withholds the *default fill*, which is a change to the
-        payload like any other. ``repaired_output`` is ``None`` here (the
-        value is on ``proposed_output``), so the original arguments are
-        forwarded -- exactly what shadow promises: the server receives what
-        the model sent.
+        payload like any other -- and therefore a change shadow has to show.
+
+        This used to report ``FORWARD`` with no preview and a reason reading
+        "forwarded unchanged", because the mapping inferred shadow from
+        ``proposed_output`` and never asked about ``ALREADY_VALID``. The
+        payload sent was right; what was lost was the only signal a team
+        running shadow has that auto would send something else.
         """
         arguments = {"location": "Mumbai", "days": 5}
         outcome = _outcome(shadow, arguments)
         assert outcome.result.status is RepairStatus.ALREADY_VALID
+        assert outcome.action is MCPAction.HOLD
+        assert outcome.preview == {"location": "Mumbai", "days": 5, "unit": "celsius"}
+        assert "default" in outcome.reason
+
+    def test_holding_still_sends_the_model_s_arguments(self, shadow: ContractGuard) -> None:
+        """
+        ``HOLD`` means the proxy forwards what it received. ``arguments`` is
+        ``None`` so a caller cannot forward the preview by accident.
+        """
+        outcome = _outcome(shadow, {"location": "Mumbai", "days": 5})
+        assert outcome.arguments is None
+        assert outcome.should_forward is True
+
+    def test_an_already_valid_call_with_nothing_to_fill_forwards(
+        self, shadow: ContractGuard
+    ) -> None:
+        """
+        The other half: when auto would send exactly what the model sent,
+        there is no diff, so there is nothing to hold for review.
+        """
+        arguments = {"location": "Mumbai", "days": 5, "unit": "celsius"}
+        outcome = _outcome(shadow, arguments)
         assert outcome.action is MCPAction.FORWARD
         assert outcome.arguments == arguments
-        assert "unit" not in outcome.arguments
+        assert outcome.preview is None
 
-    def test_auto_and_shadow_differ_on_that_payload_by_design(
+    def test_the_preview_matches_auto_on_an_already_valid_payload_too(
         self, shadow: ContractGuard, auto: ContractGuard
     ) -> None:
+        """
+        The same promise as ``test_the_preview_matches_what_auto_would_have
+        _sent``, extended to the status that used to escape it: shadow's
+        preview is what flipping to auto would put on the wire.
+        """
         arguments = {"location": "Mumbai", "days": 5}
-        assert _outcome(auto, arguments).arguments != _outcome(shadow, arguments).arguments
+        assert _outcome(shadow, arguments).preview == _outcome(auto, arguments).arguments
+
+    def test_shadow_is_read_from_the_mode_not_from_the_payload_fields(
+        self, shadow: ContractGuard, auto: ContractGuard
+    ) -> None:
+        """
+        ``RepairResult.is_shadow`` reports the mode, which is the question
+        being asked. Inferring it from ``proposed_output is not None`` is a
+        different question that happens to share an answer today.
+        """
+        arguments = {"location": "Mumbai", "days": 5}
+        assert _outcome(shadow, arguments).result.is_shadow is True
+        assert _outcome(auto, arguments).result.is_shadow is False
 
 
 class TestRefuse:
@@ -226,3 +268,61 @@ class TestReasonFormatting:
     def test_few_fields_are_named_in_full(self, auto: ContractGuard) -> None:
         outcome = _outcome(auto, {})
         assert "and" not in outcome.reason.split("violation(s) remain:")[1]
+
+
+class TestTheReasonMatchesWhatWasActuallySent:
+    """
+    A reason line is the audit trail. If it says "unchanged" about a payload
+    that was changed, the log is wrong in the one direction that matters:
+    shadow mode's entire argument is that the diff it reports can be trusted.
+
+    The reason used to be chosen by whether a **top-level** key had been
+    added, while ``JSONSchemaAdapter.wrap`` fills declared defaults at every
+    depth. So a default on a *nested* property produced a payload that
+    differed from the model's under a line reading "forwarded unchanged" --
+    and the shadow wording rendered as "would also have filled none named",
+    a sentence promising a list and then naming nothing.
+    """
+
+    NESTED: dict[str, Any] = {
+        "name": "configure",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "outer": {
+                    "type": "object",
+                    "properties": {"inner": {"type": "string", "default": "filled"}},
+                }
+            },
+            "required": ["outer"],
+        },
+    }
+
+    def test_auto_does_not_call_a_changed_payload_unchanged(self) -> None:
+        arguments = {"outer": {}}
+        outcome = outcome_for(ContractGuard.with_mcp().repair(self.NESTED, arguments), arguments)
+
+        assert outcome.arguments != arguments, "precondition: wrap filled a nested default"
+        assert "unchanged" not in outcome.reason
+
+    def test_auto_names_the_nested_path_it_filled(self) -> None:
+        arguments = {"outer": {}}
+        outcome = outcome_for(ContractGuard.with_mcp().repair(self.NESTED, arguments), arguments)
+        assert "'outer.inner'" in outcome.reason
+
+    def test_shadow_names_it_too_instead_of_naming_nothing(self) -> None:
+        guard = ContractGuard.with_mcp(config=GuardConfig(mode=RepairMode.SHADOW))
+        arguments = {"outer": {}}
+        outcome = outcome_for(guard.repair(self.NESTED, arguments), arguments)
+
+        assert outcome.action is MCPAction.HOLD
+        assert "'outer.inner'" in outcome.reason
+        assert "none named" not in outcome.reason
+
+    def test_unchanged_is_still_said_when_it_is_true(self) -> None:
+        """The control: the honest case must not have been made unreachable."""
+        arguments = {"outer": {"inner": "explicit"}}
+        outcome = outcome_for(ContractGuard.with_mcp().repair(self.NESTED, arguments), arguments)
+
+        assert outcome.arguments == arguments
+        assert "forwarded unchanged" in outcome.reason

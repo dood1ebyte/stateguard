@@ -212,3 +212,76 @@ class TestStrictModePropagation:
             guard_default.repair(Weather, dict(data)).status
             == guard_explicit.repair(Weather, dict(data)).status
         )
+
+
+class TestStrictModeFloorReachesNestedContracts:
+    """
+    ``GuardConfig.strict_mode`` is a floor, and a floor with no depth limit.
+
+    It used to be applied to the root ``ContractSpec`` only, so one config
+    flag -- which says nothing about depth -- made an undeclared key an
+    ``ERROR`` at the top level and a ``WARNING`` one level down. What the
+    floor must *not* do is loosen: a nested object that declared itself
+    closed stays closed whatever the config says, and a lax config leaves
+    every level exactly as the schema wrote it.
+    """
+
+    SCHEMA: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "user": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+            }
+        },
+    }
+    DATA: dict[str, Any] = {"user": {"name": "a", "EXTRA": 1}, "TOP_EXTRA": 2}
+
+    @staticmethod
+    def _severities(guard: ContractGuard, schema: Any, data: dict[str, Any]) -> dict[str, str]:
+        result = guard.repair(schema, dict(data))
+        return {v.field_path: v.severity.value for v in result.remaining_violations}
+
+    def test_config_strict_reaches_a_nested_object(self) -> None:
+        guard = ContractGuard.with_json_schema(config=GuardConfig(strict_mode=True))
+        severities = self._severities(guard, self.SCHEMA, self.DATA)
+        assert severities["TOP_EXTRA"] == "error"
+        assert severities["user.EXTRA"] == "error"
+
+    def test_a_lax_config_leaves_every_level_as_the_schema_wrote_it(self) -> None:
+        severities = self._severities(ContractGuard.with_json_schema(), self.SCHEMA, self.DATA)
+        assert severities["TOP_EXTRA"] == "warning"
+        assert severities["user.EXTRA"] == "warning"
+
+    def test_a_nested_object_that_declared_itself_closed_stays_closed(self) -> None:
+        """The floor never loosens -- including below the root."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "user": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {"name": {"type": "string"}},
+                }
+            },
+        }
+        severities = self._severities(ContractGuard.with_json_schema(), schema, self.DATA)
+        assert severities["user.EXTRA"] == "error"
+        assert severities["TOP_EXTRA"] == "warning"
+
+    def test_tightening_does_not_leak_into_a_shared_cached_contract(self) -> None:
+        """
+        ``MCPToolAdapter`` caches contracts and hands the same instance to
+        every holder, so the floor has to rebuild rather than mutate. Two
+        guards sharing one adapter must not see each other's configuration.
+        """
+        from stateguard.adapters.mcp import MCPToolAdapter
+
+        shared = MCPToolAdapter()
+        tool = {"name": "t", "inputSchema": self.SCHEMA}
+
+        strict = ContractGuard(adapter=shared, config=GuardConfig(strict_mode=True))
+        lax = ContractGuard(adapter=shared)
+
+        assert self._severities(strict, tool, self.DATA)["user.EXTRA"] == "error"
+        assert self._severities(lax, tool, self.DATA)["user.EXTRA"] == "warning"

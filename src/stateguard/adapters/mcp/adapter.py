@@ -111,6 +111,20 @@ def split_tool_definition(
             )
         return _tool_name(schema), input_schema
 
+    if "name" in schema:
+        # Looks like a tool definition, not a schema: ``name`` is not a JSON
+        # Schema keyword, so a document carrying one at the root would be
+        # refused downstream regardless -- but refused as ``<root>:
+        # unrecognised keyword(s) ['name']``, which sends the reader looking
+        # for a JSON Schema problem that is not there. The actual fault is a
+        # tool definition whose ``inputSchema`` never arrived.
+        raise UnsupportedSchemaError(
+            f"Tool {_describe(schema)} has no '{INPUT_SCHEMA_KEY}' "
+            f"(or '{SNAKE_CASE_KEY}'). An MCP tool declares its parameters "
+            f"there, so there is no contract to extract. Keys present: "
+            f"{sorted(schema)!r}."
+        )
+
     # A bare input schema. Anything wrong with it is the JSON Schema
     # adapter's to report, in its own vocabulary.
     return None, schema

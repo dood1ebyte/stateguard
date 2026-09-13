@@ -25,13 +25,14 @@ Typical usage::
 from __future__ import annotations
 
 import contextlib
+from dataclasses import replace
 from typing import Any
 
 from stateguard.core.engine import RepairEngine
 from stateguard.core.errors.results import RepairResult, RepairStatus, ValidationResult
 from stateguard.core.interfaces.adapter import IContractAdapter
 from stateguard.core.models.config import GuardConfig
-from stateguard.core.models.contract import ContractSpec
+from stateguard.core.models.contract import ContractSpec, FieldSpec
 from stateguard.core.strategies import (
     DefaultValueFillStrategy,
     EnumNormalizationStrategy,
@@ -415,20 +416,59 @@ class ContractGuard:
         deliberately does not offer is *relaxing* a schema that declared
         itself closed: a contract cannot be loosened by configuration.
 
+        The floor reaches nested contracts too. ``GuardConfig.strict_mode``
+        used to be applied to the root ``ContractSpec`` only, so an undeclared
+        key at the top level was an ``ERROR`` while the same key one level
+        down was a ``WARNING`` -- from a single config flag that says nothing
+        about depth. A nested object that declared itself closed keeps that
+        either way; only the *config's* tightening had a depth limit.
+
         When the effective value differs from what the adapter returned, the
         contract is reconstructed via the public ``ContractSpec`` constructor
         (not mutated in place) so that ``contract_id`` is regenerated
-        consistently with the active ``strict_mode``.
+        consistently with the active ``strict_mode``. Rebuilding rather than
+        mutating also matters because an adapter may hand back a *cached*
+        contract -- ``MCPToolAdapter`` does, shared across threads -- and
+        tightening one in place would leak this guard's configuration into
+        every other holder of it.
         """
         contract = self._adapter.extract_contract(schema)
-        strict_mode = contract.strict_mode or self._config.strict_mode
-        if contract.strict_mode != strict_mode:
-            contract = ContractSpec(
-                fields=contract.fields,
-                source_ref=contract.source_ref,
-                strict_mode=strict_mode,
-            )
-        return contract
+        if not self._config.strict_mode:
+            # Nothing to tighten: the adapter's answer already stands, at
+            # every level. Skipping the walk keeps the common path free.
+            return contract
+        return self._with_strict_floor(contract)
+
+    @classmethod
+    def _with_strict_floor(cls, contract: ContractSpec) -> ContractSpec:
+        """
+        Return *contract* with ``strict_mode`` forced on, recursively.
+
+        Returns the input unchanged when it is already strict all the way
+        down, so an unaffected contract is not needlessly rebuilt.
+        """
+        fields: list[FieldSpec] = []
+        changed = False
+
+        for spec in contract.fields:
+            if spec.nested_spec is None:
+                fields.append(spec)
+                continue
+            nested = cls._with_strict_floor(spec.nested_spec)
+            if nested is spec.nested_spec:
+                fields.append(spec)
+                continue
+            fields.append(replace(spec, nested_spec=nested))
+            changed = True
+
+        if contract.strict_mode and not changed:
+            return contract
+
+        return ContractSpec(
+            fields=fields,
+            source_ref=contract.source_ref,
+            strict_mode=True,
+        )
 
     def _build_engine(self) -> RepairEngine:
         """Construct a fresh ``RepairEngine`` with its own ``RepairLogger``."""

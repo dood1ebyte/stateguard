@@ -429,24 +429,70 @@ if the SDK changes.
 (jaro-winkler), not the 0.8125 `_token_prefix_boost` figure written there.
 The repair lands either way; the number was wrong.
 
-### Phase 4 — Hardening (2 days) — NEXT
+### Phase 4 — Hardening ✅ COMPLETE
 
-| # | Task | Est. |
+**Status:** closed 2026-09-12.
+
+| # | Task | Status |
 |---|---|---|
-| 4.1 | Corpus: 15–20 real `inputSchema` blobs from public MCP servers as fixtures | 0.5d |
-| 4.2 | Assert every corpus schema extracts without error and round-trips | 0.5d |
-| 4.3 | **False-positive tests** — near-miss params that must *refuse* | 0.5d |
-| 4.4 | Docs: adapter guide, supported-subset table, the source-of-truth decision | 0.5d |
+| 4.0 | Close the review findings this phase's own code review raised | ✅ |
+| 4.1 | Corpus: 15–20 real `inputSchema` blobs from public MCP servers as fixtures | ✅ 21, from 4 servers |
+| 4.2 | Assert every corpus schema extracts without error and round-trips | ✅ `tests/adapters/jsonschema/test_corpus.py` |
+| 4.3 | **False-positive tests** — near-miss params that must *refuse* | ✅ `tests/adapters/mcp/test_false_positives.py` |
+| 4.4 | Docs: adapter guide, supported-subset table, the source-of-truth decision | ✅ `docs/jsonschema-adapter.md` |
 
-**4.1 is now the highest-value item in the plan.** Every one of Phase 1b's
-seven findings was a schema shape that extracted cleanly while dropping
-something — exactly what a corpus of real schemas surfaces and what
-hand-written fixtures do not. `tests/examples/test_mcp_demo.py` already
-asserts that the MCP SDK's own generated schemas extract without refusal,
-which is 4.1 in miniature and caught nothing only because those schemas are
-simple.
+**4.0 — added, not in the original plan.** A code review of Phases 1–3 found
+four defects, and a phase named *Hardening* is where they belong rather than
+after it. The load-bearing one: `SchemaCache._key` let a `RecursionError`
+escape from `json.dumps` on a deeply nested schema. Because the cache lookup
+runs *before* extraction, it pre-empted `RefResolver`'s depth bound — the
+guard added in Phase 1b for precisely that error — so the MCP path crashed
+uncatchably on input the JSON Schema path refused cleanly. That is the wrong
+way round: the MCP path is the one facing servers nobody controls. Also
+fixed: shadow mode dropped its diff on `ALREADY_VALID` (inferring the mode
+from `proposed_output` rather than reading it), `GuardConfig.strict_mode`
+tightened the root contract only, and a tool definition with no `inputSchema`
+reported a JSON Schema keyword error.
 
-**Total: 12.5 days** (plus ~2.25 unplanned for Phase 1b).
+**4.1 — captured by running the servers, not reading their source.**
+`mcp-server-git` (12 tools), `mcp-server-sqlite` (6), `mcp-server-time` (2)
+and `mcp-server-fetch` (1) were installed from PyPI into an isolated
+environment, launched over stdio, and asked for `tools/list`; what is
+committed is what came back on the wire, with package version and capture
+date. `capture.py` makes it reproducible; the fixtures are checked in, so the
+suite needs no network.
+
+**What the corpus found.** All 21 extract without refusal, which is criterion
+2 — but the more useful result is what it exposed:
+
+- `exclusiveMinimum` is not hypothetical. `mcp-server-fetch` ships it, so §5's
+  decision to drop-with-warning rather than round into `MINIMUM` is
+  load-bearing rather than theoretical. The corpus test pins the exact warning
+  set, so a new loosening has to be acknowledged.
+- **Drift on an optional parameter is not repaired at all.**
+  `FuzzyFieldMatchStrategy` pairs an `UNEXPECTED_FIELD` with a
+  `MISSING_REQUIRED_FIELD`, and an optional field is never missing — so even a
+  one-character typo on one goes uncorrected. 12 of the corpus's 41
+  parameters (29%) are optional. The sharp edge is an optional field with a
+  declared default: `git_diff` takes `context_lines` defaulting to 3, so a
+  model writing `context: 10` gets 3 filled in beside its unrecognised key and
+  the 10 is silently ignored. This is a *missed* repair, not a wrong one —
+  nothing is written into a declared parameter — so it is recorded as a
+  limitation rather than patched here. Repairing onto optional fields needs a
+  view on whether an unexpected key is evidence that an optional field was
+  meant, which is a change to the repair model and belongs with Phase 5.
+
+**4.3 — asymmetric on purpose.** The tests do not assert that a repair
+happens; they assert that when one happens it lands on the right field, and
+that thin evidence produces nothing. Swept across the corpus: an
+unrecognisable key was never renamed onto a declared field (29 required
+parameters), and a plausible abbreviation either refused or landed correctly
+(18 of 18), including `source` → `source_timezone` and `target` →
+`target_timezone` on the same `convert_time` call. A bare `timezone` against
+those two is refused rather than guessed — the case where a wrong repair
+would produce a plausible wrong answer instead of an error.
+
+**Total: 12.5 days** (plus ~2.25 unplanned for Phase 1b, and ~0.25 for 4.0).
 
 ---
 
@@ -527,17 +573,23 @@ Tighter than the proposal's, and each one is testable. Status as of
 | # | Criterion | Status |
 |---|---|---|
 | 1 | `ContractGuard.with_mcp().repair(tool_def, arguments)` repairs a rename + coercion + default-fill payload in one call, returning `SUCCESS` | ✅ all three in one call; `tests/adapters/mcp/test_outcomes.py` |
-| 2 | All 15–20 corpus schemas from real public MCP servers extract without error | ⬜ **Phase 4.1** — the SDK's own generated schemas do, which is the same test at n=2 |
+| 2 | All 15–20 corpus schemas from real public MCP servers extract without error | ✅ 21 schemas from 4 servers, captured by running them; `tests/adapters/jsonschema/test_corpus.py` |
 | 3 | A recursive `$ref` raises a clear diagnostic in under 100ms — no hang | ✅ both cycle shapes, plus a depth bound added in Phase 1b |
 | 4 | An unsupported keyword (`allOf`) raises a named error identifying the keyword and the path | ✅ and, since Phase 1b, from inside union branches, `items`, and behind an `Optional[$ref]` (including a chained one). Keywords only — object *contents* in those positions stay unvalidated; see §6 Phase 1b |
-| 5 | The false-positive corpus produces **zero** wrong repairs; near-misses refuse | ⬜ **Phase 4.3** — the demo shows one refusal (`limit: 999`), which is not a corpus |
+| 5 | The false-positive corpus produces **zero** wrong repairs; near-misses refuse | ✅ zero across the corpus; 18/18 plausible abbreviations land correctly, garbage names and genuine ambiguity refuse; `tests/adapters/mcp/test_false_positives.py` |
 | 6 | `import stateguard.adapters.mcp` pulls in no third-party package | ✅ `tests/isolation/` — no MCP SDK, no pydantic |
 | 7 | The demo runs from a clean checkout in two commands with visible before/after output | ✅ `examples/mcp/`, over real stdio MCP |
 
-**5 of 7 met.** Both open items are Phase 4, and both are about *evidence at
-scale* rather than capability — which is the right thing to still be missing,
-and the reason Phase 4.1 should not be deferred: every Phase 1b finding was
-the kind a real-schema corpus surfaces.
+**7 of 7 met**, as of Phase 4 closing on 2026-09-12.
+
+The two that were open were about *evidence at scale* rather than capability,
+and the corpus earned its place: it confirmed the subset (21 of 21 extract)
+and the no-wrong-repairs property, and it surfaced one real gap no
+hand-written fixture would have — optional-parameter drift is not repaired at
+all, because the fuzzy strategy has no missing-field violation to pair
+against. That is recorded as a limitation (§6 Phase 4, §10) rather than
+counted against criterion 5, which it does not violate: the failure is a
+missed repair, never a wrong one.
 
 ---
 
@@ -546,6 +598,12 @@ the kind a real-schema corpus surfaces.
 - Output-schema repair (direction B) — fast follow, ~1 day
 - ~~Enum normalisation (§3.3)~~ — shipped with the core hardening; the demo
   repairs `"Celsius"` → `"celsius"` at trust 1.0
+- Repairing drift onto an *optional* parameter — Phase 5. Surfaced by the
+  Phase 4 corpus: `FuzzyFieldMatchStrategy` pairs an unexpected key with a
+  *missing required* field, and an optional field is never missing, so a typo
+  on one is never corrected. Fixing it means deciding whether an unexpected
+  key is evidence that an optional field was meant — a change to the repair
+  model, not a hardening task
 - JSON-string parsing (§3.2), for double-encoded `arguments` — Phase 5
 - Full JSON Schema draft 2020-12
 - MCP resources, prompts, sampling — tools only

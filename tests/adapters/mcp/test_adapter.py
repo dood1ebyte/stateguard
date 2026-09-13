@@ -121,10 +121,42 @@ class TestSplitToolDefinition:
             assert name == "t"
             assert schema == {"type": "object", "properties": {}}
 
+    # ===========================================================================
+    # Extraction
+    # ===========================================================================
 
-# ===========================================================================
-# Extraction
-# ===========================================================================
+    def test_a_tool_definition_with_no_input_schema_says_so(self) -> None:
+        """
+        ``name`` is not a JSON Schema keyword, so such a document was always
+        refused -- but as ``<root>: unrecognised keyword(s) ['name']``, which
+        sends the reader hunting a JSON Schema problem that is not there. The
+        real fault is a tool definition whose ``inputSchema`` never arrived,
+        and for a proxy reading tool lists off servers it does not control
+        that distinction is the whole diagnostic.
+        """
+        with pytest.raises(UnsupportedSchemaError, match="has no 'inputSchema'"):
+            split_tool_definition({"name": "broken", "description": "no schema"})
+
+    def test_that_error_names_the_tool_and_what_it_did_carry(self) -> None:
+        with pytest.raises(UnsupportedSchemaError) as excinfo:
+            split_tool_definition({"name": "broken", "description": "no schema"})
+        message = str(excinfo.value)
+        assert "'broken'" in message
+        assert "description" in message
+
+    def test_a_bare_schema_carrying_a_description_is_still_a_bare_schema(self) -> None:
+        """
+        The guard keys on ``name``, which JSON Schema has no meaning for.
+        ``description`` and ``title`` are real schema keywords, so a bare
+        schema using them must not be mistaken for a tool definition.
+        """
+        schema = {
+            "type": "object",
+            "title": "Forecast",
+            "description": "a bare schema",
+            "properties": {"a": {"type": "string"}},
+        }
+        assert split_tool_definition(schema) == (None, schema)
 
 
 class TestExtraction:

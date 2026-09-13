@@ -61,7 +61,10 @@ not trusted enough to apply unsupervised; the candidates come with it), or
 the wire is just a `dict`.
 
 A runnable before/after demo, over real MCP stdio, is in
-[`examples/mcp/`](examples/mcp/README.md).
+[`examples/mcp/`](examples/mcp/README.md). The supported JSON Schema subset,
+what refuses versus warns, and the limitations are documented in
+[`docs/jsonschema-adapter.md`](docs/jsonschema-adapter.md) — verified against
+21 tool schemas captured from four public MCP servers.
 
 ## Installation
 
@@ -157,11 +160,18 @@ work is: an MCP tool's `inputSchema` *is* JSON Schema.
   cannot represent (`allOf`, `not`, `if`/`then`/`else`, `patternProperties`,
   …) rather than ignoring it — so a `SUCCESS` is not a claim of JSON Schema
   compliance, and the gap is bounded and visible. See
-  [ADR-0001](docs/adr/0001-json-schema-source-of-truth.md). The CLI's
-  `--schema` format remains a StateGuard-proprietary equivalent; pass a real
-  JSON Schema through `ContractGuard.with_json_schema()`.
+  [ADR-0001](docs/adr/0001-json-schema-source-of-truth.md) for the decision
+  and [the adapter guide](docs/jsonschema-adapter.md) for the subset itself.
+  The CLI's `--schema` format remains a StateGuard-proprietary equivalent;
+  pass a real JSON Schema through `ContractGuard.with_json_schema()`.
 - **Tool-call repair covers arguments, not results.** Repairing what a
   server sends *back* (`outputSchema` / `structuredContent`) is not built.
+- **Drift on an *optional* parameter is not repaired.** Fuzzy renaming pairs
+  an unexpected key with a missing *required* field, and an optional field is
+  never missing — so a one-character typo on an optional parameter goes
+  uncorrected. It is a missed repair, never a wrong one; nothing is written
+  into a declared field. 29% of the parameters in the real-schema corpus are
+  optional.
 
 See [`M9_AUDIT.md`](M9_AUDIT.md) for the full production-readiness audit,
 performance characteristics, and recommended next steps.

@@ -32,6 +32,7 @@ carries the preview separately from what to send.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -117,31 +118,6 @@ def outcome_for(result: RepairResult, original_arguments: dict[str, Any]) -> Too
     """
     status = result.status
 
-    if status is RepairStatus.ALREADY_VALID:
-        # ``repaired_output`` is the *wrapped* payload, which for this
-        # adapter may carry defaults the model omitted. Prefer it over the
-        # raw arguments so the server sees the same thing whether or not a
-        # repair happened -- but say so, because "already valid" and "what
-        # I am sending you differs from what you sent me" are both true
-        # here and a log line claiming otherwise would be wrong.
-        arguments = result.repaired_output
-        if arguments is None:
-            arguments = dict(original_arguments)
-        filled = sorted(set(arguments) - set(original_arguments))
-        reason = "Arguments matched the tool's schema; forwarded unchanged."
-        if filled:
-            reason = (
-                f"Arguments matched the tool's schema. Forwarded with "
-                f"{_join(filled)} filled from the schema's declared default(s)."
-            )
-        return ToolCallOutcome(
-            action=MCPAction.FORWARD,
-            arguments=arguments,
-            preview=None,
-            reason=reason,
-            result=result,
-        )
-
     if status is RepairStatus.AMBIGUOUS:
         return ToolCallOutcome(
             action=MCPAction.ESCALATE,
@@ -155,28 +131,15 @@ def outcome_for(result: RepairResult, original_arguments: dict[str, Any]) -> Too
             result=result,
         )
 
-    if status is RepairStatus.SUCCESS:
-        # Shadow withholds the payload: ``repaired_output`` is None and the
-        # value is on ``proposed_output``. Forward what the model sent.
-        if result.proposed_output is not None:
-            return ToolCallOutcome(
-                action=MCPAction.HOLD,
-                arguments=None,
-                preview=result.proposed_output,
-                reason=(
-                    f"Shadow mode: {_operation_count(result)} repair(s) determined "
-                    f"and withheld. Forward the original arguments and review the "
-                    f"preview."
-                ),
-                result=result,
-            )
-        return ToolCallOutcome(
-            action=MCPAction.FORWARD,
-            arguments=result.repaired_output,
-            preview=None,
-            reason=f"Repaired {_operation_count(result)} field(s) before forwarding.",
-            result=result,
-        )
+    if status in (RepairStatus.ALREADY_VALID, RepairStatus.SUCCESS):
+        # ``result.is_shadow`` reports the *mode*, which is the question being
+        # asked. Inferring it from ``proposed_output is not None`` -- which
+        # this used to do -- is a different question that happens to have the
+        # same answer today, and ``RepairResult.is_shadow``'s own docstring
+        # says so.
+        if result.is_shadow:
+            return _shadow_outcome(result, original_arguments)
+        return _auto_outcome(result, original_arguments)
 
     # PARTIAL and FAILED both mean the payload still violates the schema.
     # PARTIAL can carry a payload when ``allow_partial_repair`` is on, but
@@ -193,6 +156,160 @@ def outcome_for(result: RepairResult, original_arguments: dict[str, Any]) -> Too
         ),
         result=result,
     )
+
+
+def _auto_outcome(result: RepairResult, original_arguments: dict[str, Any]) -> ToolCallOutcome:
+    """The ``FORWARD`` cases: auto mode committed a payload, so send it."""
+    arguments = result.repaired_output
+    if arguments is None:
+        # Defensive. Auto mode sets this for both statuses handled here;
+        # sending what the model wrote beats sending nothing.
+        arguments = dict(original_arguments)
+
+    if result.status is RepairStatus.SUCCESS:
+        return ToolCallOutcome(
+            action=MCPAction.FORWARD,
+            arguments=arguments,
+            preview=None,
+            reason=f"Repaired {_operation_count(result)} field(s) before forwarding.",
+            result=result,
+        )
+
+    # ALREADY_VALID. ``repaired_output`` is the *wrapped* payload, which for
+    # this adapter may carry defaults the model omitted. Prefer it over the
+    # raw arguments so the server sees the same thing whether or not a repair
+    # happened -- but say so, because "already valid" and "what I am sending
+    # you differs from what you sent me" are both true here and a log line
+    # claiming otherwise would be wrong.
+    reason = _fill_reason(
+        arguments,
+        original_arguments,
+        unchanged="Arguments matched the tool's schema; forwarded unchanged.",
+        filled="Arguments matched the tool's schema. Forwarded with {names} "
+        "filled from the schema's declared default(s).",
+        changed="Arguments matched the tool's schema, but the payload forwarded "
+        "is not the one that was sent.",
+    )
+    return ToolCallOutcome(
+        action=MCPAction.FORWARD,
+        arguments=arguments,
+        preview=None,
+        reason=reason,
+        result=result,
+    )
+
+
+def _shadow_outcome(result: RepairResult, original_arguments: dict[str, Any]) -> ToolCallOutcome:
+    """
+    The shadow cases: forward what the model sent, report what auto would.
+
+    ``ALREADY_VALID`` reaches here as well as ``SUCCESS``, and it has to.
+    ``JSONSchemaAdapter.wrap`` fills the schema's declared defaults, and an
+    absent optional is not a violation -- so a payload can be ``ALREADY_VALID``
+    and still have auto mode send the server something the model did not
+    write. Treating that as a plain ``FORWARD`` (which this used to do)
+    dropped the preview on the floor and reported "forwarded unchanged" about
+    a call auto mode *would* have changed: shadow's whole job is to show that
+    difference before anyone turns auto on, and this was the one class of
+    change it could not show.
+    """
+    proposed = result.proposed_output
+
+    if proposed is None or proposed == original_arguments:
+        # Nothing was withheld -- what auto would have sent is exactly what
+        # the model sent. There is no diff to review, so there is nothing to
+        # hold for review.
+        return ToolCallOutcome(
+            action=MCPAction.FORWARD,
+            arguments=dict(original_arguments),
+            preview=None,
+            reason="Arguments matched the tool's schema; forwarded unchanged.",
+            result=result,
+        )
+
+    repairs = _operation_count(result)
+    if repairs:
+        reason = (
+            f"Shadow mode: {repairs} repair(s) determined and withheld. "
+            f"Forward the original arguments and review the preview."
+        )
+    else:
+        # ALREADY_VALID with declared defaults filled: no repair was needed,
+        # but the payload auto mode would send is still not this one.
+        reason = _fill_reason(
+            proposed,
+            original_arguments,
+            # Unreachable from here -- the caller already established that the
+            # two differ -- but the wording has to be right if it ever is.
+            unchanged="Shadow mode: arguments matched the tool's schema and nothing was withheld.",
+            filled="Shadow mode: arguments matched the tool's schema, but auto "
+            "mode would also have filled {names} from the schema's declared "
+            "default(s). Forward the original arguments and review the preview.",
+            changed="Shadow mode: arguments matched the tool's schema, but the "
+            "payload auto mode would send is not the one that was sent. "
+            "Forward the original arguments and review the preview.",
+        )
+
+    return ToolCallOutcome(
+        action=MCPAction.HOLD,
+        arguments=None,
+        preview=proposed,
+        reason=reason,
+        result=result,
+    )
+
+
+def _fill_reason(
+    payload: dict[str, Any],
+    original: dict[str, Any],
+    *,
+    unchanged: str,
+    filled: str,
+    changed: str,
+) -> str:
+    """
+    Describe how *payload* differs from what the model sent.
+
+    Three outcomes, because there are three truths and only one of them used
+    to be told. *filled* is formatted with ``{names}``.
+
+    The *changed* case is the one this exists for. The reason string used to
+    be chosen by whether any **top-level** key had been added, while
+    ``JSONSchemaAdapter.wrap`` fills defaults at every depth -- so a schema
+    declaring a default on a nested property produced a payload that differed
+    from the model's, under a line reading "forwarded unchanged", and the
+    shadow wording rendered as "would also have filled none named". Comparing
+    the payloads decides *whether* anything changed; walking them decides
+    what to call it.
+    """
+    if payload == original:
+        return unchanged
+    names = _added_paths(payload, original)
+    if names:
+        return filled.format(names=_join(names))
+    return changed
+
+
+def _added_paths(
+    payload: dict[str, Any],
+    original: dict[str, Any],
+    prefix: str = "",
+) -> list[str]:
+    """
+    Dotted paths present in *payload* but not in *original*, at any depth.
+
+    Recursing matters because ``wrap`` does: a default declared on a nested
+    property is added without any top-level key appearing, which a set
+    difference over the top level cannot see.
+    """
+    added: list[str] = []
+    for key, value in payload.items():
+        path = f"{prefix}{key}"
+        if key not in original:
+            added.append(path)
+        elif isinstance(value, Mapping) and isinstance(original[key], Mapping):
+            added.extend(_added_paths(dict(value), dict(original[key]), f"{path}."))
+    return sorted(added)
 
 
 def _operation_count(result: RepairResult) -> int:

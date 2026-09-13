@@ -22,6 +22,8 @@ from typing import Any
 
 import pytest
 
+from stateguard import ContractGuard
+from stateguard.adapters.jsonschema.errors import JSONSchemaError, SchemaReferenceError
 from stateguard.adapters.mcp import MCPToolAdapter, SchemaCache
 from stateguard.core.models.contract import ContractSpec
 from stateguard.core.models.field_types import FieldType
@@ -181,3 +183,56 @@ class TestUnhashableSchema:
         spec = adapter.extract_contract(tool)
         assert spec.fields[0].field_type is FieldType.STRING
         assert len(adapter.cache) == 0
+
+
+class TestSchemaTooDeepToKey:
+    """
+    A cache lookup must not be the thing that crashes on untrusted input.
+
+    ``json.dumps`` recurses per level, so a schema nested deeper than the
+    interpreter stack allows raises ``RecursionError`` from inside
+    ``_key`` -- and that runs *before* ``JSONSchemaExtractor``, so it
+    pre-empted ``RefResolver``'s depth bound, whose entire purpose is to stop
+    that error escaping as an unhandled crash. The MCP path therefore died
+    with a ``RecursionError`` on a schema that ``with_json_schema()``
+    refused cleanly, which is the wrong way round: the MCP path is the one
+    facing servers nobody controls.
+    """
+
+    @staticmethod
+    def _nested(depth: int) -> dict[str, Any]:
+        root: dict[str, Any] = {"type": "object", "properties": {}}
+        current = root
+        for _ in range(depth):
+            child: dict[str, Any] = {"type": "object", "properties": {}}
+            current["properties"]["child"] = child
+            current = child
+        return root
+
+    def test_a_schema_too_deep_to_serialise_misses_rather_than_raising(self) -> None:
+        cache = SchemaCache()
+        schema = self._nested(2000)
+        assert cache.get("t", schema) is None
+        cache.put("t", schema, ContractSpec(fields=[]))
+        assert len(cache) == 0
+
+    def test_the_miss_lets_the_extractor_refuse_it_properly(self) -> None:
+        """The point of the miss: a catchable error, in the right vocabulary."""
+        adapter = MCPToolAdapter()
+        tool = {"name": "deep", "inputSchema": self._nested(2000)}
+        with pytest.raises(SchemaReferenceError, match="nests deeper than"):
+            adapter.extract_contract(tool)
+
+    def test_both_entrypoints_refuse_it_the_same_way(self) -> None:
+        """
+        The asymmetry this fixes, pinned directly. Both are ``JSONSchemaError``
+        (and so ``ValueError``); neither is ``RecursionError``, which is a
+        ``RuntimeError`` and escapes every caller catching the former.
+        """
+        schema = self._nested(2000)
+        arguments = {"child": {}}
+
+        with pytest.raises(JSONSchemaError):
+            ContractGuard.with_mcp().repair({"name": "deep", "inputSchema": schema}, arguments)
+        with pytest.raises(JSONSchemaError):
+            ContractGuard.with_json_schema().repair(schema, arguments)

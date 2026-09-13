@@ -123,9 +123,20 @@ class SchemaCache:
         might hold something that does not, and a cache miss is a much
         better answer there than an exception thrown from inside what the
         caller asked to be a repair.
+
+        ``RecursionError`` is caught for a sharper reason than the other two.
+        ``json.dumps`` recurses per level, so a schema nested deeper than the
+        interpreter stack allows raises it from *here* -- and this runs before
+        ``JSONSchemaExtractor`` is ever reached, so it pre-empted
+        ``RefResolver``'s depth bound, which exists precisely to stop that
+        error escaping (see ``refs.py``). The result was that the untrusted
+        path crashed with a ``RecursionError`` while the same schema through
+        ``ContractGuard.with_json_schema()`` raised a catchable
+        ``SchemaReferenceError``. Falling through to a miss hands the schema
+        to the extractor, which refuses it in its own vocabulary.
         """
         try:
             canonical = json.dumps(schema, sort_keys=True, separators=(",", ":"))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, RecursionError):
             return None
         return tool_name, hashlib.sha256(canonical.encode("utf-8")).hexdigest()

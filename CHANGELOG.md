@@ -30,7 +30,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than being ignored, so a `SUCCESS` never quietly means "validated less
   than the schema asked". See `docs/adr/0001-json-schema-source-of-truth.md`.
 
+- **A real-schema corpus.** 21 tool schemas captured from four public MCP
+  servers (`mcp-server-git`, `-sqlite`, `-time`, `-fetch`) by running them
+  over stdio and recording `tools/list` verbatim, with package version and
+  capture date. All 21 extract without refusal and round-trip; the capture
+  script is committed so the corpus is reproducible, and the fixtures are
+  committed so the suite needs no network.
+- **A false-positive suite over that corpus.** An unrecognisable key is never
+  renamed onto a declared field (swept across 29 required parameters); a
+  plausible abbreviation either repairs to the correct field or refuses
+  (18/18 correct, including `source`/`target` → `source_timezone`/
+  `target_timezone` on one call); a genuinely ambiguous key is refused rather
+  than guessed.
+- **`docs/jsonschema-adapter.md`** — the adapter guide: supported-subset
+  table, what refuses versus what warns, the caching key, and the known
+  limitations.
+
 ### Fixed
+- `SchemaCache._key` no longer lets a `RecursionError` escape. `json.dumps`
+  recurses per level, so a deeply nested `inputSchema` raised it from inside
+  the cache lookup — which runs *before* extraction, and so pre-empted
+  `RefResolver`'s depth bound, the guard that exists to stop exactly that
+  error escaping. The MCP path therefore crashed uncatchably on a schema the
+  JSON Schema path refused cleanly, which is the wrong way round: the MCP
+  path is the one reading schemas from servers nobody controls. It now misses
+  the cache and the extractor refuses it as a `SchemaReferenceError`.
+- `outcome_for`'s reason line no longer claims "forwarded unchanged" about a
+  payload it changed. The wording was chosen by whether a *top-level* key had
+  been added, while `JSONSchemaAdapter.wrap` fills declared defaults at every
+  depth — so a default on a nested property produced a changed payload under
+  an "unchanged" log line, and the shadow variant rendered as "would also
+  have filled none named". Reason lines are the audit trail a team reads
+  during a shadow rollout to decide whether to turn auto on, so one that
+  disagrees with what was sent is wrong in the direction that matters. The
+  filled paths are now named at any depth (`'outer.inner'`).
+- Shadow mode no longer drops its diff on an `ALREADY_VALID` payload.
+  `outcome_for` inferred the mode from `proposed_output` rather than reading
+  `RepairResult.is_shadow`, and never asked the question for that status — so
+  a payload whose only change was a declared default being filled came back
+  as `FORWARD` with no preview and a reason reading "forwarded unchanged",
+  about a call auto mode *would* have changed. The payload sent was correct;
+  what was lost was the one signal shadow mode exists to give.
+- A tool definition with no `inputSchema` now says so, instead of reporting
+  `<root>: unrecognised keyword(s) ['name']` and sending the reader after a
+  JSON Schema problem that is not there.
 - `ContractValidator` now uses `re.search` for `PATTERN` constraints, not
   `re.match`. JSON Schema defers to ECMA-262 and Pydantic's
   `Field(pattern=)` searches, so anchoring at the start produced *false*
@@ -44,7 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directions. A schema declaring `additionalProperties: false` was being
   silently relaxed by the config default of `False`, contradicting
   `ContractSpec.strict_mode`'s own documented precedence. A contract is
-  never loosened by configuration.
+  never loosened by configuration. The floor now also reaches *nested*
+  contracts: it was applied to the root `ContractSpec` only, so a single
+  flag that says nothing about depth made an undeclared key an `ERROR` at
+  the top level and a `WARNING` one level down.
 - Nine under-validation defects in the JSON Schema adapter, found by two
   rounds of review before release. Most consequential: for
   `anyOf: [{$ref}, {null}]` — the shape Pydantic emits for every
@@ -69,6 +115,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known limitation
 
+- **Drift on an optional parameter is not repaired.** Found by the new
+  corpus. `FuzzyFieldMatchStrategy` pairs an unexpected key with a *missing
+  required* field, and an optional field is never missing, so even a
+  one-character typo on one goes uncorrected — 29% of the corpus's parameters
+  are optional. The sharp edge is an optional field with a declared default:
+  `git_diff` takes `context_lines` defaulting to 3, so a model writing
+  `context: 10` gets 3 filled in beside its unrecognised key and the 10 is
+  silently ignored. It is a *missed* repair, never a wrong one — nothing is
+  written into a declared parameter.
 - Objects inside a union branch or an array element are validated by *type*
   only; their properties are not. `{"anyOf": [{"type": "string"},
   {"type": "object", "properties": {"n": {"type": "integer"}}}]}` accepts
