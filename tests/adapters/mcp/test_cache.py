@@ -25,6 +25,7 @@ import pytest
 from stateguard import ContractGuard
 from stateguard.adapters.jsonschema.errors import JSONSchemaError, SchemaReferenceError
 from stateguard.adapters.mcp import MCPToolAdapter, SchemaCache
+from stateguard.adapters.mcp import cache as cache_module
 from stateguard.core.models.contract import ContractSpec
 from stateguard.core.models.field_types import FieldType
 
@@ -190,13 +191,25 @@ class TestSchemaTooDeepToKey:
     A cache lookup must not be the thing that crashes on untrusted input.
 
     ``json.dumps`` recurses per level, so a schema nested deeper than the
-    interpreter stack allows raises ``RecursionError`` from inside
-    ``_key`` -- and that runs *before* ``JSONSchemaExtractor``, so it
-    pre-empted ``RefResolver``'s depth bound, whose entire purpose is to stop
-    that error escaping as an unhandled crash. The MCP path therefore died
-    with a ``RecursionError`` on a schema that ``with_json_schema()``
-    refused cleanly, which is the wrong way round: the MCP path is the one
-    facing servers nobody controls.
+    interpreter allows raises ``RecursionError`` from inside ``_key`` -- and
+    that runs *before* ``JSONSchemaExtractor``, so it pre-empted
+    ``RefResolver``'s depth bound, whose entire purpose is to stop that error
+    escaping as an unhandled crash. The MCP path therefore died with a
+    ``RecursionError`` on a schema that ``with_json_schema()`` refused
+    cleanly, which is the wrong way round: the MCP path is the one facing
+    servers nobody controls.
+
+    **How deep is "too deep" is not this package's property.** It moves with
+    the interpreter: CPython 3.12 gave C-level recursion its own limit, so a
+    depth that raises on one version serialises fine on the next. Measured
+    here, 3.13 on Windows raises from depth 1499; CI's 3.12 on Linux and
+    macOS serialises 2000 without complaint. The first version of these tests
+    asserted an empty cache after a 2000-deep ``put`` and duly passed on 3.11
+    and failed on 3.12.
+
+    So the depth-dependent test asserts only what is true at every depth --
+    that nothing escapes -- and the ``RecursionError`` branch is forced
+    rather than provoked.
     """
 
     @staticmethod
@@ -209,9 +222,38 @@ class TestSchemaTooDeepToKey:
             current = child
         return root
 
-    def test_a_schema_too_deep_to_serialise_misses_rather_than_raising(self) -> None:
+    def test_a_deeply_nested_schema_never_raises_from_the_cache(self) -> None:
+        """
+        Neither call may blow up, whatever this interpreter makes of the depth.
+
+        Deliberately no assertion about whether the entry landed: that is a
+        fact about ``json.dumps`` on the running CPython, not about the cache,
+        and asserting it is what made this test portable only by accident.
+        """
         cache = SchemaCache()
         schema = self._nested(2000)
+
+        cache.get("t", schema)
+        cache.put("t", schema, ContractSpec(fields=[]))
+
+    def test_a_key_that_recurses_too_deep_is_a_miss(self, monkeypatch: Any) -> None:
+        """
+        The ``RecursionError`` branch, forced rather than hoped for.
+
+        Raising it directly pins the behaviour on every platform and version,
+        including the ones where no reachable depth would trigger it -- and
+        the guard has to hold there too, because the *next* release may move
+        the limit back.
+        """
+
+        def too_deep(*_args: Any, **_kwargs: Any) -> str:
+            raise RecursionError("maximum recursion depth exceeded while encoding a JSON object")
+
+        monkeypatch.setattr(cache_module.json, "dumps", too_deep)
+
+        cache = SchemaCache()
+        schema = {"type": "object", "properties": {}}
+
         assert cache.get("t", schema) is None
         cache.put("t", schema, ContractSpec(fields=[]))
         assert len(cache) == 0
