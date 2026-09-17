@@ -320,6 +320,48 @@ def json_serialized(value: Any) -> str | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Bounds on untrusted JSON text
+# ---------------------------------------------------------------------------
+#
+# Both bounds exist because CPython's own limits are not a specification.
+# Through 3.13, deeply nested text raised ``RecursionError`` from ``json.loads``
+# once ``sys.recursionlimit`` was reached.  On 3.14 the scanner's ceiling is the
+# real C stack instead, so the *same* payload that raises on the main thread
+# parses without complaint on a thread created with a larger one.  Measured on
+# this codebase, 3.14.7: 20 000 levels raise on the main thread and parse fine
+# on a 64 MiB-stack thread, as do 50 000.
+#
+# That makes "does this parse?" a question about how the interpreter happened to
+# be launched -- thread, platform, build, ``PYTHONTHREADSTACKSIZE`` -- which is
+# not an answer a contract layer can offer a caller.  So StateGuard states the
+# bound itself and refuses past it, identically on every version.
+#
+# This is the decision ``RefResolver`` already made for schema nesting, for the
+# same reason; see ``DEFAULT_MAX_DEPTH`` in
+# ``stateguard.adapters.jsonschema.refs``.
+
+#: Maximum container nesting accepted in JSON text.
+#:
+#: Counts real structure -- ``[{"a": [1]}]`` is three levels -- not characters,
+#: and not brackets inside string literals.  Deliberately the same 100 that
+#: ``RefResolver`` uses, and far past any tool call: an MCP tool's arguments
+#: object is typically two or three levels deep.
+DEFAULT_MAX_JSON_DEPTH = 100
+
+#: Maximum length of JSON text, in the units scanned: characters for ``str``
+#: input, bytes for ``bytes`` (the length is checked before decoding).
+#:
+#: The depth cap bounds recursion but not work -- a flat 100 MiB array nests one
+#: level deep and is still a resource commitment made on behalf of whoever sent
+#: it.  This bounds that, and with it the worst case of the depth scan.
+#:
+#: 10 MiB is several orders of magnitude past a realistic tool-call payload
+#: while staying well inside a single allocation: large enough that real traffic
+#: never reaches it, small enough that abuse is refused rather than served.
+DEFAULT_MAX_JSON_LENGTH = 10 * 1024 * 1024
+
+
 class _DuplicateJsonKeyError(ValueError):
     """
     Raised by ``_reject_duplicate_keys`` when a JSON object repeats a key.
@@ -348,16 +390,128 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return seen
 
 
-def json_loads_strict(text: str | bytes) -> Any:
+class _JsonTooDeepError(ValueError):
     """
-    ``json.loads`` that refuses lossy input instead of silently resolving it.
+    Raised by ``json_loads_strict`` when text nests past ``max_depth``.
 
-    The only difference from ``json.loads`` is the duplicate-key guard (see
-    ``_reject_duplicate_keys``), which applies at every depth including inside
-    arrays.  Shared by ``json_parsed`` and by the engine's root-shape
-    normalisation so a payload is judged the same way wherever it arrives.
+    Subclasses ``ValueError`` for the reason ``_DuplicateJsonKeyError`` does:
+    every existing ``json.loads`` call site already treats one as "not
+    parseable" rather than letting it escape.
     """
-    return json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+
+
+class _JsonTooLongError(ValueError):
+    """
+    Raised by ``json_loads_strict`` when text is longer than ``max_length``.
+
+    Subclasses ``ValueError`` for the same reason ``_JsonTooDeepError`` does.
+    """
+
+
+def _decoded(text: str | bytes) -> str:
+    """
+    Return *text* as ``str``, decoding ``bytes`` the way ``json.loads`` does.
+
+    The depth scan has to walk the same characters the parser will.  Scanning
+    raw ``bytes`` instead would be unsound for the UTF-16/32 input
+    ``json.loads`` accepts: in UTF-16BE ``U+2200`` encodes as ``22 00``, whose
+    first byte is indistinguishable from an ASCII ``"`` and would open a string
+    literal that is not there -- hiding real structure behind it.
+
+    ``json.detect_encoding`` is the helper ``json.loads`` itself uses to choose
+    an encoding, so this raises ``UnicodeDecodeError`` on exactly the input
+    ``json.loads`` would have rejected anyway -- and that is a ``ValueError``,
+    which every call site already catches.
+    """
+    if isinstance(text, bytes):
+        return text.decode(json.detect_encoding(text))
+    return text
+
+
+def _exceeds_max_depth(text: str, limit: int) -> bool:
+    """
+    ``True`` if *text* nests containers more than *limit* levels deep.
+
+    A structural pre-pass, run *before* ``json.loads`` so the parser never
+    begins a descent it cannot finish -- see the bounds above for why the
+    interpreter's own stack is not an acceptable limit.
+
+    Brackets inside string literals are not structure: ``'["a [ b"]'`` is one
+    level, not two, so the scan tracks string and escape state rather than
+    counting characters.  Closing brackets clamp at zero, which keeps the count
+    conservative on malformed text -- a leading ``]`` must never buy back a
+    level of real nesting later in the same payload.
+
+    Cost is bounded twice.  Text with no more than *limit* opening brackets in
+    total cannot exceed *limit* levels, so the ordinary case is settled by two
+    C-level ``str.count`` passes and never enters the loop; and the loop
+    returns as soon as the cap is passed rather than scanning to the end.
+    """
+    if text.count("[") + text.count("{") <= limit:
+        return False
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+            if depth > limit:
+                return True
+        elif char in "]}" and depth > 0:
+            depth -= 1
+    return False
+
+
+def json_loads_strict(
+    text: str | bytes,
+    *,
+    max_depth: int = DEFAULT_MAX_JSON_DEPTH,
+    max_length: int = DEFAULT_MAX_JSON_LENGTH,
+) -> Any:
+    """
+    ``json.loads`` that refuses lossy and pathological input instead of
+    silently resolving it or crashing on it.
+
+    Two differences from ``json.loads``:
+
+    * the duplicate-key guard (see ``_reject_duplicate_keys``), which applies
+      at every depth including inside arrays;
+    * the length and nesting bounds, both checked *before* the parser runs so
+      that what happens to pathological input is StateGuard's decision rather
+      than a property of the running interpreter.
+
+    Every refusal is a ``ValueError``, so no call site needs a new ``except``.
+
+    Shared by ``json_parsed`` and by the engine's root-shape normalisation so a
+    payload is judged the same way wherever it arrives.
+    """
+    if len(text) > max_length:
+        raise _JsonTooLongError(
+            f"JSON input of length {len(text)} is over the {max_length} limit "
+            f"and is refused rather than parsed."
+        )
+
+    decoded = _decoded(text)
+
+    if _exceeds_max_depth(decoded, max_depth):
+        raise _JsonTooDeepError(
+            f"JSON input nests deeper than {max_depth} levels and is refused "
+            f"rather than parsed. Text this deep exhausts the interpreter stack "
+            f"during parsing, which surfaces as an unhandled RecursionError on "
+            f"some versions and as a successful parse on others."
+        )
+
+    return json.loads(decoded, object_pairs_hook=_reject_duplicate_keys)
 
 
 def json_parsed(value: Any, expected: type) -> Any | None:
@@ -382,9 +536,14 @@ def json_parsed(value: Any, expected: type) -> Any | None:
       priced down — there is no fidelity score that honestly describes
       "one of these two values is gone".
 
-    Deeply nested input raises ``RecursionError`` rather than
-    ``JSONDecodeError``; both are treated as "not parseable" rather than
-    propagated, matching ``_normalise_root_payload``.
+    Pathologically deep or long input is refused by ``json_loads_strict``
+    before the parser runs, and arrives here as an ordinary ``ValueError``
+    like any other unparseable text -- see the bounds above that function for
+    why the interpreter's own recursion behaviour is not a usable limit.
+    ``RecursionError`` stays in the ``except`` as a backstop, not as the
+    mechanism: nothing that survives the depth guard should be able to raise
+    it, and if something ever does it is still "not parseable" rather than a
+    crash escaping the never-raises guarantee.
 
     Shared with the engine's ``_coerce_value`` so that feasibility and
     application always agree on what was parsed.

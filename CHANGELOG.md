@@ -47,6 +47,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limitations.
 
 ### Fixed
+- **JSON nesting depth is now StateGuard's decision, not CPython's.**
+  `json_loads_strict` applies an explicit depth bound
+  (`DEFAULT_MAX_JSON_DEPTH`, 100) and length bound
+  (`DEFAULT_MAX_JSON_LENGTH`, 10 MiB) *before* the parser runs, so both
+  `json_parsed` and the engine's root-shape recovery refuse pathological text
+  identically on every interpreter. Previously they relied on `json.loads`
+  raising `RecursionError`, which is not one behaviour: measured on
+  `"[" * 20_000 + "]" * 20_000`, 3.11 parses it, 3.12 refuses it regardless of
+  stack size or `sys.setrecursionlimit` (3.12 added a hard C recursion limit
+  that `setrecursionlimit` does not reach), and 3.14 parses it on a 64 MiB-stack
+  thread while raising on the main thread — because on 3.14 the ceiling is the
+  real C stack. "Does this parse?" was therefore a question about how the
+  interpreter happened to be launched. The bound removes the question. This is
+  the decision `RefResolver` already made for schema nesting; the JSON path had
+  simply never been given it. Normal payloads are unaffected: the depth scan
+  skips text with 100 or fewer opening brackets via two C-level `str.count`
+  passes, and the bounds sit orders of magnitude past real tool-call traffic.
 - `SchemaCache._key` no longer lets a `RecursionError` escape. `json.dumps`
   recurses per level, so a deeply nested `inputSchema` raised it from inside
   the cache lookup — which runs *before* extraction, and so pre-empted

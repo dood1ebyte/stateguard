@@ -90,7 +90,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.11", "3.12"]
+        # 3.13 and 3.14 are here because the JSON depth bound exists: CPython
+        # changed how deep text fails three times across these versions (see
+        # TestPathologicalJsonIsBounded), and nothing but the matrix catches a
+        # regression into relying on that again.
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
 

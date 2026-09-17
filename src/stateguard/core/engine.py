@@ -300,10 +300,14 @@ def _normalise_root_payload(data: Any) -> tuple[dict[str, Any] | None, str]:
     Parsing a string is safe (no code execution) and goes through
     ``json_loads_strict``, so a root object with a repeated key is refused
     here for the same reason ``_pairs_to_dict`` refuses a duplicate pair --
-    ``json.loads`` would silently keep the last one.  Deeply nested input
-    raises ``RecursionError`` and invalid encodings raise
-    ``UnicodeDecodeError``; both are caught and treated as "not recoverable"
-    rather than propagated.
+    ``json.loads`` would silently keep the last one.  It also applies that
+    function's depth and length bounds, so a pathologically nested root is
+    refused here on the same terms as a nested field value rather than
+    depending on which interpreter is running -- see ``DEFAULT_MAX_JSON_DEPTH``
+    in ``stateguard.core.strategies.coerce``.  Those refusals are
+    ``ValueError``; invalid encodings raise ``UnicodeDecodeError``; and
+    ``RecursionError`` is kept as a backstop.  All are caught and treated as
+    "not recoverable" rather than propagated.
     """
     converted, note = _mapping_like_to_dict(data)
     if converted is not None:
