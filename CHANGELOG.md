@@ -8,6 +8,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Tool-call repair for MCP.** `ContractGuard.with_mcp()` repairs the
+  arguments an agent sends to an MCP tool, against the server's declared
+  `inputSchema`. Accepts a full tool definition or a bare input schema, in
+  either spelling of the key (`inputSchema` on the wire, `input_schema` as
+  the Python SDK names it). Extracted contracts are cached on
+  `(tool name, schema content)` — not `contract_id`, which collides between
+  tools with coincidentally identical signatures — so a proxy fetches
+  `tools/list` once, and a server that changes a signature is picked up
+  rather than papered over. `stateguard.adapters.mcp.outcome_for` maps a
+  `RepairResult` onto `FORWARD` / `HOLD` / `ESCALATE` / `REFUSE`. Zero extra
+  dependencies, enforced by an import-isolation test.
+- **A runnable MCP demo** in `examples/mcp/` — an ordinary MCP server, a
+  `RepairingClient` proxy, and a before/after script that speaks real MCP
+  over stdio. Three drifted calls the server rejects now succeed; a fourth
+  is refused rather than repaired, because no honest repair exists for it.
+- **`ContractGuard.with_json_schema()`** and the `JSONSchemaAdapter` behind
+  it: a supported subset of JSON Schema (`MCP_ADAPTER_PLAN.md` §5) with
+  `$ref`/`$defs` resolution, cycle *and* depth guards, and a ReDoS screen on
+  schema-supplied `pattern` values. Keywords outside the subset raise rather
+  than being ignored, so a `SUCCESS` never quietly means "validated less
+  than the schema asked". See `docs/adr/0001-json-schema-source-of-truth.md`.
+
+- **A real-schema corpus.** 21 tool schemas captured from four public MCP
+  servers (`mcp-server-git`, `-sqlite`, `-time`, `-fetch`) by running them
+  over stdio and recording `tools/list` verbatim, with package version and
+  capture date. All 21 extract without refusal and round-trip; the capture
+  script is committed so the corpus is reproducible, and the fixtures are
+  committed so the suite needs no network.
+- **A false-positive suite over that corpus.** An unrecognisable key is never
+  renamed onto a declared field (swept across 29 required parameters); a
+  plausible abbreviation either repairs to the correct field or refuses
+  (18/18 correct, including `source`/`target` → `source_timezone`/
+  `target_timezone` on one call); a genuinely ambiguous key is refused rather
+  than guessed.
+- **`docs/jsonschema-adapter.md`** — the adapter guide: supported-subset
+  table, what refuses versus what warns, the caching key, and the known
+  limitations.
+
+### Fixed
+- `SchemaCache._key` no longer lets a `RecursionError` escape. `json.dumps`
+  recurses per level, so a deeply nested `inputSchema` raised it from inside
+  the cache lookup — which runs *before* extraction, and so pre-empted
+  `RefResolver`'s depth bound, the guard that exists to stop exactly that
+  error escaping. The MCP path therefore crashed uncatchably on a schema the
+  JSON Schema path refused cleanly, which is the wrong way round: the MCP
+  path is the one reading schemas from servers nobody controls. It now misses
+  the cache and the extractor refuses it as a `SchemaReferenceError`.
+- `outcome_for`'s reason line no longer claims "forwarded unchanged" about a
+  payload it changed. The wording was chosen by whether a *top-level* key had
+  been added, while `JSONSchemaAdapter.wrap` fills declared defaults at every
+  depth — so a default on a nested property produced a changed payload under
+  an "unchanged" log line, and the shadow variant rendered as "would also
+  have filled none named". Reason lines are the audit trail a team reads
+  during a shadow rollout to decide whether to turn auto on, so one that
+  disagrees with what was sent is wrong in the direction that matters. The
+  filled paths are now named at any depth (`'outer.inner'`).
+- Shadow mode no longer drops its diff on an `ALREADY_VALID` payload.
+  `outcome_for` inferred the mode from `proposed_output` rather than reading
+  `RepairResult.is_shadow`, and never asked the question for that status — so
+  a payload whose only change was a declared default being filled came back
+  as `FORWARD` with no preview and a reason reading "forwarded unchanged",
+  about a call auto mode *would* have changed. The payload sent was correct;
+  what was lost was the one signal shadow mode exists to give.
+- A tool definition with no `inputSchema` now says so, instead of reporting
+  `<root>: unrecognised keyword(s) ['name']` and sending the reader after a
+  JSON Schema problem that is not there.
+- `ContractValidator` now uses `re.search` for `PATTERN` constraints, not
+  `re.match`. JSON Schema defers to ECMA-262 and Pydantic's
+  `Field(pattern=)` searches, so anchoring at the start produced *false*
+  violations — `"abc123"` against `"[0-9]+"` was reported broken while
+  Pydantic, the documented source of truth on that path, accepted it. A
+  false violation can trigger a repair of a field that was never broken. An
+  unusable pattern now raises an error naming the field instead of a bare
+  `re` exception.
+- `GuardConfig.strict_mode` composes with a contract's own `strict_mode` as
+  a **floor** (strict if either says so) rather than overwriting it in both
+  directions. A schema declaring `additionalProperties: false` was being
+  silently relaxed by the config default of `False`, contradicting
+  `ContractSpec.strict_mode`'s own documented precedence. A contract is
+  never loosened by configuration. The floor now also reaches *nested*
+  contracts: it was applied to the root `ContractSpec` only, so a single
+  flag that says nothing about depth made an undeclared key an `ERROR` at
+  the top level and a `WARNING` one level down.
+- Nine under-validation defects in the JSON Schema adapter, found by two
+  rounds of review before release. Most consequential: for
+  `anyOf: [{$ref}, {null}]` — the shape Pydantic emits for every
+  `Optional[X]` — constraints, declared defaults, and the
+  unsupported-keyword screen were all read off a bare `{"$ref": ...}` and
+  therefore silently dropped; `allOf` behind such a reference produced a
+  field that accepted anything. The same loss survived one level deeper, in
+  a chained `Optional[Optional[X]]`, until a second pass caught it. Also:
+  unsupported keywords inside union branches and array `items` went
+  unscreened; a deep schema raised `RecursionError` instead of a catchable
+  error; an untyped `enum` containing `null` produced a false `NOT_NULL`
+  violation; a `required` name with no `properties` entry was dropped, so a
+  payload missing it was reported valid; and a `required` entry that was not
+  a string was coerced rather than refused.
+- A declared `default` that does not satisfy its own field is now dropped
+  with a `SchemaFeatureWarning` instead of being written into the payload.
+  Filling defaults happens after the engine has finished, so nothing
+  re-checked the value: a schema declaring
+  `{"type": "integer", "default": "abc"}` — or a default left stale when a
+  server's `enum` changed — made `repair` return `ALREADY_VALID` and
+  `validate` then reject that same output.
+
+### Known limitation
+
+- **Drift on an optional parameter is not repaired.** Found by the new
+  corpus. `FuzzyFieldMatchStrategy` pairs an unexpected key with a *missing
+  required* field, and an optional field is never missing, so even a
+  one-character typo on one goes uncorrected — 29% of the corpus's parameters
+  are optional. The sharp edge is an optional field with a declared default:
+  `git_diff` takes `context_lines` defaulting to 3, so a model writing
+  `context: 10` gets 3 filled in beside its unrecognised key and the 10 is
+  silently ignored. It is a *missed* repair, never a wrong one — nothing is
+  written into a declared parameter.
+- Objects inside a union branch or an array element are validated by *type*
+  only; their properties are not. `{"anyOf": [{"type": "string"},
+  {"type": "object", "properties": {"n": {"type": "integer"}}}]}` accepts
+  `{"n": "not-an-int"}`. `union_members` and `item_type` each carry a single
+  `FieldType` and no nested contract. Unsupported *keywords* in those
+  positions are refused; their *contents* are not checked.
 - `FieldType.BYTES` — declared binary fields (e.g. Pydantic `bytes`
   annotations, previously extracted as `ANY`) are now a first-class
   contract type accepting `str | bytes` values, mirroring the lax

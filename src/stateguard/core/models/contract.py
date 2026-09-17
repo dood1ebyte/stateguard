@@ -173,7 +173,13 @@ class ContractSpec:
         When ``True``, keys in the data that have no corresponding
         ``FieldSpec`` produce ``ViolationSeverity.ERROR`` violations.
         When ``False`` (default), they produce ``ViolationSeverity.WARNING``.
-        Overrides ``GuardConfig.strict_mode`` at the per-contract level.
+
+        Composes with ``GuardConfig.strict_mode`` as a floor: ``ContractGuard``
+        is strict if either this or the config says so.  So a schema that
+        declares itself closed stays closed whatever the config default is,
+        while ``GuardConfig.strict_mode=True`` can still tighten a schema
+        format that has no way to express it.  A contract is never *loosened*
+        by configuration.
     contract_id:
         Stable 16-hex-character identifier derived from the field
         definitions.  Auto-generated if not provided.  Two ``ContractSpec``
