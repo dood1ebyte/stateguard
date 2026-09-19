@@ -37,6 +37,8 @@ the confidence model).
 
 from __future__ import annotations
 
+import json
+import threading
 from collections import UserDict, namedtuple
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -173,9 +175,84 @@ class TestNeverRaises:
         assert result.status is RepairStatus.FAILED
 
     def test_deeply_nested_json_string_does_not_blow_the_stack(self, guard: ContractGuard) -> None:
-        """json.loads raises RecursionError, not JSONDecodeError, on deep input."""
+        """
+        Unchanged assertion, kept for what it actually covers: ``repair()``
+        returns rather than raising, whatever the parser does with 20 000
+        levels on this interpreter.
+
+        Note what it does *not* cover. This payload parses to a nested list,
+        which is not an object root, so it is refused on shape alone -- the
+        depth bound is never what makes it FAILED. The tests below use a root
+        that would otherwise be recovered, which is what it takes to attribute
+        a refusal to the guard.
+        """
         payload = "[" * 20_000 + "]" * 20_000
         assert guard.repair(SCHEMA, payload).status is RepairStatus.FAILED
+
+    # A root that is deep *and* would otherwise be recovered.
+    #
+    # ``"[" * 200 + "]" * 200`` is the obvious payload and is the wrong one:
+    # it parses to a nested list, which is not an object root, so it is
+    # refused on shape whether or not a depth bound exists. Asserting FAILED
+    # on it proves nothing about the guard. This carries the contract's own
+    # fields at the top level, so without the bound it parses, recovers and
+    # succeeds -- which is what makes the refusal attributable.
+    DEEP_BUT_VALID_ROOT = '{"a": 1, "b": "x", "deep": ' + "[" * 200 + "]" * 200 + "}"
+
+    def test_a_root_the_interpreter_would_recover_is_still_refused(
+        self, guard: ContractGuard
+    ) -> None:
+        """
+        The root path gets the same bound as a field value, for the same
+        reason: 200 levels parses fine on every CPython -- the first two
+        assertions prove it parses *and* that the result is a recoverable
+        object root -- so the refusal is StateGuard's, not the stack's.
+        """
+        parsed = json.loads(self.DEEP_BUT_VALID_ROOT)
+        assert isinstance(parsed, dict)
+        assert parsed["a"] == 1
+
+        assert guard.repair(SCHEMA, self.DEEP_BUT_VALID_ROOT).status is RepairStatus.FAILED
+
+    def test_deeply_nested_root_refused_on_a_thread_that_could_parse_it(
+        self, guard: ContractGuard
+    ) -> None:
+        """
+        On 3.14 a 64 MiB-stack thread parses 20 000 levels happily, so a main
+        thread assertion can pass for reasons of its own. This one cannot.
+        """
+        payload = '{"a": 1, "b": "x", "deep": ' + "[" * 20_000 + "]" * 20_000 + "}"
+        status: list[RepairStatus] = []
+
+        def run() -> None:
+            status.append(guard.repair(SCHEMA, payload).status)
+
+        previous = threading.stack_size(64 * 1024 * 1024)
+        try:
+            thread = threading.Thread(target=run)
+            thread.start()
+            thread.join()
+        finally:
+            threading.stack_size(previous)
+
+        assert status == [RepairStatus.FAILED]
+
+    def test_a_deep_root_is_refused_as_bytes_too(self, guard: ContractGuard) -> None:
+        """``_normalise_root_payload`` accepts bytes; the bound follows it there."""
+        assert guard.repair(SCHEMA, self.DEEP_BUT_VALID_ROOT.encode()).status is (
+            RepairStatus.FAILED
+        )
+
+    def test_the_same_root_one_level_inside_the_bound_still_succeeds(
+        self, guard: ContractGuard
+    ) -> None:
+        """
+        The other half of the pair: identical payload, legal depth, recovered
+        as before. Without this, a guard that refused every string root would
+        pass every test above.
+        """
+        payload = '{"a": 1, "b": "x", "deep": ' + "[" * 50 + "]" * 50 + "}"
+        assert guard.repair(SCHEMA, payload).status is RepairStatus.SUCCESS
 
     def test_uncopyable_root_does_not_raise(self, guard: ContractGuard) -> None:
         """

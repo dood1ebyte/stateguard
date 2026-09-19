@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import threading
 from typing import Any
 
 import pytest
@@ -17,8 +19,11 @@ from stateguard.core.errors.violations import ViolationSeverity, ViolationType
 from stateguard.core.models.contract import ContractSpec, FieldSpec
 from stateguard.core.models.field_types import FieldType, UnionMember
 from stateguard.core.strategies.coerce import (
+    DEFAULT_MAX_JSON_DEPTH,
+    DEFAULT_MAX_JSON_LENGTH,
     TypeCoercionStrategy,
     _coercion_evidence,
+    _exceeds_max_depth,
     _is_float_string,
     _is_integer_string,
     json_loads_strict,
@@ -850,8 +855,16 @@ class TestJsonParsing:
     def test_refuses_everything_else(self, value: Any, expected_type: type) -> None:
         assert json_parsed(value, expected_type) is None
 
-    def test_deep_nesting_does_not_propagate_recursionerror(self) -> None:
-        """json.loads raises RecursionError, not JSONDecodeError, on deep input."""
+    def test_deep_nesting_is_refused(self) -> None:
+        """
+        Deeply nested text is refused, whatever the interpreter would have
+        done with it.
+
+        This assertion is unchanged from when it was written; what changed is
+        why it holds. It used to rely on ``json.loads`` raising
+        ``RecursionError`` -- see ``TestPathologicalJsonIsBounded`` for why
+        that was never something to rely on.
+        """
         assert json_parsed("[" * 20_000 + "]" * 20_000, list) is None
 
     # --- evidence ---------------------------------------------------------
@@ -935,6 +948,212 @@ class TestLossyJsonIsRefusedNotPriced:
 
     def test_a_single_key_object_still_parses(self) -> None:
         assert json_parsed('{"a": 1, "b": 2}', dict) == {"a": 1, "b": 2}
+
+
+class TestPathologicalJsonIsBounded:
+    """
+    Nesting depth is StateGuard's decision, not CPython's.
+
+    The bound used to be whatever ``json.loads`` did with deep text, which is
+    not one behaviour. Measured on ``"[" * 20_000 + "]" * 20_000``, on a
+    thread with a 64 MiB stack and ``setrecursionlimit(200_000)``:
+
+    * **3.11.16** -- parses it;
+    * **3.12.14** -- refuses it, and no stack size or recursion limit changes
+      that (3.12 added a separate hard C recursion limit that
+      ``sys.setrecursionlimit`` does not reach);
+    * **3.14.7** -- parses it. On 3.14 the ceiling is the real C stack, so the
+      *same* payload raises on the main thread and parses on a bigger one.
+
+    Three versions, three answers, and on 3.14 the answer depends on which
+    thread is asking. A contract layer cannot tell a caller what it does with
+    a payload on those terms, so it states a bound and holds it everywhere.
+
+    The same decision ``RefResolver`` already made for schema nesting.
+    """
+
+    def test_guard_refuses_depth_the_interpreter_handles_easily(self) -> None:
+        """
+        The decisive test, and version-independent by construction.
+
+        200 levels is nothing to any CPython -- the first assertion proves it
+        parses -- so the refusal cannot be the interpreter running out of
+        anything. It is the guard, which is the whole point.
+        """
+        payload = "[" * 200 + "]" * 200
+        assert json.loads(payload) is not None
+        assert json_parsed(payload, list) is None
+
+    def test_deep_nesting_refused_on_a_thread_that_could_parse_it(self) -> None:
+        """
+        The case that exposed this.
+
+        On 3.14 a 64 MiB-stack thread parses 20 000 levels without complaint,
+        so an assertion of ``None`` on the main thread was passing for a reason
+        that had nothing to do with StateGuard. Running the guard *inside* that
+        thread is what makes the assertion mean something.
+        """
+        payload = "[" * 20_000 + "]" * 20_000
+        result: list[Any] = []
+
+        def run() -> None:
+            result.append(json_parsed(payload, list))
+
+        previous = threading.stack_size(64 * 1024 * 1024)
+        try:
+            thread = threading.Thread(target=run)
+            thread.start()
+            thread.join()
+        finally:
+            threading.stack_size(previous)
+
+        assert result == [None]
+
+    # --- the boundary -----------------------------------------------------
+
+    def test_exactly_at_the_cap_still_parses(self) -> None:
+        """The cap is the last accepted depth, not the first refused one."""
+        depth = DEFAULT_MAX_JSON_DEPTH
+        assert json_parsed("[" * depth + "]" * depth, list) is not None
+
+    def test_one_past_the_cap_is_refused(self) -> None:
+        depth = DEFAULT_MAX_JSON_DEPTH + 1
+        assert json_parsed("[" * depth + "]" * depth, list) is None
+
+    def test_the_cap_is_configurable(self) -> None:
+        """``RefResolver`` takes a ``max_depth``; so does this."""
+        payload = "[" * 5 + "]" * 5
+        assert json_loads_strict(payload, max_depth=5) is not None
+        with pytest.raises(ValueError, match="nests deeper than 4 levels"):
+            json_loads_strict(payload, max_depth=4)
+
+    def test_mixed_containers_share_one_depth_budget(self) -> None:
+        """``[{"a": [1]}]`` is three levels, not three separate budgets."""
+        assert json_loads_strict('[{"a": [1]}]', max_depth=3) == [{"a": [1]}]
+        with pytest.raises(ValueError, match="nests deeper"):
+            json_loads_strict('[{"a": [1]}]', max_depth=2)
+
+    # --- what the scan must not mistake for structure ---------------------
+
+    @pytest.mark.parametrize(
+        ("text", "limit"),
+        [
+            ('["' + "[" * 500 + '"]', 2),  # brackets inside a string literal
+            ('["' + "{" * 500 + '"]', 2),
+            ('["a \\" [[[[ b"]', 2),  # an escaped quote does not end the string
+            ('["a\\\\"]' + "[]" * 300, 2),  # an escaped backslash does end it
+            ("]]]]]" + "[" * 50 + "]" * 50, 50),  # a leading ']' buys nothing
+        ],
+    )
+    def test_text_that_is_not_structure_does_not_count(self, text: str, limit: int) -> None:
+        assert _exceeds_max_depth(text, limit) is False
+
+    def test_a_string_literal_cannot_hide_real_nesting_behind_it(self) -> None:
+        """The escape tracking has to close the string as well as open it."""
+        assert _exceeds_max_depth('["a"]' + "[" * 300 + "]" * 300, 100) is True
+
+    def test_a_wide_shallow_payload_is_not_refused(self) -> None:
+        """
+        The regression the fast path must never cause.
+
+        10 000 sibling objects is 20 001 brackets and two levels of nesting.
+        Counting brackets rather than measuring depth would refuse it.
+        """
+        payload = "[" + ",".join('{"a": 1}' for _ in range(10_000)) + "]"
+        parsed = json_parsed(payload, list)
+        assert parsed is not None
+        assert len(parsed) == 10_000
+
+    # --- the resource bound -----------------------------------------------
+
+    def test_over_length_input_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="over the 10 limit"):
+            json_loads_strict('["aaaaaaaaaaaa"]', max_length=10)
+
+    def test_length_is_checked_before_anything_is_decoded_or_scanned(self) -> None:
+        """
+        The length bound is what makes the scan's worst case finite, so it has
+        to come first -- including before the ``bytes`` decode, so an oversized
+        payload is never copied into a ``str`` just to be rejected.
+        """
+        with pytest.raises(ValueError, match="over the 4 limit"):
+            json_loads_strict(b"[" * 2_000 + b"]" * 2_000, max_length=4)
+
+    def test_an_ordinary_payload_is_nowhere_near_the_length_bound(self) -> None:
+        assert DEFAULT_MAX_JSON_LENGTH > 1_000_000
+        assert json_loads_strict('{"a": 1}') == {"a": 1}
+
+    # --- bytes ------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "encoding",
+        ["utf-8", "utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "utf-32"],
+    )
+    def test_bytes_are_scanned_as_the_parser_will_read_them(self, encoding: str) -> None:
+        """
+        ``json.loads`` accepts UTF-8/16/32 bytes, so the scan has to agree with
+        it about where the characters are. Scanning raw bytes would not: in
+        UTF-16BE ``U+2200`` is ``22 00``, whose first byte looks exactly like an
+        ASCII quote and would open a string literal that is not there, hiding
+        every bracket after it.
+        """
+        shallow = '{"a": "∀"}'.encode(encoding)
+        assert json_loads_strict(shallow) == {"a": "∀"}
+
+        deep = ("[" * 200 + "]" * 200).encode(encoding)
+        with pytest.raises(ValueError, match="nests deeper"):
+            json_loads_strict(deep)
+
+    def test_undecodable_bytes_stay_a_valueerror(self) -> None:
+        """
+        ``UnicodeDecodeError`` is a ``ValueError``, so moving the decode ahead
+        of the parse did not create a new exception type for callers to catch.
+        """
+        with pytest.raises(ValueError):
+            json_loads_strict(b'{"a": "\xff\xfe\x00"}')
+
+    # --- the refusals reach the public surface ----------------------------
+
+    def test_a_deep_field_value_is_not_repaired_end_to_end(self) -> None:
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(
+            {"fields": [{"path": "meta", "type": "object"}]},
+            {"meta": '{"a": ' * 200 + "1" + "}" * 200},
+        )
+        assert result.repaired_output is None
+        assert result.status is not RepairStatus.SUCCESS
+
+    def test_a_deep_root_is_not_recovered_end_to_end(self) -> None:
+        """
+        The root carries the contract's own field, so without the bound it
+        parses, recovers and succeeds. A bare ``"[" * 200`` root would be
+        refused on shape instead and prove nothing about depth.
+        """
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(
+            {"fields": [{"path": "a", "type": "integer"}]},
+            '{"a": 1, "deep": ' + "[" * 200 + "]" * 200 + "}",
+        )
+        assert result.status is RepairStatus.FAILED
+
+    def test_the_same_root_inside_the_bound_still_succeeds(self) -> None:
+        """The paired positive: identical shape, legal depth, still repaired."""
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair(
+            {"fields": [{"path": "a", "type": "integer"}]},
+            '{"a": 1, "deep": ' + "[" * 50 + "]" * 50 + "}",
+        )
+        assert result.status is RepairStatus.SUCCESS
+
+    def test_repair_never_raises_on_pathological_input(self) -> None:
+        """
+        The never-raises guarantee is why this guard is a refusal rather than
+        an exception that propagates.
+        """
+        guard = ContractGuard.with_dict_schema()
+        contract = {"fields": [{"path": "a", "type": "integer"}]}
+        for payload in ("[" * 50_000 + "]" * 50_000, "{" * 50_000 + "}" * 50_000):
+            assert guard.repair(contract, payload).status is RepairStatus.FAILED
 
 
 class TestJsonParseFidelityIsMeasured:
