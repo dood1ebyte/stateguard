@@ -671,3 +671,163 @@ class TestLoadModel:
     def test_nonexistent_class_raises_system_exit(self) -> None:
         with pytest.raises(SystemExit):
             _load_model("pydantic:NonExistentClass9999")
+
+
+# ---------------------------------------------------------------------------
+# --tool: replaying an MCP tool call
+# ---------------------------------------------------------------------------
+
+FORECAST_TOOL: dict[str, Any] = {
+    "name": "get_forecast",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "location": {"type": "string"},
+            "days": {"type": "integer", "maximum": 14},
+            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"], "default": "celsius"},
+        },
+        "required": ["location", "days"],
+    },
+}
+
+
+def _write(tmp_path: Path, name: str, content: Any) -> str:
+    p = tmp_path / name
+    p.write_text(json.dumps(content))
+    return str(p)
+
+
+class TestToolFlag:
+    """
+    ``check --tool`` is the replay harness: a captured tool definition and a
+    captured call in, what a repairing proxy would do out.
+    """
+
+    def test_a_repairable_call_forwards(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "tool.json", FORECAST_TOOL)
+        args = _write(tmp_path, "args.json", {"loc": "Mumbai", "days": "5"})
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args], capsys)
+        assert code == 0
+        assert out.lstrip().startswith("FORWARD: Repaired 2 field(s)")
+        assert "repaired    location <- loc" in out
+        assert '"location": "Mumbai"' in out
+
+    def test_a_bare_input_schema_works_too(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "schema.json", FORECAST_TOOL["inputSchema"])
+        args = _write(tmp_path, "args.json", {"location": "Mumbai", "days": 3})
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args], capsys)
+        assert code == 0
+        assert "FORWARD" in out
+
+    def test_shadow_sends_the_received_arguments_and_shows_the_preview(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "tool.json", FORECAST_TOOL)
+        args = _write(tmp_path, "args.json", {"loc": "Mumbai", "days": "5"})
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args, "--shadow"], capsys)
+        assert code == 0
+        assert out.lstrip().startswith("HOLD:")
+        assert "Arguments to send (as received" in out
+        assert "Shadow preview" in out
+
+    def test_an_out_of_range_value_is_refused_with_exit_2(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "tool.json", FORECAST_TOOL)
+        args = _write(tmp_path, "args.json", {"location": "x", "days": 99})
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args], capsys)
+        assert code == 2
+        assert "REFUSE" in out
+        assert "not forwarded" in out
+
+    def test_an_ambiguous_call_escalates_with_exit_3(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(
+            tmp_path,
+            "tool.json",
+            {
+                "name": "lookup",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "account_id": {"type": "string"},
+                        "account_name": {"type": "string"},
+                    },
+                    "required": ["account_id", "account_name"],
+                },
+            },
+        )
+        args = _write(tmp_path, "args.json", {"account": "x"})
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args], capsys)
+        assert code == 3
+        assert "ESCALATE" in out
+        assert "held        account_id <- account" in out
+
+    def test_null_arguments_are_no_arguments(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "tool.json", {"name": "ping", "inputSchema": {"type": "object"}})
+        args = _write(tmp_path, "args.json", None)
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args], capsys)
+        assert code == 0
+        assert "FORWARD" in out
+
+    def test_an_unsupported_schema_is_an_error_message_not_a_traceback(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(
+            tmp_path, "tool.json", {"name": "t", "inputSchema": {"type": "object", "allOf": [{}]}}
+        )
+        args = _write(tmp_path, "args.json", {})
+        code, out, err = _run(["check", "--tool", tool, "--payload", args], capsys)
+        assert code == 2
+        assert out == ""
+        assert "cannot check calls against this tool's schema" in err
+        assert "allOf" in err
+
+    def test_json_output_is_the_outcome_record(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "tool.json", FORECAST_TOOL)
+        sent = {"loc": "Mumbai", "days": "5"}
+        args = _write(tmp_path, "args.json", sent)
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args, "--json"], capsys)
+        assert code == 0
+        record = json.loads(out)
+        assert record["action"] == "forward"
+        assert record["arguments"] == {"location": "Mumbai", "days": 5, "unit": "celsius"}
+        assert record["result"]["original_input"] == sent
+        assert [d["decision"] for d in record["result"]["decisions"]] == ["repaired", "repaired"]
+
+    def test_tool_is_exclusive_with_schema(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "tool.json", FORECAST_TOOL)
+        args = _write(tmp_path, "args.json", {})
+        with pytest.raises(SystemExit) as exc_info:
+            main(["check", "--tool", tool, "--schema", tool, "--payload", args])
+        assert exc_info.value.code == 2
+
+
+class TestJsonOutputAdditions:
+    def test_schema_json_output_gains_original_input_and_decisions(
+        self, schema_file: Path, payload_coercible: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        code, out, _ = _run(
+            ["check", "--schema", str(schema_file), "--payload", str(payload_coercible), "--json"],
+            capsys,
+        )
+        assert code == 0
+        record = json.loads(out)
+        assert record["original_input"] == {"temperature": "31.5", "humidity": 80}
+        assert [(d["path"], d["decision"]) for d in record["decisions"]] == [
+            ("temperature", "repaired")
+        ]
+        # The pre-existing keys are still there.
+        for key in ("status", "mode", "violations", "attempts", "ambiguous", "repaired_output"):
+            assert key in record

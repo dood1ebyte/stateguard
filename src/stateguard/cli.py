@@ -14,6 +14,11 @@ Check a payload against a JSON schema file::
 
     stateguard check --schema contract.json --payload payload.json
 
+Check a tool call's arguments against an MCP tool definition (or a bare
+JSON Schema), and see what a proxy would do with it::
+
+    stateguard check --tool tool.json --payload arguments.json
+
 JSON output (for piping into other tools)::
 
     stateguard check --schema contract.json --payload payload.json --json
@@ -39,7 +44,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn
 
 from stateguard import __version__
 
@@ -60,7 +65,7 @@ _EXIT_AMBIGUOUS = 3  # AMBIGUOUS -- a repair was found but withheld
 # ---------------------------------------------------------------------------
 
 
-def _load_json(path_str: str) -> dict[str, Any]:
+def _load_json(path_str: str) -> Any:
     """Load and parse a JSON file; raise SystemExit with a clear message on error."""
     path = Path(path_str)
     if not path.exists():
@@ -69,7 +74,7 @@ def _load_json(path_str: str) -> dict[str, Any]:
         # utf-8-sig tolerates (and strips) a leading BOM -- e.g. files written
         # by PowerShell's `Out-File -Encoding utf8` or Notepad's "UTF-8" save.
         with open(path, encoding="utf-8-sig") as f:
-            return cast(dict[str, Any], json.load(f))
+            return json.load(f)
     except json.JSONDecodeError as exc:
         _die(f"Could not parse JSON in {path}: {exc}")
 
@@ -296,6 +301,11 @@ def _print_json(result: Any) -> None:
         "repaired_output": repaired,
         "proposed_output": proposed,
     }
+    # Added later, so appended rather than merged into the keys above:
+    # existing consumers keep the shape they parse.
+    record = result.to_dict()
+    output["original_input"] = record["original_input"]
+    output["decisions"] = record["decisions"]
     print(json.dumps(output, indent=2, default=str))
 
 
@@ -333,7 +343,10 @@ def _cmd_check(args: argparse.Namespace) -> int:
     )
 
     # Load payload
-    payload: dict[str, Any] = _load_json(args.payload)
+    payload: Any = _load_json(args.payload)
+
+    if args.tool:
+        return _cmd_check_tool(args, config, payload)
 
     # Build guard from --model or --schema
     if args.model:
@@ -360,16 +373,62 @@ def _cmd_check(args: argparse.Namespace) -> int:
     else:
         _print_human(result, args)
 
-    # Exit code
+    return _exit_code(result.status)
+
+
+def _exit_code(status: Any) -> int:
     from stateguard.core.errors.results import RepairStatus  # noqa: PLC0415
 
-    if result.status in (RepairStatus.SUCCESS, RepairStatus.ALREADY_VALID):
+    if status in (RepairStatus.SUCCESS, RepairStatus.ALREADY_VALID):
         return _EXIT_OK
-    if result.status is RepairStatus.PARTIAL:
+    if status is RepairStatus.PARTIAL:
         return _EXIT_PARTIAL
-    if result.status is RepairStatus.AMBIGUOUS:
+    if status is RepairStatus.AMBIGUOUS:
         return _EXIT_AMBIGUOUS
     return _EXIT_FAILED
+
+
+def _cmd_check_tool(args: argparse.Namespace, config: Any, payload: Any) -> int:
+    """
+    ``check --tool``: what a repairing MCP proxy would do with this call.
+
+    The payload is the call's ``arguments`` (``null`` meaning none, as MCP
+    allows). Output is the ``ToolCallOutcome`` -- its explanation, or with
+    ``--json`` its ``to_dict()`` record -- so a captured tool definition and
+    a captured call can be replayed and inspected without writing code.
+    """
+    from stateguard.adapters.jsonschema.errors import JSONSchemaError  # noqa: PLC0415
+    from stateguard.adapters.mcp import repair_tool_call  # noqa: PLC0415
+    from stateguard.guard import ContractGuard  # noqa: PLC0415
+
+    tool = _load_json(args.tool)
+    guard = ContractGuard.with_mcp(config=config)
+    try:
+        outcome = repair_tool_call(guard, tool, payload)
+    except JSONSchemaError as exc:
+        # Not a usage error and not a failed repair: StateGuard cannot read
+        # this schema, so it cannot vouch for any call to the tool. Said
+        # plainly rather than as a traceback.
+        _die(f"cannot check calls against this tool's schema: {exc}")
+
+    if args.json:
+        print(json.dumps(outcome.to_dict(), indent=2, default=str))
+    else:
+        print()
+        print(outcome.explain())
+        print()
+        if outcome.arguments is not None:
+            shadow = " (as received — shadow mode)" if outcome.preview is not None else ""
+            print(f"Arguments to send{shadow}:")
+            _dump_output(outcome.arguments)
+        else:
+            print("Arguments to send: (none — not forwarded)")
+        if outcome.preview is not None:
+            print("Shadow preview (what auto mode would send):")
+            _dump_output(outcome.preview)
+        print()
+
+    return _exit_code(outcome.result.status)
 
 
 # ---------------------------------------------------------------------------
@@ -404,9 +463,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "check",
         help="Validate and repair a payload against a contract.",
         description=(
-            "Validate a JSON payload against a contract (Pydantic model or "
-            "JSON schema file). Attempts to repair any violations found and "
-            "reports the result."
+            "Validate a JSON payload against a contract (Pydantic model, "
+            "StateGuard schema file, or MCP tool definition). Attempts to "
+            "repair any violations found and reports the result."
         ),
     )
 
@@ -425,6 +484,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Path to a JSON contract schema file in StateGuard's simple format. "
             "See 'stateguard/adapters/dict_adapter.py' for the format spec."
+        ),
+    )
+    schema_group.add_argument(
+        "--tool",
+        metavar="FILE",
+        help=(
+            "Path to an MCP tool definition ({'name', 'inputSchema', ...}) or a "
+            "bare JSON Schema. The payload is the call's arguments; the output "
+            "is what a repairing proxy would do: FORWARD, HOLD, ESCALATE or "
+            "REFUSE, and why, field by field. No extra dependencies needed."
         ),
     )
 
