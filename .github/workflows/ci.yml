@@ -102,8 +102,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # ``mcp`` is here so tests/examples/test_mcp_demo.py runs: it is the
+      # only test that drives the documented proxy over real MCP stdio, and
+      # it skips itself without the SDK. ``stateguard.adapters.mcp`` itself
+      # must not need it -- the isolation job checks that with core alone.
       - name: Install all deps
-        run: pip install -e ".[pydantic,dev]"
+        run: pip install -e ".[pydantic,mcp,dev]"
 
       - name: Run unit + integration tests with coverage
         run: |
@@ -123,6 +127,9 @@ jobs:
           echo '{"fields": [{"path": "x", "type": "string"}]}' > /tmp/schema.json
           echo '{"x": "hello"}' > /tmp/payload.json
           stateguard check --schema /tmp/schema.json --payload /tmp/payload.json
+          echo '{"name": "t", "inputSchema": {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]}}' > /tmp/tool.json
+          echo '{"n": "5"}' > /tmp/arguments.json
+          stateguard check --tool /tmp/tool.json --payload /tmp/arguments.json
 
       - name: Benchmark harness smoke test
         run: python benchmarks/runner.py --no-write
