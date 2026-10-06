@@ -21,7 +21,12 @@ from __future__ import annotations
 
 from stateguard.adapters.mcp.adapter import MCPToolAdapter, split_tool_definition
 from stateguard.adapters.mcp.cache import DEFAULT_CACHE_SIZE, SchemaCache
-from stateguard.adapters.mcp.outcomes import MCPAction, ToolCallOutcome, outcome_for
+from stateguard.adapters.mcp.outcomes import (
+    MCPAction,
+    ToolCallOutcome,
+    outcome_for,
+    repair_tool_call,
+)
 
 __all__ = [
     "DEFAULT_CACHE_SIZE",
@@ -30,5 +35,6 @@ __all__ = [
     "SchemaCache",
     "ToolCallOutcome",
     "outcome_for",
+    "repair_tool_call",
     "split_tool_definition",
 ]

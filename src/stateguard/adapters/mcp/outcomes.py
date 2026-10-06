@@ -28,6 +28,16 @@ nothing rather than silently getting mutated data. A proxy in shadow should
 forward the arguments **as the model sent them** and log the difference --
 that is the entire point of shadow -- so this maps to its own action and
 carries the preview separately from what to send.
+
+``arguments`` is always what to send
+------------------------------------
+Whenever ``should_forward`` is true, ``ToolCallOutcome.arguments`` holds the
+payload to put on the wire: the repaired one under ``FORWARD``, the one the
+model sent under ``HOLD``. It used to be ``None`` under ``HOLD`` -- to keep a
+caller from forwarding the preview by accident -- which left the obvious
+``if outcome.should_forward: send(outcome.arguments)`` sending *nothing* in
+shadow, the one mode whose promise is that the server sees exactly what the
+model wrote. The preview stays on ``preview``; it is never on ``arguments``.
 """
 
 from __future__ import annotations
@@ -35,11 +45,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from stateguard.core.errors.results import RepairResult, RepairStatus
 
-__all__ = ["MCPAction", "ToolCallOutcome", "outcome_for"]
+if TYPE_CHECKING:
+    from stateguard.guard import ContractGuard
+
+__all__ = ["MCPAction", "ToolCallOutcome", "outcome_for", "repair_tool_call"]
 
 
 class MCPAction(StrEnum):
@@ -53,8 +66,9 @@ class MCPAction(StrEnum):
         either the original payload (it was already valid) or the repaired
         one.
     HOLD:
-        Shadow mode. Send the call with the arguments **as received**, and
-        log ``ToolCallOutcome.preview`` as what auto mode would have sent.
+        Shadow mode. Send the call with the arguments **as received** --
+        ``ToolCallOutcome.arguments`` holds them -- and log
+        ``ToolCallOutcome.preview`` as what auto mode would have sent.
         Nothing is withheld from the server; what is withheld is the repair.
     ESCALATE:
         A repair was found but not trusted enough to apply unsupervised.
@@ -81,9 +95,12 @@ class ToolCallOutcome:
     action:
         What to do. Branch on this, not on ``result.status``.
     arguments:
-        What to send, when *action* is ``FORWARD``. ``None`` for every other
-        action -- deliberately, so that a caller who forwards without
-        checking sends nothing rather than something unintended.
+        What to send. Under ``FORWARD``, the original payload (it was already
+        valid) or the repaired one; under ``HOLD``, the payload exactly as
+        the model sent it -- never the preview. ``None`` under ``ESCALATE``
+        and ``REFUSE``, so a caller who forwards without checking sends
+        nothing rather than something unintended. Non-``None`` exactly when
+        ``should_forward`` is true.
     preview:
         Under ``HOLD``, what auto mode *would* have sent. ``None``
         otherwise. This is the shadow-mode diff a team watches before
@@ -158,6 +175,43 @@ def outcome_for(result: RepairResult, original_arguments: dict[str, Any]) -> Too
     )
 
 
+def repair_tool_call(guard: ContractGuard, tool: Any, arguments: Any) -> ToolCallOutcome:
+    """
+    Repair one ``tools/call`` and decide what to do with it, in one step.
+
+    Equivalent to ``outcome_for(guard.repair(tool, arguments), arguments)``,
+    with MCP's rule for absent arguments applied first. Prefer it over the
+    two-step form: that form takes the arguments twice, and the two copies
+    have to be the same object for ``HOLD`` to forward the right thing.
+
+    Parameters
+    ----------
+    guard:
+        A guard built with ``ContractGuard.with_mcp()`` (auto or shadow).
+    tool:
+        The tool definition from ``tools/list``, or its bare ``inputSchema``.
+    arguments:
+        The call's ``arguments`` as received. ``None`` is read as ``{}``:
+        MCP makes ``arguments`` optional, the Python SDK's
+        ``call_tool(name, arguments=None)`` sends ``None`` for a tool that
+        takes no parameters, and treating it as a payload refused every such
+        call. Anything else is passed through unchanged -- a JSON-encoded
+        object string is normalised by the engine, other shapes are refused.
+
+    Raises
+    ------
+    JSONSchemaError
+        (a ``ValueError``) when the tool's schema uses a construct StateGuard
+        does not support, or is not a usable schema at all. No call to that
+        tool can be validated, so no outcome is returned: whether such a tool
+        is blocked or passed through unvalidated is the caller's policy, not
+        something to decide per call. Catch it where the tool list is loaded
+        or where the call is made. See ``docs/jsonschema-adapter.md``.
+    """
+    received = {} if arguments is None else arguments
+    return outcome_for(guard.repair(tool, received), received)
+
+
 def _auto_outcome(result: RepairResult, original_arguments: dict[str, Any]) -> ToolCallOutcome:
     """The ``FORWARD`` cases: auto mode committed a payload, so send it."""
     arguments = result.repaired_output
@@ -167,11 +221,12 @@ def _auto_outcome(result: RepairResult, original_arguments: dict[str, Any]) -> T
         arguments = dict(original_arguments)
 
     if result.status is RepairStatus.SUCCESS:
+        phrase = _repairs_phrase(result)
         return ToolCallOutcome(
             action=MCPAction.FORWARD,
             arguments=arguments,
             preview=None,
-            reason=f"Repaired {_operation_count(result)} field(s) before forwarding.",
+            reason=f"{phrase[0].upper()}{phrase[1:]} before forwarding.",
             result=result,
         )
 
@@ -228,9 +283,9 @@ def _shadow_outcome(result: RepairResult, original_arguments: dict[str, Any]) ->
         )
 
     repairs = _operation_count(result)
-    if repairs:
+    if repairs or _root_note(result) is not None:
         reason = (
-            f"Shadow mode: {repairs} repair(s) determined and withheld. "
+            f"Shadow mode: {_repairs_phrase(result)} determined and withheld. "
             f"Forward the original arguments and review the preview."
         )
     else:
@@ -252,7 +307,7 @@ def _shadow_outcome(result: RepairResult, original_arguments: dict[str, Any]) ->
 
     return ToolCallOutcome(
         action=MCPAction.HOLD,
-        arguments=None,
+        arguments=_as_received(original_arguments),
         preview=proposed,
         reason=reason,
         result=result,
@@ -313,7 +368,49 @@ def _added_paths(
 
 
 def _operation_count(result: RepairResult) -> int:
-    return sum(len(attempt.applied_operations) for attempt in result.attempts)
+    """Operations that reached the payload -- a discarded attempt's did not."""
+    return sum(len(attempt.applied_operations) for attempt in result.attempts if attempt.kept)
+
+
+def _root_note(result: RepairResult) -> str | None:
+    """
+    What the engine did to a payload whose root was not an object, if anything.
+
+    A JSON-encoded string or a single-element list wrapping the object is
+    unwrapped before any field-level strategy runs, so it never appears as an
+    operation -- which made the reason for such a call read "Repaired 0
+    field(s)", or in shadow claim the arguments "matched the tool's schema".
+    """
+    for entry in result.repair_log:
+        if entry.event == "root.normalised":
+            return str(entry.data.get("action", "normalised the payload root"))
+    return None
+
+
+def _repairs_phrase(result: RepairResult) -> str:
+    """
+    What was done to the payload, as a lower-case clause.
+
+    Auto: ``"repaired 2 field(s)"``, ``"normalised the payload root (parsed a
+    JSON object from the string payload)"``, or both joined. Shadow names the
+    same things as nouns, since nothing was done: ``"2 repair(s)"``.
+    """
+    count = _operation_count(result)
+    root = _root_note(result)
+    if result.is_shadow:
+        fields = f"{count} repair(s)"
+        root_part = f"a payload-root normalisation ({root})"
+    else:
+        fields = f"repaired {count} field(s)"
+        root_part = f"normalised the payload root ({root})"
+    if root is None:
+        return fields
+    return root_part if not count else f"{root_part} and {fields}"
+
+
+def _as_received(arguments: Any) -> Any:
+    """A copy of the model's payload, for ``HOLD`` to send unchanged."""
+    return dict(arguments) if isinstance(arguments, Mapping) else arguments
 
 
 def _ambiguous_fields(result: RepairResult) -> str:

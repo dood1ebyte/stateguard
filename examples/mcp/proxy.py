@@ -41,7 +41,7 @@ from mcp import Client
 from mcp.types import CallToolResult
 
 from stateguard import ContractGuard
-from stateguard.adapters.mcp import MCPAction, ToolCallOutcome, outcome_for
+from stateguard.adapters.mcp import MCPAction, ToolCallOutcome, repair_tool_call
 
 __all__ = ["ProxiedCall", "RepairingClient"]
 
@@ -127,8 +127,19 @@ class RepairingClient:
     # Calls
     # ------------------------------------------------------------------
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> ProxiedCall:
-        """Repair *arguments* against the tool's schema, then act on the verdict."""
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> ProxiedCall:
+        """
+        Repair *arguments* against the tool's schema, then act on the verdict.
+
+        ``arguments=None`` is a call with no arguments, as MCP allows.
+
+        A tool whose schema StateGuard cannot read (``allOf``, a remote
+        ``$ref``, ...) raises ``JSONSchemaError`` here and nothing is sent.
+        That is this demo's policy -- fail closed. A deployment that would
+        rather pass such tools through unvalidated catches the error and
+        calls ``self._client.call_tool`` itself; either way it is a decision
+        about the tool, not about one call.
+        """
         if not self._tools:
             await self.load_tools()
 
@@ -139,7 +150,7 @@ class RepairingClient:
                 f"Call load_tools() again if the server's tool list changed."
             )
 
-        outcome = outcome_for(self._guard.repair(tool, arguments), arguments)
+        outcome = repair_tool_call(self._guard, tool, arguments)
         self._say(f"  StateGuard: {outcome.action.upper()} -- {outcome.reason}")
 
         if outcome.action is MCPAction.FORWARD:
@@ -155,10 +166,11 @@ class RepairingClient:
                 )
             sent = outcome.arguments
         elif outcome.action is MCPAction.HOLD:
-            # Shadow: the server sees exactly what the model sent. The
-            # repair is reported, not applied -- that is the whole contract
-            # of shadow mode, and applying it here would quietly break it.
-            sent = arguments
+            # Shadow: the server sees exactly what the model sent -- which is
+            # what ``outcome.arguments`` holds under HOLD. The repair is
+            # reported (``preview``), not applied; applying it here would
+            # quietly break the whole contract of shadow mode.
+            sent = outcome.arguments
             self._say(f"  would have sent: {outcome.preview}")
         else:
             # ESCALATE or REFUSE. Not sent.
