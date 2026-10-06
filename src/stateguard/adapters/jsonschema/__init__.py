@@ -15,6 +15,13 @@ Zero external dependencies.
 from __future__ import annotations
 
 from stateguard.adapters.jsonschema.adapter import JSONSchemaAdapter
+from stateguard.adapters.jsonschema.diff import (
+    ChangeKind,
+    SchemaChange,
+    SchemaChangeStatus,
+    SchemaDiff,
+    diff_schemas,
+)
 from stateguard.adapters.jsonschema.errors import (
     JSONSchemaError,
     MalformedReferenceError,
@@ -34,6 +41,7 @@ from stateguard.adapters.jsonschema.refs import RefResolver
 from stateguard.adapters.jsonschema.type_mapper import JSONSchemaTypeMapper
 
 __all__ = [
+    "ChangeKind",
     "JSONSchemaAdapter",
     "JSONSchemaError",
     "JSONSchemaExtractor",
@@ -41,10 +49,14 @@ __all__ = [
     "MalformedReferenceError",
     "MalformedSchemaError",
     "RefResolver",
+    "SchemaChange",
+    "SchemaChangeStatus",
+    "SchemaDiff",
     "SchemaFeatureWarning",
     "SchemaFingerprint",
     "SchemaReferenceError",
     "UnsupportedSchemaError",
+    "diff_schemas",
     "document_fingerprint",
     "fingerprint_schema",
     "normalize_schema",
