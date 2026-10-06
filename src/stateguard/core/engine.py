@@ -95,7 +95,7 @@ from stateguard.core.interfaces.adapter import IContractAdapter
 from stateguard.core.models.config import RepairConfig, RepairMode
 from stateguard.core.models.contract import ContractSpec, find_field_spec
 from stateguard.core.models.field_types import FieldType, UnionMember
-from stateguard.core.paths import NOT_FOUND, get_nested_value
+from stateguard.core.paths import NOT_FOUND, addresses_array_element, get_nested_value
 from stateguard.core.strategies.coerce import (
     _array_wrap_is_safe,
     _parsed_array_matches,
@@ -824,8 +824,14 @@ class RepairEngine:
 
         for attempt_number in range(1, self._config.max_attempts + 1):
             correlated = self._correlate_violations(current_violations)
+            # A violation inside an array element (``files[0].path``) is
+            # reported, never repaired: no strategy addresses a path through
+            # a list, and handing one over would let ``_set_nested`` invent a
+            # key literally named ``files[0]``. It stays in the violation set,
+            # so it still counts towards the status.
+            targets = [v for v in correlated if not addresses_array_element(v.field_path)]
 
-            applicable = self._registry.get_applicable(correlated, contract, working_data)
+            applicable = self._registry.get_applicable(targets, contract, working_data)
             if not applicable:
                 self._logger.warning(
                     "strategy.none_applicable",
@@ -862,7 +868,7 @@ class RepairEngine:
                 considered_strategies.append(considered.name)
                 offered = [
                     self._hold_tainted(self._policy.evaluate(op), withheld_sources)
-                    for op in considered.propose(correlated, contract, working_data)
+                    for op in considered.propose(targets, contract, working_data)
                 ]
                 # Taint immediately, not after the selection loop finishes.
                 # A key this strategy just declined to place must already be
@@ -982,7 +988,7 @@ class RepairEngine:
                     attempt_number=attempt_number,
                     strategy_name=strategy.name,
                     considered_strategies=considered_strategies,
-                    violations_targeted=[v.violation_id for v in correlated],
+                    violations_targeted=[v.violation_id for v in targets],
                     proposed_operations=proposed,
                     applied_operations=applied_ops,
                     rejected_operations=rejected_ops,

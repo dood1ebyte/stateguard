@@ -29,6 +29,7 @@ from stateguard.core.models.field_types import (
     type_matches,
     union_member_matches,
 )
+from stateguard.core.paths import element_path
 
 __all__ = ["ContractValidator", "root_structural_violation"]
 
@@ -304,6 +305,17 @@ class ContractValidator:
                             )
                         )
                         break
+
+            if field_spec.item_spec is not None:
+                # Each object element against the element contract, reported
+                # at ``path[i].field``. Elements that are not objects were
+                # already reported by the item_type check above.
+                for index, item in enumerate(value):
+                    if not isinstance(item, dict):
+                        continue
+                    where = element_path(full_path, index)
+                    self._validate_fields(field_spec.item_spec, item, where, violations)
+                    self._detect_unexpected(field_spec.item_spec, item, where, violations)
 
             self._check_constraints(field_spec, value, full_path, violations)
             return

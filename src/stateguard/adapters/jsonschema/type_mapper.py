@@ -282,6 +282,21 @@ class JSONSchemaTypeMapper:
         for branch in surviving:
             with resolver.resolved(branch) as target:
                 mapped = self.map_schema(target, resolver, path)
+                if mapped.field_type is FieldType.OBJECT and (
+                    target.get("properties") or target.get("required")
+                ):
+                    # A union member is a type and nothing more, so an object
+                    # branch's own properties are never checked: a value is
+                    # accepted if it is *an* object. Said out loud, like every
+                    # other place validation is looser than the schema.
+                    warnings.warn(
+                        f"Field '{path}': an 'anyOf'/'oneOf' branch is an object with "
+                        f"declared properties, which StateGuard does not validate -- any "
+                        f"object is accepted for that branch, so this field is validated "
+                        f"more loosely than the schema specifies.",
+                        SchemaFeatureWarning,
+                        stacklevel=2,
+                    )
             members.append(
                 UnionMember(
                     field_type=mapped.field_type,

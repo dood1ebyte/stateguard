@@ -283,6 +283,10 @@ class JSONSchemaExtractor:
                 else:
                     screen_keywords(effective, path)
 
+                item_spec = None
+                if mapped.field_type is FieldType.ARRAY and mapped.item_type is FieldType.OBJECT:
+                    item_spec = self._item_spec(effective, resolver, path)
+
                 spec = FieldSpec(
                     path=name,
                     field_type=mapped.field_type,
@@ -292,9 +296,30 @@ class JSONSchemaExtractor:
                     item_type=mapped.item_type,
                     nested_spec=nested_spec,
                     union_members=mapped.union_members,
+                    item_spec=item_spec,
                 )
                 spec.default = self._screened_default(spec, path)
                 return spec
+
+    def _item_spec(
+        self, schema: Mapping[str, Any], resolver: RefResolver, path: str
+    ) -> ContractSpec | None:
+        """
+        The contract each element of an array of objects must satisfy.
+
+        Without it, ``{"files": [{"path": 1}]}`` against items requiring a
+        string ``path`` was reported as matching the schema: ``item_type``
+        says "object" and nothing more, so the element's contents were never
+        looked at. ``None`` when the element schema declares no properties
+        and requires nothing -- there is nothing to check beyond "object".
+        """
+        items = schema.get("items")
+        if not isinstance(items, Mapping):
+            return None
+        with resolver.resolved(items) as target:
+            if not target.get("properties") and not target.get("required"):
+                return None
+            return self._spec(target, resolver, f"{path}[]")
 
     def _screened_default(self, spec: FieldSpec, path: str) -> Any:
         """
@@ -369,6 +394,13 @@ class JSONSchemaExtractor:
             )
         if not name:
             raise UnsupportedSchemaError("Property names must not be empty.")
+        if "[" in name or "]" in name:
+            raise UnsupportedSchemaError(
+                f"Property name {name!r} contains '[' or ']', which StateGuard uses to "
+                f"address array elements in a field path ('files[0].path'), so a "
+                f"violation reported for it could not be told apart from one inside "
+                f"an array."
+            )
 
     @staticmethod
     def _default(schema: Mapping[str, Any]) -> Any:

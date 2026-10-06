@@ -23,7 +23,13 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["NOT_FOUND", "get_nested_value"]
+__all__ = [
+    "ELEMENT_OPEN",
+    "NOT_FOUND",
+    "addresses_array_element",
+    "element_path",
+    "get_nested_value",
+]
 
 
 class _NotFound:
@@ -70,3 +76,25 @@ def get_nested_value(data: Any, path: str) -> Any:
             return NOT_FOUND
         current = current[part]
     return current
+
+
+#: Opens an array index in a violation path: ``files[0].path``.
+ELEMENT_OPEN = "["
+
+
+def element_path(array_path: str, index: int) -> str:
+    """The path of element *index* of the array at *array_path*: ``files[0]``."""
+    return f"{array_path}{ELEMENT_OPEN}{index}]"
+
+
+def addresses_array_element(path: str) -> bool:
+    """
+    Whether *path* points inside an array element (``files[0].path``).
+
+    Such paths are for *reporting*: the validator checks array elements
+    against their item contract and says where an element is wrong, but no
+    repair strategy addresses a path through a list, so the engine never
+    hands these violations to one. Property names containing ``[`` are
+    refused at extraction, so the marker is unambiguous.
+    """
+    return ELEMENT_OPEN in path
