@@ -576,6 +576,7 @@ def _cmd_replay(args: argparse.Namespace) -> int:
 
     records: list[dict[str, Any]] = []
     counts: Counter[str] = Counter()
+    auto_counts: Counter[str] = Counter()
     for index, call in enumerate(_load_calls(args.calls)):
         parts = _call_parts(call)
         record: dict[str, Any] = {"index": index}
@@ -599,6 +600,7 @@ def _cmd_replay(args: argparse.Namespace) -> int:
                     explanation=None if args.json else outcome.explain(),
                 )
         counts[record["outcome"]] += 1
+        auto_counts[record.get("auto_action", record["outcome"])] += 1
         records.append(record)
 
     if args.json:
@@ -608,6 +610,7 @@ def _cmd_replay(args: argparse.Namespace) -> int:
                     "mode": mode.value,
                     "tools": listing.to_dict()["summary"],
                     "summary": dict(sorted(counts.items())),
+                    "auto_summary": dict(sorted(auto_counts.items())),
                     "calls": [{k: v for k, v in r.items() if k != "explanation"} for r in records],
                 },
                 indent=2,
@@ -631,6 +634,10 @@ def _cmd_replay(args: argparse.Namespace) -> int:
         print()
     summary = ", ".join(f"{count} {name}" for name, count in sorted(counts.items()))
     print(f"Summary: {summary}")
+    if mode is RepairMode.SHADOW:
+        # The shadow review question: what would turning auto mode on change?
+        would = ", ".join(f"{count} {name}" for name, count in sorted(auto_counts.items()))
+        print(f"Auto mode would: {would}")
     return _EXIT_OK
 
 

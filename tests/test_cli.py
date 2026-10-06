@@ -955,6 +955,23 @@ class TestReplayCommand:
         assert record["summary"] == {"hold": 2, "malformed_call": 1, "unknown_tool": 1}
         assert [c.get("auto_action") for c in record["calls"][:2]] == ["forward", "refuse"]
         assert record["calls"][0]["id"] == 1
+        assert record["auto_summary"] == {
+            "forward": 1,
+            "malformed_call": 1,
+            "refuse": 1,
+            "unknown_tool": 1,
+        }
+
+    def test_shadow_summary_says_what_auto_would_change(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tools = _write(tmp_path, "t.json", [FORECAST_TOOL])
+        code, out, _ = _run(
+            ["replay", "--tools", tools, "--calls", self._calls(tmp_path), "--shadow"], capsys
+        )
+        assert code == 0
+        assert "Summary: 2 hold, 1 malformed_call, 1 unknown_tool" in out
+        assert "Auto mode would: 1 forward, 1 malformed_call, 1 refuse, 1 unknown_tool" in out
 
     def test_unreadable_tools_are_named(
         self, tmp_path: Path, capsys: pytest.CaptureFixture
