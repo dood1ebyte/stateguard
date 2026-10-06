@@ -69,7 +69,7 @@ from stateguard.adapters.jsonschema.errors import (
     UnsupportedSchemaError,
 )
 
-__all__ = ["DEFAULT_MAX_DEPTH", "RefResolver"]
+__all__ = ["DEFAULT_MAX_DEPTH", "DEFAULT_MAX_EXPANSIONS", "RefResolver"]
 
 
 #: Maximum number of nested ``resolved()`` contexts before a schema is
@@ -83,6 +83,22 @@ __all__ = ["DEFAULT_MAX_DEPTH", "RefResolver"]
 #: to exhaust CPython's default 1000-frame limit, with headroom for a host
 #: that has lowered ``sys.setrecursionlimit``.
 DEFAULT_MAX_DEPTH = 100
+
+#: Maximum number of subschemas one traversal may expand, in total.
+#:
+#: The depth cap bounds how *deep* a walk goes, not how *wide*: references
+#: are expanded per occurrence, so a chain of definitions that each refer to
+#: the next twice doubles at every level --
+#: ``D0 = {a: D1, b: D1}, D1 = {a: D2, b: D2}, ...`` -- and stays well inside
+#: the depth cap while expanding to 2**depth subschemas. Measured: 16 such
+#: levels, a ~2 KB document, took 3.4 s and produced 131,071 fields; each
+#: further level doubles it. A tool definition arrives from a third party, so
+#: that is a denial of service a ``tools/list`` response can deliver.
+#:
+#: The real-schema corpus needs at most 15 expansions per extraction, so
+#: 10,000 leaves several hundredfold headroom for legitimate schemas while
+#: refusing the blow-up a dozen levels in.
+DEFAULT_MAX_EXPANSIONS = 10_000
 
 
 class RefResolver:
@@ -99,6 +115,9 @@ class RefResolver:
         How deeply resolution may nest before the schema is refused.  See
         ``DEFAULT_MAX_DEPTH`` for what the number counts and why it is not
         expressed in schema levels.
+    max_expansions:
+        How many subschemas one traversal may expand in total before the
+        schema is refused.  See ``DEFAULT_MAX_EXPANSIONS``.
 
     Not thread-safe and not reusable across concurrent extractions: the
     active-pointer stack is per-traversal state.  Construct one per
@@ -109,11 +128,14 @@ class RefResolver:
         self,
         root: Mapping[str, Any],
         max_depth: int = DEFAULT_MAX_DEPTH,
+        max_expansions: int = DEFAULT_MAX_EXPANSIONS,
     ) -> None:
         self._root = root
         self._active: list[str] = []
         self._max_depth = max_depth
         self._depth = 0
+        self._max_expansions = max_expansions
+        self._expansions = 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -154,6 +176,17 @@ class RefResolver:
                 f"RecursionError rather than something a caller can act on. "
                 f"Raise RefResolver's 'max_depth' if the schema is genuinely "
                 f"this deep and the stack can take it."
+            )
+
+        self._expansions += 1
+        if self._expansions > self._max_expansions:
+            raise SchemaReferenceError(
+                f"Schema expands to more than {self._max_expansions} subschemas and "
+                f"is refused rather than walked. References are expanded per "
+                f"occurrence, so definitions that each refer to the next more than "
+                f"once grow exponentially -- a small document can describe billions "
+                f"of fields. Raise RefResolver's 'max_expansions' if a schema is "
+                f"genuinely this large."
             )
 
         target, pointers = self._follow(schema)
