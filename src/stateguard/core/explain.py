@@ -32,6 +32,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from stateguard.core.errors.operations import FieldOperation
+from stateguard.core.errors.violations import ViolationType
 
 if TYPE_CHECKING:
     from stateguard.core.errors.results import RepairResult
@@ -67,7 +68,9 @@ class FieldDecisionKind(StrEnum):
         back with the rest of its attempt (``RepairAttempt.kept`` is
         ``False``). It is in no payload.
     UNRESOLVED:
-        A violation that remains and that no applied repair addressed.
+        A violation that remains and that no applied repair addressed --
+        including, at ``warning`` severity, a key the contract does not
+        declare that was left in the payload as received.
     """
 
     REPAIRED = "repaired"
@@ -136,9 +139,10 @@ def field_decisions(result: RepairResult) -> list[FieldDecision]:
 
     Applied operations come first, in the order the engine applied them;
     then held repairs, in the order the engine recorded them; then
-    violations nothing resolved, in the order they were reported. A field
-    with a held repair is not listed again as unresolved -- the hold is the
-    more specific answer.
+    violations nothing resolved, in the order they were reported -- including
+    undeclared keys passed through as warnings, which ``remaining_violations``
+    omits on ``SUCCESS``. A field with a held repair is not listed again as
+    unresolved -- the hold is the more specific answer.
     """
     decisions: list[FieldDecision] = []
 
@@ -174,9 +178,12 @@ def field_decisions(result: RepairResult) -> list[FieldDecision]:
             )
         )
 
-    for violation in result.remaining_violations:
-        if violation.field_path in held_paths:
+    listed: set[tuple[str, str]] = set()
+    for violation in [*result.remaining_violations, *_passed_through(result)]:
+        key = (violation.field_path, violation.violation_type.value)
+        if violation.field_path in held_paths or key in listed:
             continue
+        listed.add(key)
         decisions.append(
             FieldDecision(
                 path=violation.field_path,
@@ -187,6 +194,33 @@ def field_decisions(result: RepairResult) -> list[FieldDecision]:
         )
 
     return decisions
+
+
+def _passed_through(result: RepairResult) -> list[ContractViolation]:
+    """
+    Undeclared keys that were left in the payload, warnings included.
+
+    ``remaining_violations`` is empty on ``SUCCESS`` even when a key the
+    contract does not declare is still in the payload -- a non-strict
+    contract only warns about it, and the warning is dropped with the rest.
+    That is precisely where a model's intent can vanish without trace: a
+    drifted *optional* parameter (``maxLength`` for ``max_length``) is not
+    renamed, the server ignores it, and the declared default is used
+    instead. So an initial ``UNEXPECTED_FIELD`` is reported unless a kept
+    repair consumed the key.
+    """
+    consumed = {
+        op.source_path
+        for attempt in result.attempts
+        if attempt.kept
+        for op in attempt.applied_operations
+        if op.source_path is not None
+    }
+    return [
+        v
+        for v in result.initial_violations
+        if v.violation_type is ViolationType.UNEXPECTED_FIELD and v.field_path not in consumed
+    ]
 
 
 def _discard_cause(result: RepairResult, attempt_number: int) -> str:
