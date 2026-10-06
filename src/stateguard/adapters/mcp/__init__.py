@@ -29,6 +29,12 @@ from stateguard.adapters.mcp.errors import (
     ToolNotFoundError,
     ToolSchemaUnusableError,
 )
+from stateguard.adapters.mcp.jsonrpc import (
+    ToolCallRequest,
+    ToolListAccumulator,
+    forward_message,
+    refusal_response,
+)
 from stateguard.adapters.mcp.outcomes import (
     MCPAction,
     ToolCallOutcome,
@@ -59,12 +65,16 @@ __all__ = [
     "SchemaCache",
     "SyncReport",
     "ToolCallOutcome",
+    "ToolCallRequest",
+    "ToolListAccumulator",
     "ToolChange",
     "ToolChangeKind",
     "ToolKey",
     "ToolRegistry",
     "ToolState",
+    "forward_message",
     "outcome_for",
+    "refusal_response",
     "repair_tool_call",
     "split_tool_definition",
 ]
