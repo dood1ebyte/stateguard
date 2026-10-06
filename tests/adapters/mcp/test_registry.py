@@ -420,7 +420,20 @@ class TestCalls:
         with pytest.raises(ToolNotFoundError) as info:
             registry.process_call("serch", {})
         assert info.value.known == ["search"]
+        assert info.value.elsewhere == []
         assert isinstance(info.value, LookupError)
+
+    def test_a_tool_on_another_server_is_named_not_used(self, registry: ToolRegistry) -> None:
+        """The usual cause: a forgotten ``server=``. Say so; never guess."""
+        registry.register(_tool("search"), server="b")
+        registry.register(_tool("search"), server="a")
+        with pytest.raises(ToolNotFoundError, match="pass server=") as info:
+            registry.process_call("search", {"query": "x"})
+        assert info.value.known == []
+        assert info.value.elsewhere == ["a", "b"]
+        with pytest.raises(ToolNotFoundError) as info:
+            registry.get("search", server="c")
+        assert info.value.elsewhere == ["a", "b"]
 
     def test_no_arguments(self, registry: ToolRegistry) -> None:
         registry.register({"name": "ping", "inputSchema": {"type": "object"}})

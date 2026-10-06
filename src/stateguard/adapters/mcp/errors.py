@@ -73,17 +73,34 @@ class InvalidToolDefinitionError(MCPAdapterError, MalformedSchemaError):
 
 
 class ToolNotFoundError(MCPAdapterError, LookupError):
-    """No tool is registered under this (server, name)."""
+    """
+    No tool is registered under this (server, name).
 
-    def __init__(self, name: str, server: str | None, known: list[str]) -> None:
+    ``known`` lists the tool names registered on the same server.
+    ``elsewhere`` lists the *other* servers that do have a tool with this
+    name -- lookups never guess across servers, so the usual cause of this
+    error with a non-empty ``elsewhere`` is a missing ``server=``.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        server: str | None,
+        known: list[str],
+        elsewhere: list[str | None] | None = None,
+    ) -> None:
         self.name = name
         self.server = server
         self.known = known
-        where = f" on server {server!r}" if server is not None else ""
-        super().__init__(
-            f"No tool {name!r} is registered{where}. Known: {known}. If the "
-            f"server's tool list changed, register or sync it again."
+        self.elsewhere = list(elsewhere or [])
+        where = f" on server {server!r}" if server is not None else " with no server"
+        hint = (
+            f" A tool with this name is registered on server(s) {self.elsewhere}; "
+            f"pass server= to address it."
+            if self.elsewhere
+            else " If the server's tool list changed, register or sync it again."
         )
+        super().__init__(f"No tool {name!r} is registered{where}. Known: {known}.{hint}")
 
 
 class ToolSchemaUnusableError(MCPAdapterError, ValueError):

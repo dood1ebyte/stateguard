@@ -442,7 +442,7 @@ class ToolRegistry:
         with self._lock:
             entry = self._tools.get(key)
             if entry is None:
-                raise ToolNotFoundError(name, server, self._names(server))
+                raise self._not_found(name, server)
             return entry
 
     def find(self, name: str, *, server: str | None = None) -> RegisteredTool | None:
@@ -483,6 +483,16 @@ class ToolRegistry:
     def _names(self, server: str | None) -> list[str]:
         return sorted(key.name for key in self._tools if key.server == server)
 
+    def _not_found(self, name: str, server: str | None) -> ToolNotFoundError:
+        """Caller holds the lock."""
+        elsewhere = sorted(
+            (key for key in self._tools if key.name == name and key.server != server),
+            key=lambda key: key.sort_key,
+        )
+        return ToolNotFoundError(
+            name, server, self._names(server), [key.server for key in elsewhere]
+        )
+
     # ------------------------------------------------------------------
     # Writing
     # ------------------------------------------------------------------
@@ -512,7 +522,7 @@ class ToolRegistry:
         with self._lock:
             previous = self._tools.pop(key, None)
             if previous is None:
-                raise ToolNotFoundError(name, server, self._names(server))
+                raise self._not_found(name, server)
             self._call_definitions.pop(key, None)
         return ToolChange(key, ToolChangeKind.REMOVED, previous=previous)
 
@@ -600,7 +610,7 @@ class ToolRegistry:
         with self._lock:
             entry = self._tools.get(key)
             if entry is None:
-                raise ToolNotFoundError(name, server, self._names(server))
+                raise self._not_found(name, server)
             definition = self._call_definitions.get(key)
         if not entry.usable or definition is None:
             assert entry.error is not None
