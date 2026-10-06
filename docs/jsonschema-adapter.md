@@ -210,12 +210,16 @@ warnings.simplefilter("error", SchemaFeatureWarning)
 
 | Situation | Effect |
 |---|---|
-| `exclusiveMinimum` / `exclusiveMaximum` | dropped — an exclusive bound is not an inclusive one, and rounding it would accept a value the schema forbids |
 | `additionalProperties` as a *schema object* | undeclared properties are accepted untyped; StateGuard can require the declared set be exhaustive, not type the members it has no name for |
 | tuple-form `items` (a positional list) | element typing widened to `ANY`; one element type applies to the whole array |
 | a `default` that fails its own field | the default is dropped, and the field is not auto-filled |
 
-`exclusiveMinimum` is not hypothetical: `mcp-server-fetch` ships it today.
+`exclusiveMinimum` / `exclusiveMaximum` used to head this table. They are
+enforced now, in both the numeric (2019-09+) form and the draft-4 boolean
+form that makes `minimum` / `maximum` exclusive. It mattered:
+`mcp-server-fetch` ships `max_length` with `exclusiveMinimum: 0`, and a
+differential run against the `jsonschema` reference validator caught `0`
+passing StateGuard and failing the server.
 
 ---
 
@@ -337,9 +341,9 @@ wire — not by transcribing their source.
 | `mcp-server-time` | 2026.8.18 | 2 |
 | `mcp-server-fetch` | 2026.8.18 | 1 |
 
-**21 tool schemas, all extracting without refusal**, producing exactly two
-`SchemaFeatureWarning`s (both `mcp-server-fetch`'s `exclusiveMinimum` /
-`exclusiveMaximum`). Every one round-trips: a payload built to satisfy the
+**21 tool schemas, all extracting without refusal**, producing no dropped-keyword
+`SchemaFeatureWarning`s (the two `mcp-server-fetch` exclusive bounds that
+used to warn are enforced now). Every one round-trips: a payload built to satisfy the
 extracted contract comes back `ALREADY_VALID`, and the output survives
 `validate`.
 

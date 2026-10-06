@@ -567,8 +567,7 @@ class TestAdditionalProperties:
         """
         ``{"additionalProperties": {"type": "string"}}`` types the properties
         it has no name for. ``ContractSpec`` cannot express that, so it is
-        validated more loosely than the schema asks -- the same situation
-        ``exclusiveMinimum`` is in, and that one has always warned.
+        validated more loosely than the schema asks, so it warns.
         """
         with pytest.warns(SchemaFeatureWarning, match="undeclared properties"):
             spec = _extract(

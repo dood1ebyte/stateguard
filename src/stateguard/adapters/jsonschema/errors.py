@@ -47,12 +47,15 @@ class SchemaFeatureWarning(UserWarning):
     refused outright, while this means extraction continued with slightly
     *less* validation than the schema asked for.
 
-    The only cases are ``exclusiveMinimum`` / ``exclusiveMaximum``, which
-    have no ``FieldConstraintType`` -- an exclusive bound is not expressible
-    as an inclusive one, and silently rounding it to ``MINIMUM`` would accept
-    a value the schema forbids. Warning rather than raising keeps a schema
-    that merely tightens a bound usable, while making sure the gap is never
-    invisible.
+    The cases are a schema-valued ``additionalProperties`` (undeclared
+    properties are accepted untyped), tuple-form ``items`` (element typing
+    widened to ``ANY``), an object-typed union branch, and a ``default``
+    that fails its own field (dropped, not auto-filled). Warning rather than
+    raising keeps a schema that is merely stricter than StateGuard can model
+    usable, while making sure the gap is never invisible.
+
+    ``exclusiveMinimum`` / ``exclusiveMaximum`` used to be on this list;
+    they are enforced now.
 
     A caller who wants these to be fatal can turn them into errors::
 

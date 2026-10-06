@@ -31,7 +31,8 @@ What normalisation does
   sorted and de-duplicated, ``enum`` members and ``anyOf`` / ``oneOf``
   branches are sorted by their canonical rendering;
 * spellings that mean the same thing are unified: an empty ``required`` or
-  ``properties`` is dropped, ``additionalProperties: true`` is dropped,
+  ``properties`` is dropped, ``additionalProperties: true`` and draft 4's
+  ``exclusiveMinimum: false`` / ``exclusiveMaximum: false`` are dropped,
   ``"type": ["string"]`` becomes ``"type": "string"``, and an integral float
   (``1.0``) becomes the integer it equals, as JSON Schema treats them.
 
@@ -193,6 +194,8 @@ def _normalize(node: Mapping[str, Any], resolver: RefResolver) -> dict[str, Any]
             out[key] = _subschema(value, resolver)
         elif key == "additionalProperties" and value is True:
             continue  # the default
+        elif key in ("exclusiveMinimum", "exclusiveMaximum") and value is False:
+            continue  # draft 4's "the bound is inclusive": the default
         elif key == "items" and _is_list(value):
             out[key] = [_subschema(item, resolver) for item in value]  # tuple form: ordered
         elif key in _BRANCH_KEYWORDS and _is_list(value):

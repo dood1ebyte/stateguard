@@ -64,6 +64,13 @@ from stateguard.core.validator import ContractValidator
 
 __all__ = ["JSONSchemaExtractor"]
 
+#: Draft 4's boolean exclusive flags, by the inclusive keyword they modify.
+_DRAFT4_EXCLUSIVE_BY = {"minimum": "exclusiveMinimum", "maximum": "exclusiveMaximum"}
+_EXCLUSIVE_OF = {
+    FieldConstraintType.MINIMUM: FieldConstraintType.EXCLUSIVE_MINIMUM,
+    FieldConstraintType.MAXIMUM: FieldConstraintType.EXCLUSIVE_MAXIMUM,
+}
+
 
 class JSONSchemaExtractor:
     """Converts a JSON Schema document into a ``ContractSpec``. Stateless."""
@@ -403,6 +410,36 @@ class JSONSchemaExtractor:
             )
 
     @staticmethod
+    def _exclusive_bounds(schema: Mapping[str, Any], path: str) -> list[FieldConstraint]:
+        """
+        ``exclusiveMinimum`` / ``exclusiveMaximum`` in their numeric form.
+
+        These used to be dropped with a warning -- there was no constraint
+        type for them -- and ``mcp-server-fetch`` really uses one: its
+        ``max_length`` accepted ``0`` through StateGuard and was rejected by
+        the server. The boolean draft-4 form is handled where the inclusive
+        bound it modifies is read; ``false`` means "inclusive", and adds
+        nothing here.
+        """
+        constraints: list[FieldConstraint] = []
+        for keyword, constraint_type in (
+            ("exclusiveMinimum", FieldConstraintType.EXCLUSIVE_MINIMUM),
+            ("exclusiveMaximum", FieldConstraintType.EXCLUSIVE_MAXIMUM),
+        ):
+            if keyword not in schema:
+                continue
+            bound = schema[keyword]
+            if isinstance(bound, bool):
+                continue  # draft-4 modifier, applied to minimum/maximum
+            if not isinstance(bound, (int, float)):
+                raise MalformedSchemaError(
+                    f"Field '{path}': '{keyword}' must be a number, got "
+                    f"{type(bound).__name__}: {bound!r}"
+                )
+            constraints.append(FieldConstraint(constraint_type, bound))
+        return constraints
+
+    @staticmethod
     def _default(schema: Mapping[str, Any]) -> Any:
         """
         The declared default, or ``MISSING``.
@@ -451,8 +488,13 @@ class JSONSchemaExtractor:
                     # The only keyword whose value gets *executed*, and it
                     # comes from an untrusted schema. See patterns.py.
                     bound = screen_pattern(bound, path)
+                elif schema.get(_DRAFT4_EXCLUSIVE_BY.get(keyword, "")) is True:
+                    # Draft 4 spelled an exclusive bound as a boolean beside
+                    # the inclusive one; the bound is exclusive, not both.
+                    constraint_type = _EXCLUSIVE_OF[constraint_type]
                 constraints.append(FieldConstraint(constraint_type, bound))
 
+        constraints.extend(self._exclusive_bounds(schema, path))
         warn_dropped_keywords(schema, path)
 
         if mapped.enum_values is not None:

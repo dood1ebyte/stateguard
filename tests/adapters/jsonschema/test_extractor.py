@@ -17,6 +17,7 @@ import pytest
 
 from stateguard.adapters.jsonschema import (
     JSONSchemaExtractor,
+    MalformedSchemaError,
     SchemaFeatureWarning,
     SchemaReferenceError,
     UnsupportedSchemaError,
@@ -234,37 +235,77 @@ class TestConstraints:
         )
         assert _constraint(spec, "u", FieldConstraintType.ENUM_VALUES).value == ("c", "f")
 
-    @pytest.mark.parametrize("keyword", ["exclusiveMinimum", "exclusiveMaximum"])
-    def test_exclusive_bounds_are_dropped_with_a_warning(
-        self, extractor: JSONSchemaExtractor, keyword: str
+    @pytest.mark.parametrize(
+        ("keyword", "kind"),
+        [
+            ("exclusiveMinimum", FieldConstraintType.EXCLUSIVE_MINIMUM),
+            ("exclusiveMaximum", FieldConstraintType.EXCLUSIVE_MAXIMUM),
+        ],
+    )
+    def test_exclusive_bounds_become_exclusive_constraints(
+        self, extractor: JSONSchemaExtractor, keyword: str, kind: FieldConstraintType
     ) -> None:
         """
-        Rounding an exclusive bound to an inclusive one would accept a value
-        the schema forbids, so it is dropped -- but never silently.
+        Not rounded into an inclusive bound -- that would accept the bound
+        itself, which the schema forbids -- and no longer dropped either.
         """
         schema = {
             "type": "object",
             "properties": {"a": {"type": "integer", keyword: 0}},
         }
-        with pytest.warns(SchemaFeatureWarning, match=keyword):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", SchemaFeatureWarning)
             spec = extractor.extract(schema)
 
         kinds = {c.constraint_type for c in _field(spec, "a").constraints}
+        assert kind in kinds
         assert FieldConstraintType.MINIMUM not in kinds
         assert FieldConstraintType.MAXIMUM not in kinds
+        assert _constraint(spec, "a", kind).value == 0
 
-    def test_dropped_keyword_warning_can_be_made_fatal(
-        self, extractor: JSONSchemaExtractor
+    @pytest.mark.parametrize(
+        ("keyword", "inclusive", "kind"),
+        [
+            ("exclusiveMinimum", "minimum", FieldConstraintType.EXCLUSIVE_MINIMUM),
+            ("exclusiveMaximum", "maximum", FieldConstraintType.EXCLUSIVE_MAXIMUM),
+        ],
+    )
+    def test_draft4_boolean_form_makes_the_inclusive_bound_exclusive(
+        self,
+        extractor: JSONSchemaExtractor,
+        keyword: str,
+        inclusive: str,
+        kind: FieldConstraintType,
     ) -> None:
-        """A caller who cannot accept the gap has a supported way to refuse."""
         schema = {
             "type": "object",
-            "properties": {"a": {"type": "integer", "exclusiveMinimum": 0}},
+            "properties": {"a": {"type": "integer", inclusive: 5, keyword: True}},
         }
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", SchemaFeatureWarning)
-            with pytest.raises(SchemaFeatureWarning):
-                extractor.extract(schema)
+        spec = extractor.extract(schema)
+        kinds = {c.constraint_type for c in _field(spec, "a").constraints}
+        assert kind in kinds
+        assert FieldConstraintType(inclusive) not in kinds
+        assert _constraint(spec, "a", kind).value == 5
+
+    def test_draft4_false_leaves_the_bound_inclusive(self, extractor: JSONSchemaExtractor) -> None:
+        schema = {
+            "type": "object",
+            "properties": {"a": {"type": "integer", "minimum": 5, "exclusiveMinimum": False}},
+        }
+        kinds = {c.constraint_type for c in _field(extractor.extract(schema), "a").constraints}
+        assert FieldConstraintType.MINIMUM in kinds
+        assert FieldConstraintType.EXCLUSIVE_MINIMUM not in kinds
+
+    @pytest.mark.parametrize("bad", ["0", None, [1], {"n": 1}])
+    def test_a_non_numeric_exclusive_bound_is_malformed(
+        self, extractor: JSONSchemaExtractor, bad: Any
+    ) -> None:
+        schema = {
+            "type": "object",
+            "properties": {"a": {"type": "integer", "exclusiveMinimum": bad}},
+        }
+        with pytest.raises(MalformedSchemaError, match="exclusiveMinimum"):
+            extractor.extract(schema)
 
 
 # ===========================================================================

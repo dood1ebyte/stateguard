@@ -446,6 +446,26 @@ class ContractValidator:
                     field_spec,
                 )
 
+        elif ctype is FieldConstraintType.EXCLUSIVE_MINIMUM:
+            if isinstance(value, _NUMERIC_TYPES) and value <= bound:
+                return self._constraint_violation(
+                    full_path,
+                    f"Field '{full_path}' value {value!r} must be greater than {bound!r}.",
+                    bound,
+                    value,
+                    field_spec,
+                )
+
+        elif ctype is FieldConstraintType.EXCLUSIVE_MAXIMUM:
+            if isinstance(value, _NUMERIC_TYPES) and value >= bound:
+                return self._constraint_violation(
+                    full_path,
+                    f"Field '{full_path}' value {value!r} must be less than {bound!r}.",
+                    bound,
+                    value,
+                    field_spec,
+                )
+
         elif ctype is FieldConstraintType.MIN_LENGTH:
             if isinstance(value, _SIZED_TYPES) and len(value) < bound:
                 return self._constraint_violation(

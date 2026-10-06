@@ -105,14 +105,15 @@ class TestRegistration:
         tool = _tool(
             inputSchema={
                 "type": "object",
-                "properties": {"n": {"type": "integer", "exclusiveMinimum": 0}},
+                "properties": {"n": {"type": "integer"}},
+                "additionalProperties": {"type": "string"},
             }
         )
         registry.register(tool, server="a")
         registry.register(tool, server="b")  # same schema: the adapter cache would hit
         for server in ("a", "b"):
             (warning,) = registry.get("search", server=server).warnings
-            assert "exclusiveMinimum" in warning
+            assert "undeclared properties" in warning
 
     def test_a_guard_for_another_adapter_is_refused(self) -> None:
         with pytest.raises(TypeError, match="with_mcp"):

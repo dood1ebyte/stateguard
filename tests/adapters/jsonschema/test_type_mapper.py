@@ -214,8 +214,7 @@ class TestArrays:
         the contract does not have.
 
         It warns on the way past, though: widening to ANY validates more
-        loosely than the schema asks, which is the same situation
-        ``exclusiveMinimum`` is in, and that one has always warned.
+        loosely than the schema asks, so it warns.
         """
         schema = {"type": "array", "items": [{"type": "string"}, {"type": "integer"}]}
         with pytest.warns(SchemaFeatureWarning, match="widened to ANY"):

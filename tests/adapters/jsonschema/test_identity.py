@@ -141,6 +141,14 @@ class TestSameContract:
         explicit = {**open_schema, "additionalProperties": True}
         assert _fp(open_schema).contract == _fp(explicit).contract
 
+    def test_draft4_inclusive_flag_is_the_default(self) -> None:
+        bound = {"type": "object", "properties": {"n": {"type": "integer", "minimum": 1}}}
+        explicit = copy.deepcopy(bound)
+        explicit["properties"]["n"]["exclusiveMinimum"] = False
+        assert _fp(bound).contract == _fp(explicit).contract
+        explicit["properties"]["n"]["exclusiveMinimum"] = True
+        assert _fp(bound).contract != _fp(explicit).contract
+
 
 # ===========================================================================
 # Sensitive to everything that does
