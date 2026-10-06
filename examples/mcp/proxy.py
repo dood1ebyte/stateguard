@@ -171,7 +171,10 @@ class RepairingClient:
             # reported (``preview``), not applied; applying it here would
             # quietly break the whole contract of shadow mode.
             sent = outcome.arguments
-            self._say(f"  would have sent: {outcome.preview}")
+            if outcome.preview is not None:
+                self._say(f"  would have sent: {outcome.preview}")
+            else:
+                self._say(f"  auto mode would {outcome.auto_action}; forwarded anyway (shadow)")
         else:
             # ESCALATE or REFUSE. Not sent.
             return ProxiedCall(outcome=outcome, sent=None, response=None)

@@ -77,9 +77,13 @@ whenever `outcome.should_forward` is true:
 | Action | When | `arguments` |
 |---|---|---|
 | `FORWARD` | Valid as sent, or repaired with enough evidence | the (repaired) arguments |
-| `HOLD` | Shadow mode found a repair; it is reported, not applied | the arguments **as received**; the repair is on `outcome.preview` |
-| `ESCALATE` | A repair was found but not trusted enough to apply unsupervised | `None` — re-prompt with the candidates, or ask a person |
-| `REFUSE` | No safe repair exists (missing required value, out of range, unknown enum value, …) | `None` — the server would reject it anyway |
+| `HOLD` | Shadow mode only: auto mode would have done something else (repaired, escalated or refused) | the arguments **as received**; `outcome.auto_action` says what auto would do, `outcome.preview` holds its repair |
+| `ESCALATE` | Auto mode only: a repair was found but not trusted enough to apply unsupervised | `None` — re-prompt with the candidates, or ask a person |
+| `REFUSE` | Auto mode only: no safe repair exists (missing required value, out of range, unknown enum value, …) | `None` — the server would reject it anyway |
+
+Shadow mode never blocks a call: its outcomes are only ever `FORWARD` or
+`HOLD`. `outcome.auto_action` is what auto mode does with the same call, in
+either mode, and `outcome.proposed_arguments` the payload it would send.
 
 A tool whose schema StateGuard cannot read (`allOf`, `not`, a remote `$ref`,
 …) gets no outcome at all: `repair_tool_call` raises `JSONSchemaError` (a
@@ -128,8 +132,10 @@ for an audit store. `outcome.result.field_decisions()` is the typed form.
 Run with `ContractGuard.with_mcp(config=GuardConfig(mode=RepairMode.SHADOW))`
 (`from stateguard.core.models.config import GuardConfig, RepairMode`)
 before turning repair on. Every call is forwarded exactly as the model sent
-it; a call auto mode would have changed comes back as `HOLD`, with
-`outcome.preview` holding precisely what auto mode would send.
+it — including calls auto mode would refuse or escalate. A call auto mode
+would have handled differently comes back as `HOLD`: `outcome.auto_action`
+records the decision, and `outcome.preview` holds precisely what auto mode
+would send when that decision was a repair.
 
 ### Try it on your own tools
 

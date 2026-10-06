@@ -67,6 +67,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limitations.
 
 ### Fixed
+- **Shadow mode blocked calls.** A call auto mode would refuse or escalate
+  was refused or escalated in shadow too, so a shadow deployment blocked
+  real traffic — including every call StateGuard refused *wrongly*, which is
+  the error shadow exists to surface. Shadow outcomes are now only `FORWARD`
+  or `HOLD`, always with the arguments as received. `ToolCallOutcome` gains
+  `auto_action` (what auto mode does, in either mode), and
+  `original_arguments` / `proposed_arguments`. **Behaviour change** for
+  shadow callers that relied on `REFUSE`/`ESCALATE`: read `auto_action`.
+- **A final forwarding boundary.** Every `ToolCallOutcome` passes one
+  invariant gate (shadow forwards only what it received; auto forwards only
+  the committed payload; no held key is moved), and `repair_tool_call`
+  re-validates an auto-mode payload before releasing it. A violation raises
+  `ForwardingInvariantError` — a StateGuard bug, never forwarded.
 - **`pip install "sguard[all]"` installed an unrelated package.** The `all`
   extra named `stateguard[...]`, but this distribution is `sguard` and
   `stateguard` on PyPI is a different project (with a torch /
