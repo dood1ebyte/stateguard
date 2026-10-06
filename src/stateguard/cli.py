@@ -41,6 +41,8 @@ import sys
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
+from stateguard import __version__
+
 __all__ = ["main"]
 
 # ---------------------------------------------------------------------------
@@ -391,7 +393,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0",
+        version=f"%(prog)s {__version__}",
     )
 
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")

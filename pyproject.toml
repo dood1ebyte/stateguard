@@ -48,7 +48,10 @@ dev = [
     "ruff>=0.4",
     "hypothesis>=6.100",
 ]
-all = ["stateguard[pydantic,mcp,dev]"]
+# Self-reference by *distribution* name. This package installs as ``sguard``;
+# ``stateguard`` on PyPI is an unrelated project, and naming it here made
+# ``pip install "sguard[all]"`` install that instead of these extras.
+all = ["sguard[pydantic,mcp,dev]"]
 
 # ---------------------------------------------------------------------------
 # Build
