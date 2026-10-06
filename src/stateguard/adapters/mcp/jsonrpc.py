@@ -58,6 +58,8 @@ from stateguard.adapters.mcp.outcomes import MCPAction, ToolCallOutcome
 __all__ = [
     "INVALID_PARAMS",
     "JSONRPC_VERSION",
+    "PROTOCOL_VERSION_META_KEY",
+    "RESULT_TYPE_SINCE",
     "TOOLS_CALL",
     "TOOLS_LIST",
     "TOOLS_LIST_CHANGED",
@@ -68,8 +70,10 @@ __all__ = [
     "is_notification",
     "is_request",
     "is_response",
+    "protocol_version",
     "refusal_response",
     "request_id",
+    "tool_error_response",
 ]
 
 JSONRPC_VERSION = "2.0"
@@ -79,6 +83,16 @@ TOOLS_LIST_CHANGED = "notifications/tools/list_changed"
 
 #: JSON-RPC 2.0 "Invalid params".
 INVALID_PARAMS = -32602
+
+#: Where MCP revisions without an ``initialize`` handshake carry the protocol
+#: version: on every request, in ``params._meta``.
+PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion"
+
+#: The first revision whose results carry ``resultType`` ("complete" or
+#: "input_required"). A result a relay *synthesizes* for such a request must
+#: carry it too: a client of that revision discriminates results on it and
+#: rejects one without it. Older sessions never see the field.
+RESULT_TYPE_SINCE = "2026-07-28"
 
 RequestId = str | int
 
@@ -230,6 +244,38 @@ def forward_message(request: ToolCallRequest, outcome: ToolCallOutcome) -> dict[
     return request.with_arguments(outcome.arguments)
 
 
+def protocol_version(request: ToolCallRequest) -> str | None:
+    """
+    The MCP protocol version the request declares in ``params._meta``, if any.
+
+    Revisions from ``2026-07-28`` have no session handshake; each request
+    names its version there. Under the older ``initialize`` handshake the
+    version was negotiated once per session and requests carry none, so this
+    is ``None`` -- the caller knows the session's version, this helper does not.
+    """
+    if request.meta is None:
+        return None
+    version = request.meta.get(PROTOCOL_VERSION_META_KEY)
+    return version if isinstance(version, str) else None
+
+
+def tool_error_response(request: ToolCallRequest, text: str) -> dict[str, Any]:
+    """
+    A ``CallToolResult`` with ``isError: true`` and one text block, answering *request*.
+
+    Shaped for the protocol revision the request declares: ``resultType:
+    "complete"`` is included when that revision has it (``RESULT_TYPE_SINCE``
+    and later). Found by driving a real MCP 2.x client through a relay -- it
+    rejected a synthesized result without the field, though every result the
+    server itself produced had it.
+    """
+    result: dict[str, Any] = {"content": [{"type": "text", "text": text}], "isError": True}
+    version = protocol_version(request)
+    if version is not None and version >= RESULT_TYPE_SINCE:
+        result["resultType"] = "complete"
+    return {"jsonrpc": JSONRPC_VERSION, "id": request.id, "result": result}
+
+
 def refusal_response(request: ToolCallRequest, outcome: ToolCallOutcome) -> dict[str, Any]:
     """
     The response to return to the client for a call StateGuard did not forward.
@@ -254,12 +300,7 @@ def refusal_response(request: ToolCallRequest, outcome: ToolCallOutcome) -> dict
         else "The arguments were not sent: they do not match the tool's input schema, "
         "and no safe correction exists."
     )
-    text = f"{lead}\n\n{outcome.explain()}"
-    return {
-        "jsonrpc": JSONRPC_VERSION,
-        "id": request.id,
-        "result": {"content": [{"type": "text", "text": text}], "isError": True},
-    }
+    return tool_error_response(request, f"{lead}\n\n{outcome.explain()}")
 
 
 def error_response(

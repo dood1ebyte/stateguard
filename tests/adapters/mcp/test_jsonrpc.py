@@ -264,3 +264,45 @@ class TestToolListAccumulator:
         assert listing is not None
         report = registry.sync(listing)
         assert [c.key.name for c in report.added] == ["a", "b"]
+
+
+class TestProtocolShapedResults:
+    """
+    Found by driving a real MCP 2.x client through the relay: under the
+    stateless 2026-07-28 protocol, a synthesized result without
+    ``resultType`` is rejected by the client.
+    """
+
+    def _refusal(self, meta: dict[str, Any] | None) -> dict[str, Any]:
+        params: dict[str, Any] = {"location": "x", "days": 99}
+        message = _call(params) if meta is None else _call(params, _meta=meta)
+        request, outcome = _decide(message)
+        return refusal_response(request, outcome)["result"]
+
+    def test_a_versioned_modern_request_gets_result_type(self) -> None:
+        result = self._refusal({"io.modelcontextprotocol/protocolVersion": "2026-07-28"})
+        assert result["resultType"] == "complete"
+
+    @pytest.mark.parametrize(
+        "meta",
+        [None, {"progressToken": 1}, {"io.modelcontextprotocol/protocolVersion": "2025-11-25"}],
+    )
+    def test_older_sessions_never_see_it(self, meta: dict[str, Any] | None) -> None:
+        assert "resultType" not in self._refusal(meta)
+
+    def test_tool_error_response(self) -> None:
+        from stateguard.adapters.mcp.jsonrpc import protocol_version, tool_error_response
+
+        request = ToolCallRequest.parse(
+            _call({}, _meta={"io.modelcontextprotocol/protocolVersion": "2026-07-28"})
+        )
+        assert protocol_version(request) == "2026-07-28"
+        assert tool_error_response(request, "no") == {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "result": {
+                "content": [{"type": "text", "text": "no"}],
+                "isError": True,
+                "resultType": "complete",
+            },
+        }

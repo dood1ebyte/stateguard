@@ -34,6 +34,7 @@ from stateguard.adapters.mcp.jsonrpc import (
     ToolListAccumulator,
     forward_message,
     refusal_response,
+    tool_error_response,
 )
 from stateguard.adapters.mcp.outcomes import (
     MCPAction,
@@ -75,6 +76,7 @@ __all__ = [
     "forward_message",
     "outcome_for",
     "refusal_response",
+    "tool_error_response",
     "repair_tool_call",
     "split_tool_definition",
 ]

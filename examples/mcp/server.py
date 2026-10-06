@@ -15,6 +15,9 @@ in tool calls, rather than one contrived one:
 * ``search_places`` -- a bounded integer, so an out-of-range value is
   refused rather than repaired. A demo that only ever succeeds is not
   showing you anything.
+* ``compare_cities`` -- two parameters a single ``city`` fits equally well,
+  so the repair is found but not trusted: the call is escalated, not
+  guessed.
 
 Run it directly to serve over stdio::
 
@@ -62,6 +65,12 @@ def search_places(
 ) -> str:
     """Search for places by name."""
     return f"Found up to {limit} places matching {query!r}."
+
+
+@server.tool()
+def compare_cities(city_a: str, city_b: str) -> str:
+    """Compare the weather in two cities."""
+    return f"Comparing {city_a} with {city_b}."
 
 
 if __name__ == "__main__":
