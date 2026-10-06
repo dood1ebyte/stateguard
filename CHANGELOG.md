@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   safe is breaking.
 - **JSON-RPC boundary helpers** (`stateguard.adapters.mcp.jsonrpc`, main
   names re-exported): `ToolCallRequest.parse`, `forward_message` (the
-  original message byte-for-byte when arguments are unchanged, otherwise
+  original message, unmodified, when arguments are unchanged, otherwise
   only `params.arguments` replaced — `id` and `_meta` preserved),
   `refusal_response` / `tool_error_response` (a `CallToolResult` with
   `isError: true`, with `resultType` for protocol `2026-07-28`+),

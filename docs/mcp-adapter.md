@@ -269,6 +269,7 @@ outcome:
 | `UnsupportedSchemaError` | `JSONSchemaError` (a `ValueError`) | Valid JSON Schema that StateGuard cannot represent faithfully |
 | `MalformedSchemaError` | `UnsupportedSchemaError` | Not valid JSON Schema: `"type": "strng"`, `"required": "a"`, a `$ref` to nothing, `exclusiveMinimum: "0"` |
 | `InvalidToolDefinitionError` | `MCPAdapterError`, `MalformedSchemaError` | The tool definition itself is broken: no `inputSchema`, an `inputSchema` that is not an object, or no usable `name` |
+| `SchemaReferenceError` | `JSONSchemaError` | A `$ref` StateGuard will not follow: remote, recursive, too deep, or over the expansion budget. `MalformedReferenceError` (also a `MalformedSchemaError`) is a `$ref` to nothing |
 
 **What to do with such a tool is your policy**, decided once per tool:
 
@@ -282,8 +283,16 @@ will not validate against a looser schema it invented.
 Some schemas can only be read loosely. Examples are an
 `additionalProperties` given as a schema object and tuple-form `items`. For
 these, extraction succeeds and emits a `SchemaFeatureWarning` naming the
-field. The registry records these warnings on each `RegisteredTool`. To make
-them fatal, run `warnings.simplefilter("error", SchemaFeatureWarning)`.
+field.
+
+- **Registry users** should check `RegisteredTool.warnings`. The registry
+  captures the warnings at registration, so warning filters do not affect
+  it.
+- **Direct callers** (`guard.repair`, `repair_tool_call`) can make the
+  warnings fatal with
+  `warnings.simplefilter("error", SchemaFeatureWarning)`. The warning is
+  then raised from the first extraction of that schema, which happens on a
+  cache miss. It is a `UserWarning`, not a `JSONSchemaError`.
 
 ---
 
@@ -331,7 +340,7 @@ message says to pass `server=`.
 
 | Method | Does |
 |---|---|
-| `sync(tools, *, server=None)` | Replaces a server's whole listing **atomically** and returns a `SyncReport`. Tools absent from the listing are removed. If a name appears twice, every definition with that name is registered as `INVALID`, because the registry cannot tell which one the server serves |
+| `sync(tools, *, server=None)` | Replaces a server's whole listing **atomically** and returns a `SyncReport`. Tools absent from the listing are removed. If a name appears twice, that name is registered once, as `INVALID`, because the registry cannot tell which definition the server serves |
 | `register(tool, *, server=None)` | Adds or replaces one definition and returns a `ToolChange` |
 | `compare(tool, *, server=None)` | Returns the `ToolChange` that `register` *would* return, without changing anything |
 | `remove(name, *, server=None)` | Removes one tool and returns its `ToolChange` |
@@ -372,8 +381,9 @@ old one unconditionally, even when the new one cannot be read.
 `ToolChange.kind` is `ADDED`, `REMOVED`, `UPDATED` or `UNCHANGED`. An
 `UPDATED` change carries these fields:
 
-- **`schema`**: a `SchemaDiff` (see below), or `None` when only metadata
-  changed.
+- **`schema`**: a `SchemaDiff` (see below). Its status is `UNCHANGED` when
+  only metadata changed. (`schema` is `None` only for `ADDED` and
+  `REMOVED`.)
 - **`changed_fields`**: which top-level definition fields changed
   (`description`, `annotations`, `title`, …).
 - **`description_changed`**: reported even when the schema did not change.
@@ -492,9 +502,10 @@ fingerprint, on purpose. Two documents that differ only in a `description`
 produce the same contract, but each contract points back at its own source
 document.
 
-The registry extracts every definition at registration, without the cache,
-so that each registration records its own `SchemaFeatureWarning`s.
-`process_call` then goes through the guard, and so through the same cache.
+The registry extracts every definition at registration and skips the cache
+lookup, so that each registration records its own `SchemaFeatureWarning`s.
+The result is then stored in the cache, so `process_call`, which goes
+through the guard, normally finds it there.
 
 ---
 
@@ -562,7 +573,8 @@ status: success (auto)
 `outcome.to_dict()` is the full record as JSON-ready data. It contains:
 
 - `action`, `auto_action`, `mode` and `reason`;
-- `original_arguments`, `arguments`, `proposed_arguments` and `preview`;
+- `arguments`, `proposed_arguments` and `preview` (the arguments as received
+  are under `result.original_input`);
 - every field decision, with its trust and evidence;
 - every repair attempt, including discarded ones.
 
@@ -672,17 +684,19 @@ are the limits StateGuard enforces:
 
 | Input | Bound | Beyond it |
 |---|---|---|
-| `$ref` expansion while reading a schema | 10,000 expansions (`DEFAULT_MAX_EXPANSIONS`) | `SchemaReferenceError`. This stops "billion laughs" schemas built from nested `$ref`s |
+| Subschemas walked while reading a schema | 10,000 resolutions per schema (`DEFAULT_MAX_EXPANSIONS` in `stateguard.adapters.jsonschema.refs`), `$ref` expansions included | `SchemaReferenceError`. This stops "billion laughs" schemas built from nested `$ref`s. A schema with more than 10,000 subschemas in total is refused for the same reason |
 | `$ref` recursion | refused | `SchemaReferenceError` |
 | `pattern` | screened before compilation for nested unbounded quantifiers (`(a+)+`, …). This is a heuristic: it does not catch overlapping alternation such as `(a\|a)+` | `UnsupportedSchemaError` |
 | Argument nesting depth | 100 levels (`MAX_PAYLOAD_DEPTH`), checked iteratively | `REFUSE`, with a value-free reason. Never a `RecursionError` |
 | JSON-RPC message nesting | the same bound, in `ToolCallRequest.parse` | `MalformedMessageError` |
 | A tool definition mutated after registration | the registry holds private copies | no effect on calls |
 
-A fuzz run of 20,000 random registry inputs produced zero unexpected
-exceptions. A differential run of about 6,000 generated payloads against
-the `jsonschema` reference validator, over every corpus tool, produced zero
-disagreements in either direction.
+Two checks were run out of tree during development, and are not part of the
+test suite. A fuzz run of 20,000 random registry inputs produced zero
+unexpected exceptions. A differential run of about 6,000 generated payloads
+against the `jsonschema` reference validator, over every corpus tool,
+produced zero disagreements in either direction. In-tree, hostile input is
+covered by `test_hostile_payloads.py` and `test_refs.py`.
 
 ---
 

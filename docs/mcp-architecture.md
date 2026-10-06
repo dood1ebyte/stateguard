@@ -99,9 +99,9 @@ Supporting modules:
 
 `SchemaCache` is an LRU keyed by `(tool name, document fingerprint)`.
 Because the key is the schema's content, a changed schema is a cache miss
-and is never served stale. `MCPToolAdapter.compile()` is the uncached path
-the registry uses, so that extraction warnings are recorded on every
-registration.
+and is never served stale. `MCPToolAdapter.compile()` is the path the registry
+uses. It skips the cache lookup, so that extraction warnings are recorded
+on every registration, and then stores its result in the cache.
 
 ### 3. Guard
 
@@ -112,8 +112,9 @@ registration.
 - **`SHADOW`** computes the same repairs and withholds the payload
   (`proposed_output` instead of `repaired_output`).
 
-The guard is the only object the layers above hold. It has no MCP-specific
-state.
+The guard holds no MCP-specific state. Layers 4 and 5 call it for repair
+and validation. The registry also calls the adapter directly, for
+extraction at registration.
 
 ### 4. Outcome policy
 
@@ -167,17 +168,18 @@ This layer is a peer of layer 4, not above it. The registry uses both.
 accept". Each entry is a frozen `RegisteredTool`, keyed by
 `ToolKey(name, server)`.
 
-A **write** (`register`, `sync`, `remove`, `clear`) does the following:
+A `register` or `sync` does the following for each definition:
 
-1. Takes a deep copy of the definition.
-2. Computes the definition fingerprint. If it is unchanged, the existing
+1. Computes the definition fingerprint. If it is unchanged, the existing
    entry is kept, which is the fast path.
-3. Otherwise, extracts the contract (recording warnings, or the
-   `INVALID`/`UNSUPPORTED` state and its error) and fingerprints the
-   schema.
-4. Diffs the new schema against the previous entry's schema.
-5. Swaps the new entry in under the lock and returns a `ToolChange`.
+2. Otherwise, takes a deep copy of the definition and extracts the
+   contract, recording warnings, or the `INVALID`/`UNSUPPORTED` state and
+   its error. It also fingerprints the schema.
+3. Diffs the new schema against the previous entry's schema.
+4. Swaps the new entry in under the lock and returns a `ToolChange`.
    `sync` swaps a server's whole listing at once.
+
+`remove` and `clear` only drop entries under the lock.
 
 A **read** (`process_call`) does the following:
 
@@ -193,7 +195,9 @@ schema in force.
 
 ### 6. JSON-RPC boundary
 
-`jsonrpc.py` is the only code that knows the shape of MCP messages. It
+`jsonrpc.py` is the library's home for the shape of MCP messages. The CLI's
+`replay` also reads recorded `tools/call` messages and `tools/list`
+results, for its own input formats. It
 handles four things:
 
 - **Parsing a `tools/call`.** The message is deep-copied and its depth is
@@ -233,7 +237,7 @@ it inside an MCP SDK client. The host decides three things:
 | 5 → 2 | `MCPToolAdapter.compile(definition)`, `fingerprint_schema(schema)` | → `ContractSpec`, `SchemaFingerprint` |
 | 4 → 3 | `guard.repair(tool, arguments)`, `guard.validate(tool, payload)` | → `RepairResult`, `ValidationResult` |
 | 3 → 2 | `IContractAdapter.extract_contract / validate / wrap` | `ContractSpec` |
-| 3 → 1 | `RepairEngine.repair(contract, data)` | → `RepairResult` |
+| 3 → 1 | `RepairEngine.repair(contract, data, adapter)` | → `RepairResult` |
 | 6 ← 4 | `forward_message(request, outcome)`, `refusal_response(request, outcome)` | → JSON-RPC dicts |
 
 Every value that crosses a layer boundary is either an immutable dataclass
@@ -262,7 +266,7 @@ layer hands one out:
 | A stale schema is never used | the registry replaces unconditionally; the cache keys on content | `test_registry.py` |
 | `COMPATIBLE` means every old-valid payload is new-valid | rules in `diff.py` | mutation soundness properties in `test_diff.py` |
 | Equal contract fingerprints mean an empty diff | `compare_normalized` on normalised input | `test_diff.py` property |
-| Hostile input cannot crash or hang the process | expansion budget, depth bounds, pattern screen | `test_hostile_payloads.py`, `test_refs.py`, registry fuzz |
+| Hostile input cannot crash or hang the process | expansion budget, depth bounds, pattern screen | `test_hostile_payloads.py`, `test_refs.py`, registry fuzz (out of tree) |
 | StateGuard accepts nothing the reference validator rejects | the extractor refuses what it cannot model | differential run against `jsonschema` (out of tree) |
 
 ---
