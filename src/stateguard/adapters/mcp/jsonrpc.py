@@ -54,6 +54,7 @@ from typing import Any
 
 from stateguard.adapters.mcp.errors import MalformedMessageError
 from stateguard.adapters.mcp.outcomes import MCPAction, ToolCallOutcome
+from stateguard.core.paths import MAX_PAYLOAD_DEPTH, nests_deeper_than
 
 __all__ = [
     "INVALID_PARAMS",
@@ -204,6 +205,12 @@ class ToolCallRequest:
         name = params.get("name")
         if not isinstance(name, str) or not name:
             raise MalformedMessageError(f"{TOOLS_CALL!r} needs a non-empty string 'params.name'.")
+        if nests_deeper_than(params, MAX_PAYLOAD_DEPTH):
+            # Refused before the deep copy below, which would otherwise raise
+            # RecursionError on a message json.loads accepted without fuss.
+            raise MalformedMessageError(
+                f"{TOOLS_CALL!r} params nest deeper than {MAX_PAYLOAD_DEPTH} levels."
+            )
         # Read everything from the copy: handing back the caller's own
         # ``arguments`` dict would let a later mutation of their message
         # change what this request says was received.

@@ -95,7 +95,13 @@ from stateguard.core.interfaces.adapter import IContractAdapter
 from stateguard.core.models.config import RepairConfig, RepairMode
 from stateguard.core.models.contract import ContractSpec, find_field_spec
 from stateguard.core.models.field_types import FieldType, UnionMember
-from stateguard.core.paths import NOT_FOUND, addresses_array_element, get_nested_value
+from stateguard.core.paths import (
+    MAX_PAYLOAD_DEPTH,
+    NOT_FOUND,
+    addresses_array_element,
+    get_nested_value,
+    nests_deeper_than,
+)
 from stateguard.core.strategies.coerce import (
     _array_wrap_is_safe,
     _parsed_array_matches,
@@ -127,6 +133,19 @@ class _CoerceFailed:
 
 
 _COERCE_FAILED = _CoerceFailed()
+
+
+def _too_deep_violation() -> ContractViolation:
+    return ContractViolation(
+        field_path="",
+        violation_type=ViolationType.STRUCTURAL_MISMATCH,
+        severity=ViolationSeverity.ERROR,
+        message=(
+            f"Payload nests deeper than {MAX_PAYLOAD_DEPTH} levels and is refused "
+            f"rather than walked."
+        ),
+        expected_type=FieldType.OBJECT,
+    )
 
 
 def _safe_deepcopy(value: Any) -> Any:
@@ -715,6 +734,13 @@ class RepairEngine:
         -------
         RepairResult
         """
+        # Before anything recursive touches it -- including the snapshot.
+        # A payload nested past the bound is refused as a structural failure:
+        # the promise is that ``repair`` never raises for its input, and an
+        # unbounded deep copy of a model's output is a RecursionError.
+        if nests_deeper_than(data, MAX_PAYLOAD_DEPTH):
+            return self._root_failure(contract, data, violation=_too_deep_violation())
+
         original_input = _safe_deepcopy(data)
 
         # --- Root shape normalisation -----------------------------------------
@@ -1142,15 +1168,22 @@ class RepairEngine:
     # Root failure
     # ------------------------------------------------------------------
 
-    def _root_failure(self, contract: ContractSpec, original_input: Any) -> RepairResult:
+    def _root_failure(
+        self,
+        contract: ContractSpec,
+        original_input: Any,
+        violation: ContractViolation | None = None,
+    ) -> RepairResult:
         """
         Build the terminal ``FAILED`` result for a payload root that is not an
-        object and could not be normalised into one.
+        object and could not be normalised into one -- or that nests too
+        deeply to walk, when *violation* says so.
 
         No adapter is consulted and no strategy runs: with no object to look
         field paths up in there is nothing for either to act on.
         """
-        violation = root_structural_violation(original_input)
+        if violation is None:
+            violation = root_structural_violation(original_input)
 
         self._emit(contract, TelemetryEventType.VALIDATION_STARTED)
         self._emit(
@@ -1162,11 +1195,7 @@ class RepairEngine:
         )
         self._logger.error(
             "root.unsupported_type",
-            (
-                f"Payload root is {type(original_input).__name__}, not an "
-                f"object, and could not be normalised into one. No repair is "
-                f"possible."
-            ),
+            f"{violation.message} No repair is possible.",
             received_type=type(original_input).__name__,
         )
         self._emit(
@@ -1222,6 +1251,15 @@ class RepairEngine:
         * ``is_valid`` is ``True`` iff the adapter considers the data valid
           AND no core-only addition has ``ViolationSeverity.ERROR``.
         """
+        # Bounded before any walk: ``ContractGuard.validate`` reaches here
+        # without going through ``repair``'s own check.
+        if nests_deeper_than(data, MAX_PAYLOAD_DEPTH):
+            return ValidationResult(
+                is_valid=False,
+                violations=[_too_deep_violation()],
+                raw_input=data,
+                contract_id=contract.contract_id,
+            )
         # Adapters are entitled to assume an object root (``IContractAdapter``
         # types ``data`` as a dict). ``repair`` normalises or rejects a
         # non-object root before the loop starts, but this method is also

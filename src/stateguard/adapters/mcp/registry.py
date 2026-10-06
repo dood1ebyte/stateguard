@@ -420,6 +420,12 @@ class ToolRegistry:
         self._adapter: MCPToolAdapter = self._guard.adapter
         self._clock = clock if clock is not None else (lambda: datetime.now(tz=UTC))
         self._tools: dict[ToolKey, RegisteredTool] = {}
+        # What calls are validated against: a private copy per entry, so a
+        # caller mutating ``RegisteredTool.definition`` -- a plain dict, for
+        # compatibility with everything that reads tool definitions -- cannot
+        # change the contract calls are checked against behind the
+        # fingerprint's back.
+        self._call_definitions: dict[ToolKey, dict[str, Any]] = {}
         self._lock = threading.RLock()
 
     @property
@@ -507,6 +513,7 @@ class ToolRegistry:
             previous = self._tools.pop(key, None)
             if previous is None:
                 raise ToolNotFoundError(name, server, self._names(server))
+            self._call_definitions.pop(key, None)
         return ToolChange(key, ToolChangeKind.REMOVED, previous=previous)
 
     def clear(self, *, server: str | None = _ALL_SERVERS) -> None:
@@ -514,9 +521,11 @@ class ToolRegistry:
         with self._lock:
             if server is _ALL_SERVERS:
                 self._tools.clear()
+                self._call_definitions.clear()
             else:
                 for key in [k for k in self._tools if k.server == server]:
                     del self._tools[key]
+                    self._call_definitions.pop(key, None)
 
     def sync(self, tools: Iterable[Any], *, server: str | None = None) -> SyncReport:
         """
@@ -558,6 +567,7 @@ class ToolRegistry:
             changes: list[ToolChange] = []
             existing = {key for key in self._tools if key.server == server}
             for key in sorted(existing - set(built), key=lambda k: k.sort_key):
+                self._call_definitions.pop(key, None)
                 changes.append(
                     ToolChange(key, ToolChangeKind.REMOVED, previous=self._tools.pop(key))
                 )
@@ -586,11 +596,16 @@ class ToolRegistry:
             ``cause`` carries the original error. The previous schema is
             never used instead.
         """
-        entry = self.get(name, server=server)
-        if not entry.usable:
+        key = ToolKey(name, server)
+        with self._lock:
+            entry = self._tools.get(key)
+            if entry is None:
+                raise ToolNotFoundError(name, server, self._names(server))
+            definition = self._call_definitions.get(key)
+        if not entry.usable or definition is None:
             assert entry.error is not None
             raise ToolSchemaUnusableError(name, server, entry.error)
-        return repair_tool_call(self._guard, entry.definition, arguments)
+        return repair_tool_call(self._guard, definition, arguments)
 
     # ------------------------------------------------------------------
     # Internals
@@ -718,6 +733,8 @@ class ToolRegistry:
                 updated_at=previous.updated_at if same else built.updated_at,
             )
         self._tools[built.key] = built
+        if built is not previous:
+            self._call_definitions[built.key] = copy.deepcopy(dict(built.definition))
         return self._change_for(previous, built)
 
     @staticmethod

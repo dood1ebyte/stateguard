@@ -509,3 +509,12 @@ class TestUnchangedDefinitionsAreNotRebuilt:
         assert registry.get("a").state is ToolState.INVALID
         registry.sync([_tool("a")])
         assert registry.get("a").usable
+
+
+class TestTheContractCannotBeChangedFromOutside:
+    def test_mutating_the_exposed_definition_changes_nothing(self, registry: ToolRegistry) -> None:
+        registry.register(_tool())
+        entry = registry.get("search")
+        entry.definition["inputSchema"]["properties"]["limit"]["maximum"] = 1000  # type: ignore[index]
+        outcome = registry.process_call("search", {"query": "x", "limit": 80})
+        assert outcome.action is MCPAction.REFUSE  # still validated against maximum 50

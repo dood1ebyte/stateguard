@@ -125,6 +125,12 @@ class StdioRelay:
         # protocol version entirely.
         self._protocol_meta: dict[str, Any] = {}
         self._listed = False
+        # True from tools/list_changed until a refresh succeeds: calls made
+        # meanwhile are validated against the last listing, and say so.
+        self._listing_stale = False
+        # Shadow observes; it never blocks. That holds for the paths that are
+        # not outcomes too -- an unreadable schema, an internal error.
+        self._shadow = guard.config.mode is RepairMode.SHADOW
         self._to_client, self._to_server, self._to_audit = (threading.Lock() for _ in range(3))
 
     # -- plumbing ------------------------------------------------------------
@@ -158,6 +164,7 @@ class StdioRelay:
 
     def _sync(self, tools: list[Any], source: str) -> None:
         report = self.registry.sync(tools)
+        self._listing_stale = False
         self._log(
             "tools_synced",
             source=source,
@@ -217,7 +224,7 @@ class StdioRelay:
             self._send(self._server_in, self._to_server, line)  # the server's to reject
             return
 
-        stale = not self._listing_ready.wait(LISTING_WAIT_SECONDS)
+        stale = not self._listing_ready.wait(LISTING_WAIT_SECONDS) or self._listing_stale
         try:
             outcome = self.registry.process_call(request.name, request.arguments)
         except ToolNotFoundError:
@@ -234,6 +241,16 @@ class StdioRelay:
             self._on_unreadable(line, request, exc)
             return
         except ForwardingInvariantError as exc:
+            if self._shadow:
+                self._log(
+                    "call",
+                    id=request.id,
+                    tool=request.name,
+                    action="unvalidated",
+                    reason=f"StateGuard internal error; forwarded (shadow): {exc}",
+                )
+                self._send(self._server_in, self._to_server, line)
+                return
             self._log(
                 "call", id=request.id, tool=request.name, action="internal_error", reason=str(exc)
             )
@@ -273,13 +290,14 @@ class StdioRelay:
     def _on_unreadable(
         self, line: bytes, request: ToolCallRequest, exc: ToolSchemaUnusableError
     ) -> None:
-        if self._unreadable == "forward":
+        if self._unreadable == "forward" or self._shadow:
             self._log(
                 "call",
                 id=request.id,
                 tool=request.name,
                 action="unvalidated",
-                reason=f"schema unreadable; forwarded by policy: {exc.cause}",
+                reason=f"schema unreadable; forwarded ({'shadow' if self._shadow else 'policy'}): "
+                f"{exc.cause}",
             )
             self._send(self._server_in, self._to_server, line)
             return
@@ -314,6 +332,7 @@ class StdioRelay:
                 if listing is not None:
                     self._sync(listing, source="client tools/list")
             elif is_notification(message, TOOLS_LIST_CHANGED):
+                self._listing_stale = True
                 self._listing_ready.clear()
                 self._request_listing()
             self._send(self._client_out, self._to_client, line)  # untouched
@@ -335,8 +354,8 @@ class StdioRelay:
 def _parse(line: bytes) -> Any:
     try:
         return json.loads(line)
-    except (ValueError, UnicodeDecodeError):
-        return None
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return None  # not ours to understand: relayed as-is
 
 
 def main(argv: list[str] | None = None) -> int:

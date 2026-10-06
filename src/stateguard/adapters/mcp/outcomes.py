@@ -598,6 +598,8 @@ def _join(names: list[str]) -> str:
     """Names as a short readable list -- these go into log lines."""
     if not names:
         return "none named"
+    # A root-level violation has the empty path; '' in a reason reads as a bug.
+    names = ["<root>" if name == "" else name for name in names]
     if len(names) <= 3:
         return ", ".join(repr(n) for n in names)
     shown = ", ".join(repr(n) for n in names[:3])

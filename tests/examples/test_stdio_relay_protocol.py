@@ -164,3 +164,16 @@ def test_an_unknown_tool_is_the_server_s_to_answer(session: Session) -> None:
     _, result = session.call("nope", {"x": 1})
     assert _echoed(result) == {"x": 1}
     assert session.decisions()[-1]["action"] == "unvalidated"
+
+
+def test_shadow_never_blocks_even_an_unreadable_schema(tmp_path: Path) -> None:
+    """Found in adversarial review: the unreadable-schema policy refused in shadow too."""
+    s = Session(tmp_path, "--shadow")
+    try:
+        s.request("server/discover", {})
+        _, result = s.call("broken", {"a": 1})
+        assert _echoed(result) == {"a": 1}
+        assert s.decisions()[-1]["action"] == "unvalidated"
+        assert "shadow" in s.decisions()[-1]["reason"]
+    finally:
+        s.close()
