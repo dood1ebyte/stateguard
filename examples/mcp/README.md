@@ -176,7 +176,7 @@ async with Client(server_params) as client:
     if call.called:
         print(call.response.content)
     else:
-        print(call.outcome.explain())   # why, field by field
+        print(call.outcome.explain())  # why, field by field
 ```
 
 The proxy is a thin wrapper over `stateguard.adapters.mcp.repair_tool_call`,

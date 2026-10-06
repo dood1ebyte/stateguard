@@ -207,8 +207,8 @@ def repair_tool_call(guard: ContractGuard, tool: Any, arguments: Any) -> ToolCal
 
     Equivalent to ``outcome_for(guard.repair(tool, arguments), arguments)``,
     with MCP's rule for absent arguments applied first. Prefer it over the
-    two-step form: that form takes the arguments twice, and the two copies
-    have to be the same object for ``HOLD`` to forward the right thing.
+    two-step form: that form takes the arguments twice, and if the two ever
+    differ, ``HOLD`` forwards something other than what the model sent.
 
     Parameters
     ----------
