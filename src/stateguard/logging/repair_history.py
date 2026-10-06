@@ -255,6 +255,7 @@ class RepairHistoryRecorder:
                     "success": result.status.value in ("success", "already_valid"),
                     "attempt_number": None,
                     "op_type": None,
+                    "kept": None,
                 }
             ]
 
@@ -291,6 +292,9 @@ class RepairHistoryRecorder:
             "success": attempt.succeeded,
             "attempt_number": attempt.attempt_number,
             "op_type": op.op_type.value,
+            # False when the engine rolled this attempt back: the operation
+            # was applied to its working copy but is not in any payload.
+            "kept": attempt.kept,
         }
 
     # ------------------------------------------------------------------

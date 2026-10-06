@@ -486,6 +486,24 @@ class TestRecordMultipleAttempts:
         assert records[0]["strategy"] == "FuzzyFieldMatchStrategy"
         assert records[1]["strategy"] == "TypeCoercionStrategy"
 
+    def test_a_discarded_attempt_is_recorded_as_not_kept(
+        self, recorder: RepairHistoryRecorder
+    ) -> None:
+        """
+        The engine rolled the second attempt back, so its operation is not in
+        the payload. The history must not read as though it were.
+        """
+        kept = _make_attempt(applied_operations=[_make_operation()], attempt_number=1)
+        discarded = _make_attempt(
+            applied_operations=[_make_operation(target_path="humidity")],
+            attempt_number=2,
+            succeeded=False,
+        )
+        discarded.kept = False
+        recorder.record(_make_result(status=RepairStatus.PARTIAL, attempts=[kept, discarded]))
+
+        assert [r["kept"] for r in recorder.read_all()] == [True, False]
+
 
 # ===========================================================================
 # record — failure resilience

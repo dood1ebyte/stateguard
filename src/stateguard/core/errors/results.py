@@ -178,6 +178,16 @@ class RepairAttempt:
     succeeded:
         ``True`` if revalidation after this attempt found no remaining
         ERROR-severity violations.
+    kept:
+        ``False`` when the engine discarded this attempt -- it made the
+        violation set worse, or returned to a state already seen this run --
+        and rolled back to the data it started from.  Its
+        ``applied_operations`` were really applied to the engine's working
+        copy, which is why they are recorded, but none of them reaches
+        ``repaired_output`` or ``proposed_output``.  Only ever the last
+        attempt.  Without this a discarded attempt was indistinguishable from
+        a kept one, and an audit reading ``applied_operations`` reported
+        repairs that are not in the payload.
     attempt_id:
         UUID4 string, auto-generated at construction.
     attempted_at:
@@ -198,6 +208,7 @@ class RepairAttempt:
     # Optional / auto-generated fields
     abstained_operations: list[FieldOperation] = field(default_factory=list)
     considered_strategies: list[str] = field(default_factory=list)
+    kept: bool = True
     attempt_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     attempted_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 

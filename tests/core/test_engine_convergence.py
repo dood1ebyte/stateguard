@@ -315,6 +315,22 @@ class TestRegressionPreservesEarlierRepairs:
         assert [a.strategy_name for a in result.attempts] == ["FixA", "BreakC"]
         assert result.attempts[-1].succeeded is False
 
+    def test_the_discarded_attempt_is_marked_not_kept(self) -> None:
+        """
+        BreakC's operation really was applied -- to the engine's working copy
+        -- so it stays in ``applied_operations``. ``kept`` is what says it
+        never reached the payload.
+        """
+        engine = make_engine(registry=self._registry(), config=RepairConfig(max_attempts=10))
+        result = engine.repair(self._contract(), {}, MockContractAdapter())
+
+        fix_a, break_c = result.attempts
+        assert fix_a.kept is True
+        assert break_c.kept is False
+        assert [op.target_path for op in break_c.applied_operations] == ["c"]
+        assert result.repaired_output is not None
+        assert "c" not in result.repaired_output
+
 
 # ===========================================================================
 # Termination
@@ -364,6 +380,12 @@ class TestTermination:
         events = {entry.event for entry in result.repair_log}
         assert "repair.max_attempts_exhausted" not in events
         assert "repair.no_progress" in events
+
+    def test_a_repeated_state_discards_only_the_repeating_attempt(self) -> None:
+        engine = make_engine(registry=self._noop_registry(), config=RepairConfig(max_attempts=50))
+        result = engine.repair(self._contract(), {}, MockContractAdapter())
+
+        assert [a.kept for a in result.attempts] == [True, False]
 
     @pytest.mark.parametrize("max_attempts", [1, 2, 3, 6, 10])
     def test_attempts_never_exceed_the_bound(self, max_attempts: int) -> None:

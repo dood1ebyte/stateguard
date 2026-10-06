@@ -1019,6 +1019,7 @@ class RepairEngine:
                     attempt_number=attempt_number,
                     strategy=strategy.name,
                 )
+                attempts[-1].kept = False
                 remaining_violations = current_violations
                 break
 
@@ -1031,6 +1032,9 @@ class RepairEngine:
                     attempt_number=attempt_number,
                     strategy=strategy.name,
                 )
+                # The data is not carried forward (``working_data`` keeps the
+                # last-good state), so neither are this attempt's operations.
+                attempts[-1].kept = False
                 remaining_violations = revalidation.violations
                 break
 
