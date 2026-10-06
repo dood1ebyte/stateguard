@@ -35,6 +35,15 @@ from stateguard.adapters.mcp.outcomes import (
     outcome_for,
     repair_tool_call,
 )
+from stateguard.adapters.mcp.registry import (
+    RegisteredTool,
+    SyncReport,
+    ToolChange,
+    ToolChangeKind,
+    ToolKey,
+    ToolRegistry,
+    ToolState,
+)
 
 __all__ = [
     "DEFAULT_CACHE_SIZE",
@@ -46,8 +55,15 @@ __all__ = [
     "ToolNotFoundError",
     "ToolSchemaUnusableError",
     "MCPToolAdapter",
+    "RegisteredTool",
     "SchemaCache",
+    "SyncReport",
     "ToolCallOutcome",
+    "ToolChange",
+    "ToolChangeKind",
+    "ToolKey",
+    "ToolRegistry",
+    "ToolState",
     "outcome_for",
     "repair_tool_call",
     "split_tool_definition",

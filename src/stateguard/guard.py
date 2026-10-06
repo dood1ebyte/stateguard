@@ -310,6 +310,16 @@ class ContractGuard:
     # Public API
     # ------------------------------------------------------------------
 
+    @property
+    def adapter(self) -> IContractAdapter:
+        """The adapter this guard translates schemas with. Read-only."""
+        return self._adapter
+
+    @property
+    def config(self) -> GuardConfig:
+        """The configuration this guard was built with. Read-only."""
+        return self._config
+
     def repair(self, schema: Any, data: Any) -> RepairResult:
         """
         Detect, attempt to repair, and revalidate *data* against *schema*.

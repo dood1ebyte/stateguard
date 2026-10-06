@@ -197,6 +197,23 @@ class MCPToolAdapter(IContractAdapter):
         self._cache.put(tool_name, input_schema, contract)
         return contract
 
+    def compile(self, schema: Any) -> ContractSpec:
+        """
+        Extract a fresh contract, bypassing the cache, then cache it.
+
+        ``extract_contract`` returns a cached contract when it has one, so
+        anything that only happens *during* extraction -- the
+        ``SchemaFeatureWarning`` s that say where validation is looser than
+        the schema -- happens once per schema per cache lifetime. A caller
+        that needs to observe those every time it learns of a tool
+        (``ToolRegistry`` does) compiles instead. Same result, same cache
+        entry afterwards.
+        """
+        tool_name, input_schema = split_tool_definition(schema)
+        contract = self._inner.extract_contract(input_schema)
+        self._cache.put(tool_name, input_schema, contract)
+        return contract
+
     def validate(
         self,
         contract: ContractSpec,
