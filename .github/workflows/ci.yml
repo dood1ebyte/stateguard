@@ -130,6 +130,10 @@ jobs:
           echo '{"name": "t", "inputSchema": {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]}}' > /tmp/tool.json
           echo '{"n": "5"}' > /tmp/arguments.json
           stateguard check --tool /tmp/tool.json --payload /tmp/arguments.json
+          echo '{"tools": [{"name": "t", "inputSchema": {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]}}]}' > /tmp/tools.json
+          echo '{"name": "t", "arguments": {"n": "5"}}' > /tmp/calls.jsonl
+          stateguard replay --tools /tmp/tools.json --calls /tmp/calls.jsonl
+          stateguard diff /tmp/tools.json /tmp/tools.json
 
       - name: Benchmark harness smoke test
         run: python benchmarks/runner.py --no-write

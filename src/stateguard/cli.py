@@ -19,6 +19,15 @@ JSON Schema), and see what a proxy would do with it::
 
     stateguard check --tool tool.json --payload arguments.json
 
+What changes if this tool definition changes? (a tool, a bare schema, or a
+whole ``tools/list`` on each side)::
+
+    stateguard diff tools-v1.json tools-v2.json
+
+Replay recorded calls against a tool list -- what would StateGuard do?::
+
+    stateguard replay --tools tools.json --calls calls.jsonl [--shadow]
+
 JSON output (for piping into other tools)::
 
     stateguard check --schema contract.json --payload payload.json --json
@@ -34,6 +43,11 @@ Exit codes
 3   AMBIGUOUS — a repair was found but the evidence did not justify applying
     it unsupervised. Distinct from 2 because it is actionable: the candidates
     are printed, so a caller can choose one or re-prompt for better output.
+
+``stateguard diff`` exits 0 when no change can break a call that worked
+before, 1 when one can (including a tool removed, or a schema that became
+unreadable), and 2 on a usage error. ``stateguard replay`` exits 0 when the
+replay ran, 2 on a usage error -- its findings are in the output.
 """
 
 from __future__ import annotations
@@ -432,6 +446,195 @@ def _cmd_check_tool(args: argparse.Namespace, config: Any, payload: Any) -> int:
 
 
 # ---------------------------------------------------------------------------
+# diff / replay -- tool lists
+# ---------------------------------------------------------------------------
+
+
+def _tool_list(document: Any) -> list[Any] | None:
+    """
+    The tools in *document* if it is a tool list, else ``None``.
+
+    Accepts the shapes a captured listing comes in: a ``tools/list`` result
+    (``{"tools": [...]}``), a whole JSON-RPC response carrying one, or a bare
+    array of tool definitions.
+    """
+    if isinstance(document, list):
+        return document
+    if isinstance(document, dict):
+        if isinstance(document.get("tools"), list):
+            return list(document["tools"])
+        result = document.get("result")
+        if isinstance(result, dict) and isinstance(result.get("tools"), list):
+            return list(result["tools"])
+    return None
+
+
+def _cmd_diff(args: argparse.Namespace) -> int:
+    from stateguard.adapters.jsonschema.diff import diff_schemas  # noqa: PLC0415
+    from stateguard.adapters.mcp import (  # noqa: PLC0415
+        InvalidToolDefinitionError,
+        ToolRegistry,
+        split_tool_definition,
+    )
+
+    before, after = _load_json(args.before), _load_json(args.after)
+    before_list, after_list = _tool_list(before), _tool_list(after)
+
+    if (before_list is None) != (after_list is None):
+        _die("compare a tool list with a tool list, or a tool/schema with a tool/schema.")
+
+    if before_list is not None and after_list is not None:
+        registry = ToolRegistry()
+        try:
+            registry.sync(before_list)
+            report = registry.sync(after_list)
+        except InvalidToolDefinitionError as exc:
+            _die(str(exc))
+        if args.json:
+            print(json.dumps(report.to_dict(), indent=2, default=str))
+        else:
+            print(report.explain())
+        return _EXIT_PARTIAL if report.breaking else _EXIT_OK
+
+    both_tools = all(isinstance(doc, dict) and "name" in doc for doc in (before, after))
+    if both_tools:
+        registry = ToolRegistry()
+        try:
+            registry.register(before)
+            change = registry.register(after) if after["name"] == before["name"] else None
+        except InvalidToolDefinitionError as exc:
+            _die(str(exc))
+        if change is not None:
+            if args.json:
+                print(json.dumps(change.to_dict(), indent=2, default=str))
+            else:
+                print(change.explain())
+            return _EXIT_PARTIAL if change.breaking else _EXIT_OK
+
+    # Bare schemas, or two tools with different names: compare the schemas.
+    def schema_of(document: Any) -> Any:
+        try:
+            return split_tool_definition(document)[1]
+        except ValueError:
+            return document  # let diff_schemas classify it
+
+    diff = diff_schemas(schema_of(before), schema_of(after))
+    if args.json:
+        print(json.dumps(diff.to_dict(), indent=2, default=str))
+    else:
+        print(diff.explain())
+    return _EXIT_OK if diff.is_compatible else _EXIT_PARTIAL
+
+
+def _load_calls(path_str: str) -> list[Any]:
+    """Calls from a JSON array or a JSON-lines file; each a call or a tools/call message."""
+    path = Path(path_str)
+    if not path.exists():
+        _die(f"File not found: {path}")
+    text = path.read_text(encoding="utf-8-sig")
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            return [json.loads(line) for line in text.splitlines() if line.strip()]
+        except json.JSONDecodeError as exc:
+            _die(f"Could not parse {path} as JSON or JSON lines: {exc}")
+    return document if isinstance(document, list) else [document]
+
+
+def _call_parts(call: Any) -> tuple[str, Any, Any] | None:
+    """``(name, arguments, id)`` from a plain call or a JSON-RPC tools/call."""
+    if not isinstance(call, dict):
+        return None
+    params = call.get("params") if call.get("method") == "tools/call" else call
+    if not isinstance(params, dict) or not isinstance(params.get("name"), str):
+        return None
+    return params["name"], params.get("arguments"), call.get("id")
+
+
+def _cmd_replay(args: argparse.Namespace) -> int:
+    from collections import Counter  # noqa: PLC0415
+
+    from stateguard.adapters.mcp import (  # noqa: PLC0415
+        InvalidToolDefinitionError,
+        ToolNotFoundError,
+        ToolRegistry,
+        ToolSchemaUnusableError,
+    )
+    from stateguard.core.models.config import GuardConfig, RepairMode  # noqa: PLC0415
+    from stateguard.guard import ContractGuard  # noqa: PLC0415
+
+    tools = _tool_list(_load_json(args.tools))
+    if tools is None:
+        _die(f"{args.tools} is not a tool list (a tools/list result, or an array of tools).")
+    mode = RepairMode.SHADOW if args.shadow else RepairMode.AUTO
+    registry = ToolRegistry(ContractGuard.with_mcp(config=GuardConfig(mode=mode)))
+    try:
+        listing = registry.sync(tools)
+    except InvalidToolDefinitionError as exc:
+        _die(str(exc))
+
+    records: list[dict[str, Any]] = []
+    counts: Counter[str] = Counter()
+    for index, call in enumerate(_load_calls(args.calls)):
+        parts = _call_parts(call)
+        record: dict[str, Any] = {"index": index}
+        if parts is None:
+            record.update(outcome="malformed_call", detail="not a call or a tools/call message")
+        else:
+            name, arguments, identifier = parts
+            record.update(name=name, id=identifier)
+            try:
+                outcome = registry.process_call(name, arguments)
+            except ToolNotFoundError:
+                record.update(outcome="unknown_tool", detail=f"no tool {name!r} in the list")
+            except ToolSchemaUnusableError as exc:
+                record.update(outcome="unusable_schema", detail=str(exc.cause))
+            else:
+                record.update(
+                    outcome=outcome.action.value,
+                    auto_action=(outcome.auto_action or outcome.action).value,
+                    reason=outcome.reason,
+                    record=outcome.to_dict() if args.json else None,
+                    explanation=None if args.json else outcome.explain(),
+                )
+        counts[record["outcome"]] += 1
+        records.append(record)
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "mode": mode.value,
+                    "tools": listing.to_dict()["summary"],
+                    "summary": dict(sorted(counts.items())),
+                    "calls": [{k: v for k, v in r.items() if k != "explanation"} for r in records],
+                },
+                indent=2,
+                default=str,
+            )
+        )
+        return _EXIT_OK
+
+    print(f"Replayed {len(records)} call(s) against {len(registry)} tool(s), {mode.value} mode.")
+    unusable = [str(c.key) for c in listing.unusable]
+    if unusable:
+        print(f"Tools whose schema StateGuard cannot read: {', '.join(unusable)}")
+    print()
+    for record in records:
+        label = f"#{record['index']} {record.get('name', '?')}"
+        if record.get("explanation"):
+            print(label)
+            print("  " + record["explanation"].replace("\n", "\n  "))
+        else:
+            print(f"{label}\n  {record['outcome'].upper()}: {record.get('detail', '')}")
+        print()
+    summary = ", ".join(f"{count} {name}" for name, count in sorted(counts.items()))
+    print(f"Summary: {summary}")
+    return _EXIT_OK
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -554,6 +757,44 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # -- diff ----------------------------------------------------------------
+    diff = sub.add_parser(
+        "diff",
+        help="What changes for callers when a tool definition changes.",
+        description=(
+            "Compare two versions of an MCP tool definition, a bare JSON Schema, or a "
+            "whole tools/list, and report every structural change and whether it can "
+            "break a call that worked before. Exit 0: nothing breaking; 1: something is."
+        ),
+    )
+    diff.add_argument("before", metavar="BEFORE", help="The old tool / schema / tool list.")
+    diff.add_argument("after", metavar="AFTER", help="The new tool / schema / tool list.")
+    diff.add_argument(
+        "--json", action="store_true", default=False, help="Emit the machine-readable report."
+    )
+
+    # -- replay --------------------------------------------------------------
+    replay = sub.add_parser(
+        "replay",
+        help="Replay recorded tool calls against a tool list.",
+        description=(
+            "Run every call in --calls (a JSON array or JSON lines; each a "
+            "{'name', 'arguments'} object or a JSON-RPC tools/call message) through "
+            "StateGuard against the tools in --tools, and report what it would do."
+        ),
+    )
+    replay.add_argument("--tools", metavar="FILE", required=True, help="A tools/list result.")
+    replay.add_argument("--calls", metavar="FILE", required=True, help="Calls to replay.")
+    replay.add_argument(
+        "--shadow",
+        action="store_true",
+        default=False,
+        help="Shadow mode: record what auto mode would do, forward everything.",
+    )
+    replay.add_argument(
+        "--json", action="store_true", default=False, help="Emit one record per call."
+    )
+
     return parser
 
 
@@ -586,6 +827,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "check":
         sys.exit(_cmd_check(args))
+    elif args.command == "diff":
+        sys.exit(_cmd_diff(args))
+    elif args.command == "replay":
+        sys.exit(_cmd_replay(args))
     else:
         # Unreachable: sub.required = True forces argparse to error out
         # before main() is reached if no subcommand is given. Kept as a

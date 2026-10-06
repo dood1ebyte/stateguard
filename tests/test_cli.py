@@ -831,3 +831,159 @@ class TestJsonOutputAdditions:
         # The pre-existing keys are still there.
         for key in ("status", "mode", "violations", "attempts", "ambiguous", "repaired_output"):
             assert key in record
+
+
+# ---------------------------------------------------------------------------
+# diff / replay
+# ---------------------------------------------------------------------------
+
+
+def _git_tools() -> list[dict[str, Any]]:
+    path = Path(__file__).parent / "adapters/jsonschema/corpus/schemas/mcp-server-git.json"
+    data = json.loads(path.read_text())
+    return list(data["tools"] if isinstance(data, dict) else data)
+
+
+class TestDiffCommand:
+    def test_identical_lists_exit_zero(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        tools = _write(tmp_path, "t.json", {"tools": _git_tools()})
+        code, out, _ = _run(["diff", tools, tools], capsys)
+        assert code == 0
+        assert "0 breaking" in out
+
+    def test_a_breaking_list_change_exits_one(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        import copy
+
+        v1 = _git_tools()
+        v2 = copy.deepcopy(v1)
+        commit = next(t for t in v2 if t["name"] == "git_commit")
+        commit["inputSchema"]["properties"]["author"] = {"type": "string"}
+        commit["inputSchema"]["required"].append("author")
+        v2 = [t for t in v2 if t["name"] != "git_reset"]
+        code, out, _ = _run(
+            ["diff", _write(tmp_path, "a.json", v1), _write(tmp_path, "b.json", {"tools": v2})],
+            capsys,
+        )
+        assert code == 1
+        assert "git_commit  BREAKING" in out and "REMOVED   git_reset" in out
+
+    def test_json_report(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        v1 = {"tools": _git_tools()}
+        v2 = {"jsonrpc": "2.0", "id": 1, "result": {"tools": _git_tools()[:-1]}}
+        code, out, _ = _run(
+            ["diff", _write(tmp_path, "a.json", v1), _write(tmp_path, "b.json", v2), "--json"],
+            capsys,
+        )
+        report = json.loads(out)
+        assert code == 1
+        assert report["summary"]["removed"] == 1
+
+    def test_a_single_tool(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        before = FORECAST_TOOL
+        after = json.loads(json.dumps(FORECAST_TOOL))
+        after["inputSchema"]["properties"]["days"]["maximum"] = 30
+        code, out, _ = _run(
+            ["diff", _write(tmp_path, "a.json", before), _write(tmp_path, "b.json", after)], capsys
+        )
+        assert code == 0
+        assert "'maximum' loosened: 14 -> 30" in out
+
+    def test_bare_schemas(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        before = FORECAST_TOOL["inputSchema"]
+        after = {**before, "allOf": [{}]}
+        code, out, _ = _run(
+            [
+                "diff",
+                _write(tmp_path, "a.json", before),
+                _write(tmp_path, "b.json", after),
+                "--json",
+            ],
+            capsys,
+        )
+        assert code == 1
+        assert json.loads(out)["status"] == "unsupported"
+
+    def test_a_list_against_a_tool_is_a_usage_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        code, _, err = _run(
+            [
+                "diff",
+                _write(tmp_path, "a.json", {"tools": []}),
+                _write(tmp_path, "b.json", FORECAST_TOOL),
+            ],
+            capsys,
+        )
+        assert code == 2 and "tool list" in err
+
+
+class TestReplayCommand:
+    def _calls(self, tmp_path: Path) -> str:
+        calls = [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "get_forecast", "arguments": {"loc": "Mumbai", "days": "5"}},
+            },
+            {"name": "get_forecast", "arguments": {"location": "x", "days": 99}},
+            {"name": "nope", "arguments": {}},
+            "garbage",
+        ]
+        path = tmp_path / "calls.jsonl"
+        path.write_text("\n".join(json.dumps(c) for c in calls))
+        return str(path)
+
+    def test_human_summary(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        tools = _write(tmp_path, "t.json", {"tools": [FORECAST_TOOL]})
+        code, out, _ = _run(["replay", "--tools", tools, "--calls", self._calls(tmp_path)], capsys)
+        assert code == 0
+        assert "Summary: 1 forward, 1 malformed_call, 1 refuse, 1 unknown_tool" in out
+
+    def test_shadow_forwards_everything_it_can_read(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tools = _write(tmp_path, "t.json", [FORECAST_TOOL])
+        code, out, _ = _run(
+            ["replay", "--tools", tools, "--calls", self._calls(tmp_path), "--shadow", "--json"],
+            capsys,
+        )
+        record = json.loads(out)
+        assert record["mode"] == "shadow"
+        assert record["summary"] == {"hold": 2, "malformed_call": 1, "unknown_tool": 1}
+        assert [c.get("auto_action") for c in record["calls"][:2]] == ["forward", "refuse"]
+        assert record["calls"][0]["id"] == 1
+
+    def test_unreadable_tools_are_named(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        bad = {"name": "get_forecast", "inputSchema": {"type": "object", "allOf": [{}]}}
+        code, out, _ = _run(
+            [
+                "replay",
+                "--tools",
+                _write(tmp_path, "t.json", [bad]),
+                "--calls",
+                self._calls(tmp_path),
+            ],
+            capsys,
+        )
+        assert "cannot read: get_forecast" in out
+        assert "UNUSABLE_SCHEMA" in out
+
+    def test_a_non_list_is_a_usage_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        code, _, err = _run(
+            [
+                "replay",
+                "--tools",
+                _write(tmp_path, "t.json", FORECAST_TOOL),
+                "--calls",
+                self._calls(tmp_path),
+            ],
+            capsys,
+        )
+        assert code == 2 and "not a tool list" in err
