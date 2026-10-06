@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from stateguard.adapters.jsonschema.errors import (
+    MalformedSchemaError,
     SchemaFeatureWarning,
     UnsupportedSchemaError,
 )
@@ -148,7 +149,7 @@ class JSONSchemaTypeMapper:
         if isinstance(declared, str):
             return self._map_named_type(declared, schema, resolver, path)
         if declared is not None:
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"Field '{path}': 'type' must be a string or a list of strings, "
                 f"got {type(declared).__name__}: {declared!r}"
             )
@@ -201,12 +202,12 @@ class JSONSchemaTypeMapper:
         combinator = any_of if any_of is not None else one_of
         if combinator is not None:
             if not isinstance(combinator, Sequence) or isinstance(combinator, (str, bytes)):
-                raise UnsupportedSchemaError(
+                raise MalformedSchemaError(
                     f"Field '{path}': 'anyOf'/'oneOf' must be a list, "
                     f"got {type(combinator).__name__}."
                 )
             if not combinator:
-                raise UnsupportedSchemaError(
+                raise MalformedSchemaError(
                     f"Field '{path}': 'anyOf'/'oneOf' is empty, which accepts nothing."
                 )
             return list(combinator)
@@ -309,7 +310,7 @@ class JSONSchemaTypeMapper:
         try:
             field_type = JSON_TYPE_NAMES[declared]
         except KeyError:
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"Field '{path}': unknown type {declared!r}. "
                 f"Supported types are {sorted(JSON_TYPE_NAMES)}."
             ) from None
@@ -404,7 +405,7 @@ class JSONSchemaTypeMapper:
 
         values = schema["enum"]
         if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"Field '{path}': 'enum' must be a list, got {type(values).__name__}."
             )
         if not values:

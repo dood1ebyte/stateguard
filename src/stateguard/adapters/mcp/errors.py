@@ -28,14 +28,18 @@ Invalid *arguments* are not an exception at all: they are an outcome
 and a decision was made about it.
 
 ``MCPAdapterError`` is the common base for everything raised by the MCP
-layer itself. ``InvalidToolDefinitionError`` and ``ToolSchemaUnusableError``
-also subclass ``ValueError`` and ``ToolNotFoundError`` subclasses
-``LookupError``, matching what a caller catching the builtin would expect.
+layer itself. ``InvalidToolDefinitionError`` is also a
+``MalformedSchemaError`` (so an ``UnsupportedSchemaError`` and a
+``ValueError``), ``ToolSchemaUnusableError`` a ``ValueError``, and
+``ToolNotFoundError`` a ``LookupError``, matching what a caller catching the
+builtin -- or the older ``UnsupportedSchemaError`` -- would expect.
 
 Zero external dependencies.
 """
 
 from __future__ import annotations
+
+from stateguard.adapters.jsonschema.errors import MalformedSchemaError
 
 __all__ = [
     "ForwardingInvariantError",
@@ -51,15 +55,20 @@ class MCPAdapterError(Exception):
     """Base for every error raised by ``stateguard.adapters.mcp`` itself."""
 
 
-class InvalidToolDefinitionError(MCPAdapterError, ValueError):
+class InvalidToolDefinitionError(MCPAdapterError, MalformedSchemaError):
     """
     A tool definition StateGuard cannot even identify.
 
-    Not an object, no usable ``name`` where one is required, an
-    ``inputSchema`` that is not an object, or content that is not JSON
-    (and so has no stable identity). Distinct from a schema that is
-    well-formed but uses an unsupported construct, which raises
-    ``UnsupportedSchemaError``.
+    Not an object, no usable ``name`` where one is required, no
+    ``inputSchema`` or one that is not an object, the two spellings of the
+    key disagreeing, or content that is not JSON (and so has no stable
+    identity). Distinct from a well-formed schema that uses an unsupported
+    construct, which raises ``UnsupportedSchemaError``.
+
+    Subclasses ``MalformedSchemaError`` -- and through it
+    ``UnsupportedSchemaError`` and ``ValueError`` -- because these were
+    raised as ``UnsupportedSchemaError`` before this class existed, and code
+    catching that must keep working.
     """
 
 

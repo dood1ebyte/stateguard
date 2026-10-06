@@ -65,6 +65,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from stateguard.adapters.jsonschema.errors import (
+    MalformedReferenceError,
     SchemaReferenceError,
     UnsupportedSchemaError,
 )
@@ -235,7 +236,7 @@ class RefResolver:
         while "$ref" in current:
             raw_ref = current["$ref"]
             if not isinstance(raw_ref, str):
-                raise SchemaReferenceError(
+                raise MalformedReferenceError(
                     f"'$ref' must be a string, got {type(raw_ref).__name__}: {raw_ref!r}"
                 )
 
@@ -297,7 +298,7 @@ class RefResolver:
             node = self._descend(node, token, raw_ref)
 
         if not isinstance(node, Mapping):
-            raise SchemaReferenceError(
+            raise MalformedReferenceError(
                 f"Reference {raw_ref!r} resolves to a {type(node).__name__}, not a schema object."
             )
         return node
@@ -307,7 +308,7 @@ class RefResolver:
         """Take one JSON Pointer step through a mapping or a sequence."""
         if isinstance(node, Mapping):
             if token not in node:
-                raise SchemaReferenceError(
+                raise MalformedReferenceError(
                     f"Reference {raw_ref!r} does not resolve: no '{token}' in {sorted(node)[:8]!r}."
                 )
             return node[token]
@@ -316,18 +317,18 @@ class RefResolver:
             try:
                 index = int(token)
             except ValueError:
-                raise SchemaReferenceError(
+                raise MalformedReferenceError(
                     f"Reference {raw_ref!r} does not resolve: '{token}' is not a "
                     f"valid index into a {len(node)}-element array."
                 ) from None
             if not 0 <= index < len(node):
-                raise SchemaReferenceError(
+                raise MalformedReferenceError(
                     f"Reference {raw_ref!r} does not resolve: index {index} is out "
                     f"of range for a {len(node)}-element array."
                 )
             return node[index]
 
-        raise SchemaReferenceError(
+        raise MalformedReferenceError(
             f"Reference {raw_ref!r} does not resolve: cannot descend into a "
             f"{type(node).__name__} looking for '{token}'."
         )

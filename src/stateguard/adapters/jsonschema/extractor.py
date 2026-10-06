@@ -46,6 +46,7 @@ from dataclasses import replace
 from typing import Any
 
 from stateguard.adapters.jsonschema.errors import (
+    MalformedSchemaError,
     SchemaFeatureWarning,
     UnsupportedSchemaError,
 )
@@ -84,7 +85,7 @@ class JSONSchemaExtractor:
         fields, so a root of any other type has nothing to map.
         """
         if not isinstance(schema, Mapping):
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"A JSON Schema must be an object, got {type(schema).__name__}."
             )
 
@@ -120,9 +121,11 @@ class JSONSchemaExtractor:
                     f"{where}: expected an object schema, got type {declared!r}."
                 )
 
-        properties = schema.get("properties") or {}
+        # ``or {}`` here used to turn a malformed ``properties: []`` into "no
+        # properties" -- an empty list is falsy -- and accept it silently.
+        properties = schema.get("properties", {})
         if not isinstance(properties, Mapping):
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"{where}: 'properties' must be an object, got {type(properties).__name__}."
             )
 
@@ -173,7 +176,7 @@ class JSONSchemaExtractor:
             )
             return False
 
-        raise UnsupportedSchemaError(
+        raise MalformedSchemaError(
             f"{where}: 'additionalProperties' must be a boolean or a schema object, "
             f"got {type(value).__name__}: {value!r}"
         )
@@ -225,13 +228,13 @@ class JSONSchemaExtractor:
         if required is None:
             return frozenset()
         if not isinstance(required, Sequence) or isinstance(required, (str, bytes)):
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"{where}: 'required' must be a list, got {type(required).__name__}."
             )
 
         for name in required:
             if not isinstance(name, str):
-                raise UnsupportedSchemaError(
+                raise MalformedSchemaError(
                     f"{where}: 'required' must contain strings, got "
                     f"{type(name).__name__}: {name!r}. A property name is a string; "
                     f"coercing this one would invent a field the schema never declared."
@@ -354,7 +357,7 @@ class JSONSchemaExtractor:
         the failure mode that damages trust most (§8).
         """
         if not isinstance(name, str):
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"Property names must be strings, got {type(name).__name__}: {name!r}"
             )
         if "." in name:

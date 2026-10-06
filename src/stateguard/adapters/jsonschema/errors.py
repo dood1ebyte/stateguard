@@ -31,6 +31,8 @@ from __future__ import annotations
 
 __all__ = [
     "JSONSchemaError",
+    "MalformedReferenceError",
+    "MalformedSchemaError",
     "SchemaFeatureWarning",
     "SchemaReferenceError",
     "UnsupportedSchemaError",
@@ -93,3 +95,26 @@ class SchemaReferenceError(JSONSchemaError):
     * a reference cycle, either ``$ref``-to-``$ref`` or a recursive schema
       whose expansion has no fixed point.
     """
+
+
+class MalformedSchemaError(UnsupportedSchemaError):
+    """
+    The document is not valid JSON Schema at all, as opposed to valid JSON
+    Schema that uses a construct outside the supported subset.
+
+    ``required`` that is not a list of strings, ``type: "strng"``,
+    ``properties`` that is not an object, an ``enum`` that is not an array, a
+    ``$ref`` pointer that resolves to nothing. These are the schema author's
+    error, and no JSON Schema validator would accept the document either --
+    which is worth knowing apart from "StateGuard does not do ``allOf``",
+    where the schema is fine and the limitation is ours.
+
+    Subclasses ``UnsupportedSchemaError``, so everything that already catches
+    that keeps catching this; the distinction is available to callers that
+    want it (``isinstance(err, MalformedSchemaError)``) without changing
+    anything for callers that do not.
+    """
+
+
+class MalformedReferenceError(SchemaReferenceError, MalformedSchemaError):
+    """A ``$ref`` that is not a string, or a pointer that resolves to nothing."""

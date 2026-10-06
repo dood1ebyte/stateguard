@@ -17,6 +17,8 @@ from __future__ import annotations
 from stateguard.adapters.jsonschema.adapter import JSONSchemaAdapter
 from stateguard.adapters.jsonschema.errors import (
     JSONSchemaError,
+    MalformedReferenceError,
+    MalformedSchemaError,
     SchemaFeatureWarning,
     SchemaReferenceError,
     UnsupportedSchemaError,
@@ -30,6 +32,8 @@ __all__ = [
     "JSONSchemaError",
     "JSONSchemaExtractor",
     "JSONSchemaTypeMapper",
+    "MalformedReferenceError",
+    "MalformedSchemaError",
     "RefResolver",
     "SchemaFeatureWarning",
     "SchemaReferenceError",
