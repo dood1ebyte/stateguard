@@ -56,6 +56,7 @@ import argparse
 import contextlib
 import importlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
@@ -72,6 +73,7 @@ _EXIT_OK = 0  # SUCCESS or ALREADY_VALID
 _EXIT_PARTIAL = 1  # PARTIAL
 _EXIT_FAILED = 2  # FAILED  (argparse also uses 2 for bad args, per convention)
 _EXIT_AMBIGUOUS = 3  # AMBIGUOUS -- a repair was found but withheld
+_EXIT_BROKEN_PIPE = 141  # stdout closed early (128 + SIGPIPE), as a shell reports it
 
 
 # ---------------------------------------------------------------------------
@@ -832,12 +834,21 @@ def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "check":
-        sys.exit(_cmd_check(args))
-    elif args.command == "diff":
-        sys.exit(_cmd_diff(args))
-    elif args.command == "replay":
-        sys.exit(_cmd_replay(args))
+    commands = {"check": _cmd_check, "diff": _cmd_diff, "replay": _cmd_replay}
+    if args.command in commands:
+        try:
+            code = commands[args.command](args)
+            sys.stdout.flush()
+        except BrokenPipeError:
+            # The reader went away (``stateguard replay ... | head``). Not
+            # worth a traceback. Point stdout at devnull so the interpreter's
+            # own flush at exit does not raise again, and exit as a process
+            # killed by SIGPIPE would (128 + 13) -- never 0, because the
+            # command's real verdict (``diff``'s "breaking") was not reached.
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+            sys.exit(_EXIT_BROKEN_PIPE)
+        sys.exit(code)
     else:
         # Unreachable: sub.required = True forces argparse to error out
         # before main() is reached if no subcommand is given. Kept as a

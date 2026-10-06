@@ -1004,3 +1004,39 @@ class TestReplayCommand:
             capsys,
         )
         assert code == 2 and "not a tool list" in err
+
+
+class TestBrokenPipe:
+    """``stateguard ... | head`` must not end in a traceback, or in a false 0."""
+
+    def test_a_closed_stdout_exits_quietly_and_not_zero(self, tmp_path: Path) -> None:
+        import subprocess
+
+        calls = tmp_path / "calls.jsonl"
+        calls.write_text(
+            "\n".join(
+                json.dumps({"name": "get_forecast", "arguments": {"loc": "x", "days": "5"}})
+                for _ in range(2000)
+            )
+        )
+        tools = _write(tmp_path, "t.json", [FORECAST_TOOL])
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "from stateguard.cli import main; main()",
+                "replay",
+                "--tools",
+                tools,
+                "--calls",
+                str(calls),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert proc.stdout is not None and proc.stderr is not None
+        proc.stdout.readline()
+        proc.stdout.close()  # the reader goes away
+        stderr = proc.stderr.read().decode()
+        assert proc.wait(timeout=60) == 141
+        assert "Traceback" not in stderr
