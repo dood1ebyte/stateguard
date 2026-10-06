@@ -80,7 +80,7 @@ from stateguard.core.errors.violations import ContractViolation, ViolationType
 from stateguard.core.interfaces.strategy import IRepairStrategy
 from stateguard.core.models.contract import ContractSpec
 
-__all__ = ["FuzzyFieldMatchStrategy", "jaro_winkler", "score_assignments"]
+__all__ = ["FuzzyFieldMatchStrategy", "jaro_winkler", "score_assignments", "word_substitution"]
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +311,107 @@ def score_assignments(missing: list[str], unexpected: list[str]) -> list[_Assign
 
 
 # ---------------------------------------------------------------------------
+# Word substitution
+# ---------------------------------------------------------------------------
+
+
+def _tokens(name: str) -> list[str]:
+    """
+    Split a field name into lower-case words.
+
+    Separators (``_``, ``-``, ``.``, space) and camelCase boundaries both
+    split, so ``maxPrice``, ``max_price`` and ``max-price`` all give
+    ``["max", "price"]``.
+    """
+    words: list[str] = []
+    current = ""
+    for i, char in enumerate(name):
+        if char in "_-. ":
+            if current:
+                words.append(current)
+            current = ""
+            continue
+        if char.isupper() and current and (name[i - 1].islower() or name[i - 1].isdigit()):
+            words.append(current)
+            current = ""
+        current += char.lower()
+    if current:
+        words.append(current)
+    return words
+
+
+def _is_subsequence(short: str, long: str) -> bool:
+    remaining = iter(long)
+    return all(char in remaining for char in short)
+
+
+def _within_one_edit(a: str, b: str) -> bool:
+    """One insertion, deletion, substitution, or adjacent transposition apart."""
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        diffs = [i for i in range(len(a)) if a[i] != b[i]]
+        if len(diffs) == 1:
+            return True
+        return (
+            len(diffs) == 2
+            and diffs[1] == diffs[0] + 1
+            and a[diffs[0]] == b[diffs[1]]
+            and a[diffs[1]] == b[diffs[0]]
+        )
+    shorter, longer = (a, b) if len(a) < len(b) else (b, a)
+    return any(longer[:i] + longer[i + 1 :] == shorter for i in range(len(longer)))
+
+
+def _same_word(a: str, b: str) -> bool:
+    """
+    Whether two words plausibly spell the same word.
+
+    Abbreviation -- one is a subsequence of the other with the same first
+    letter (``usr``/``user``, ``msg``/``message``, ``tz``/``timezone``) --
+    or a typo, at most one edit apart. The typo rule needs four letters on
+    both sides: between short words one edit is usually a different word
+    (``id``/``ip``, ``min``/``mix``).
+    """
+    if a == b:
+        return True
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    if shorter[0] == longer[0] and _is_subsequence(shorter, longer):
+        return True
+    return min(len(a), len(b)) >= 4 and _within_one_edit(a, b)
+
+
+def word_substitution(target: str, candidate: str) -> tuple[str, str] | None:
+    """
+    The ``(candidate word, target word)`` pair if the names differ by a
+    whole-word substitution, else ``None``.
+
+    That is: both names split into the same number of words, at least one
+    word is shared in place -- which is what inflates their similarity --
+    and some aligned pair is two different words rather than two spellings
+    of one. ``max_price``/``min_price``, ``created_after``/``updated_after``,
+    ``first_name``/``last_name``, ``user_email``/``user_name``.
+
+    Not a substitution: ``usr_id``/``user_id`` (abbreviation),
+    ``recieve_date``/``receive_date`` (typo), ``zipcode``/``zip_code`` and
+    ``temp_celsius``/``temperature`` (different word counts -- a re-split or
+    a rename, which similarity and margin already judge).
+    """
+    target_words, candidate_words = _tokens(target), _tokens(candidate)
+    if len(target_words) != len(candidate_words) or len(target_words) < 2:
+        return None
+    pairs = list(zip(candidate_words, target_words, strict=True))
+    if not any(c == t for c, t in pairs):
+        return None
+    for c, t in pairs:
+        if not _same_word(c, t):
+            return c, t
+    return None
+
+
+# ---------------------------------------------------------------------------
 # FuzzyFieldMatchStrategy
 # ---------------------------------------------------------------------------
 
@@ -412,6 +513,17 @@ class FuzzyFieldMatchStrategy(IRepairStrategy):
                 )
                 notes.append(f"closest alternative '{assignment.runner_up}' ({where})")
 
+            contradiction: str | None = None
+            substituted = word_substitution(assignment.target, assignment.candidate)
+            if substituted is not None:
+                # The shared words carry the similarity; the one that differs
+                # says these are different things. Recorded, not re-scored --
+                # TrustPolicy will surface this rather than apply it.
+                contradiction = (
+                    f"'{assignment.candidate}' -> '{assignment.target}' swaps the word "
+                    f"'{substituted[0]}' for '{substituted[1]}', not a spelling of it"
+                )
+
             operations.append(
                 FieldOperation(
                     op_type=FieldOpType.RENAME,
@@ -428,6 +540,7 @@ class FuzzyFieldMatchStrategy(IRepairStrategy):
                         margin=assignment.margin,
                         alternatives_considered=assignment.alternatives,
                         notes=tuple(notes),
+                        contradiction=contradiction,
                     ),
                 )
             )

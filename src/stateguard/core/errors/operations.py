@@ -205,8 +205,23 @@ class RepairEvidence:
         extension point for Stage 2 semantic repair.
     notes:
         Human-readable fragments describing what was measured, rendered by
-        ``FieldOperation.explain()``.  Must never contain field *values* —
+        ``TrustPolicy.explain()``.  Must never contain field *values* —
         see ``RepairConfig.include_values_in_log``.
+    contradiction:
+        A structural reason the scores above overstate the correspondence,
+        or ``None``.  When set, ``TrustPolicy`` never applies the operation
+        unsupervised: the best it can be is ``AMBIGUOUS``, surfaced to the
+        caller with this text as the reason.  Scores are left as measured --
+        this does not adjust a number to land it in a band, it records a
+        finding the numbers cannot express.  Value-free, like ``notes``.
+
+        The case it exists for is a whole-word substitution:
+        ``max_price`` against ``min_price`` scores 0.867 on Jaro-Winkler
+        because the shared ``price`` dominates, and with no other candidate
+        in play the margin is decisive -- so the rename applied, writing a
+        maximum into a minimum.  No threshold on similarity separates that
+        from a genuine typo (see ``benchmarks/calibration``); the token
+        structure does.
     """
 
     name_match: float | None = None
@@ -216,6 +231,7 @@ class RepairEvidence:
     alternatives_considered: int = 0
     signals: tuple[tuple[str, float], ...] = ()
     notes: tuple[str, ...] = ()
+    contradiction: str | None = None
 
     def __post_init__(self) -> None:
         for label in ("name_match", "value_preserved", "schema_authority", "margin"):

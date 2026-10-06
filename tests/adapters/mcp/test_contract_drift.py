@@ -389,3 +389,51 @@ def test_every_forwarded_value_came_from_the_model_or_the_schema(
             assert declared is not None and value == declared, (
                 f"{label}: {field!r} appeared with no operation and no declared default"
             )
+
+
+# ===========================================================================
+# Opposite-meaning names: surfaced, never applied
+# ===========================================================================
+
+
+class TestOppositeNamesAreNeverApplied:
+    """
+    These used to forward with the value in the wrong field -- a maximum as
+    a minimum, an update time as a creation time. They are word
+    substitutions, so they are at best escalated with the candidate.
+    """
+
+    @pytest.mark.parametrize(
+        ("field", "sent"),
+        [
+            ("min_price", "max_price"),
+            ("created_after", "updated_after"),
+            ("first_name", "last_name"),
+            ("is_active", "is_archived"),
+        ],
+    )
+    def test_the_call_is_not_forwarded(self, field: str, sent: str) -> None:
+        tool = {
+            "name": "search",
+            "inputSchema": {
+                "type": "object",
+                "properties": {field: {"type": "string"}},
+                "required": [field],
+            },
+        }
+        outcome = _call(tool, {sent: "x"})
+        assert not outcome.should_forward
+        assert outcome.arguments is None
+
+    def test_a_close_one_escalates_and_says_why(self) -> None:
+        tool = {
+            "name": "search",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"min_price": {"type": "number"}},
+                "required": ["min_price"],
+            },
+        }
+        outcome = _call(tool, {"max_price": 10})
+        assert outcome.action is MCPAction.ESCALATE
+        assert "swaps the word 'max' for 'min'" in outcome.explain()

@@ -608,14 +608,15 @@ class RepairEngine:
 
     def _ambiguity_reason(self, op: FieldOperation) -> str:
         """
-        Say why *op* was withheld, distinguishing the two ways it can happen.
+        Say why *op* was withheld, distinguishing the ways it can happen.
 
-        There are exactly two.  Either the trust score fell short of the bar
-        for its risk tier, or it cleared the bar and ``_hold_tainted``
-        withheld it anyway because the engine had already declined to place
-        that source key.  ``TrustPolicy.decide`` returns AMBIGUOUS only in the
-        first case, so ``trust >= apply_at`` on an abstained operation
-        identifies the second exactly, with no extra plumbing.
+        There are three.  The trust score fell short of the bar for its risk
+        tier; or it cleared the bar but the evidence carries a
+        ``contradiction``, which ``TrustPolicy.evaluate`` never applies; or it
+        cleared the bar and ``_hold_tainted`` withheld it anyway because the
+        engine had already declined to place that source key.  The first is
+        ``trust < apply_at``; of the other two, a contradiction is on the
+        operation itself and is checked first.
 
         Reporting both as "trust X is below the threshold of Y" produced a
         statement that contradicted its own numbers -- "trust 0.89 is below
@@ -623,6 +624,13 @@ class RepairEngine:
         decide what to do about the abstention.
         """
         band = self._policy.band_for(op.risk)
+        if op.trust >= band.apply_at and op.evidence.contradiction is not None:
+            # A third way, from ``TrustPolicy.evaluate``: the score cleared the
+            # bar but the evidence carries a finding the score cannot express.
+            return (
+                f"trust {op.trust:.2f} clears the {op.risk.name} threshold of "
+                f"{band.apply_at:.2f}, but {op.evidence.contradiction}"
+            )
         if op.trust >= band.apply_at:
             source = f"'{op.source_path}'" if op.source_path is not None else "this value"
             return (

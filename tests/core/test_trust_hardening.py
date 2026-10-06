@@ -372,11 +372,42 @@ class TestAmbiguityReasonIsTrue:
         assert best is not None
 
         # The rename to user_id scores 0.891, which clears INFERRED's 0.75
-        # bar -- it was withheld because user_email had already been declined.
+        # bar. It is withheld for two true reasons: user_email had already been
+        # declined, and 'email' -> 'id' is a word substitution. The reason
+        # names the second (it is about the operation itself); what must never
+        # happen is a reason that contradicts the score.
         assert best.trust > 0.75
         assert "below" not in held.reason
-        assert "already withheld" in held.reason
+        assert "clears the INFERRED threshold" in held.reason
         assert "user_email" in held.reason
+
+    def test_the_already_withheld_reason_is_true_when_it_is_the_only_one(self) -> None:
+        """
+        The ``_hold_tainted`` path on its own: an operation that clears the
+        bar, carries no contradiction, and was withheld because its source
+        key was declined earlier in the run.
+        """
+        from stateguard.core.errors.operations import (
+            FieldOperation,
+            FieldOpType,
+            RepairEvidence,
+            RepairRisk,
+        )
+        from tests.core.test_engine import make_engine
+
+        op = FieldOperation(
+            FieldOpType.RENAME,
+            "user_id",
+            "rename",
+            trust=0.89,
+            risk=RepairRisk.INFERRED,
+            evidence=RepairEvidence(name_match=0.89),
+            source_path="uid",
+        )
+        reason = make_engine()._ambiguity_reason(op)
+        assert "below" not in reason
+        assert "already withheld" in reason
+        assert "'uid'" in reason
 
     def test_a_genuinely_low_score_still_says_below(self) -> None:
         guard = ContractGuard.with_dict_schema()

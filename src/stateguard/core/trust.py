@@ -279,12 +279,22 @@ class TrustPolicy:
 
         This path is deprecated and disappears with the ``confidence`` alias.
         Built-in strategies never take it: they all report evidence.
+
+        Contradicted evidence
+        ---------------------
+        An operation whose evidence carries a ``contradiction`` is never
+        applied: an ``APPLY`` becomes ``AMBIGUOUS``, so the repair is
+        surfaced for a caller to confirm rather than committed. ``REJECT``
+        is unaffected -- evidence too weak to consider stays rejected.
         """
         if operation.evidence.applicable_scores:
             trust = self.score(operation.evidence)
         else:
             trust = operation.trust
-        return replace(operation, trust=trust), self.decide(trust, operation.risk)
+        decision = self.decide(trust, operation.risk)
+        if decision is TrustDecision.APPLY and operation.evidence.contradiction is not None:
+            decision = TrustDecision.AMBIGUOUS
+        return replace(operation, trust=trust), decision
 
     # ------------------------------------------------------------------
     # Explanation
@@ -333,6 +343,8 @@ class TrustPolicy:
             lines.append(f"  {name:<17} {value:.3f}")
         for note in evidence.notes:
             lines.append(f"  - {note}")
+        if evidence.contradiction is not None:
+            lines.append(f"  {'contradiction':<17} {evidence.contradiction}")
 
         lines.append(
             f"  {'decision':<17} {operation.risk.name} applies at {band.apply_at:.2f}, "
