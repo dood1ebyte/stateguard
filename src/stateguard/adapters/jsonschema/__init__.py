@@ -24,6 +24,12 @@ from stateguard.adapters.jsonschema.errors import (
     UnsupportedSchemaError,
 )
 from stateguard.adapters.jsonschema.extractor import JSONSchemaExtractor
+from stateguard.adapters.jsonschema.identity import (
+    SchemaFingerprint,
+    document_fingerprint,
+    fingerprint_schema,
+    normalize_schema,
+)
 from stateguard.adapters.jsonschema.refs import RefResolver
 from stateguard.adapters.jsonschema.type_mapper import JSONSchemaTypeMapper
 
@@ -36,6 +42,10 @@ __all__ = [
     "MalformedSchemaError",
     "RefResolver",
     "SchemaFeatureWarning",
+    "SchemaFingerprint",
     "SchemaReferenceError",
     "UnsupportedSchemaError",
+    "document_fingerprint",
+    "fingerprint_schema",
+    "normalize_schema",
 ]
