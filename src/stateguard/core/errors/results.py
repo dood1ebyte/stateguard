@@ -18,12 +18,15 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from stateguard.core.errors.operations import FieldOperation
 from stateguard.core.errors.violations import ContractViolation
 from stateguard.core.models.config import RepairMode
 from stateguard.logging.logger import RepairLogEntry
+
+if TYPE_CHECKING:
+    from stateguard.core.explain import FieldDecision
 
 __all__ = [
     "AmbiguousRepair",
@@ -325,6 +328,13 @@ class RepairResult:
     ----------------------
     ``is_success``, ``is_partial``, ``is_failed``, ``is_already_valid`` —
     boolean shorthands for the four ``RepairStatus`` values.
+
+    Reading it
+    ----------
+    ``field_decisions()`` answers "what happened to each field", ``explain()``
+    renders that as value-free text safe to log, and ``to_dict()`` is the
+    whole record as JSON-ready data.  All three are derived from the fields
+    above; see ``stateguard.core.explain``.
     """
 
     # Required
@@ -394,3 +404,37 @@ class RepairResult:
         candidates worth surfacing.
         """
         return bool(self.ambiguous)
+
+    # ------------------------------------------------------------------
+    # Reading the result
+    # ------------------------------------------------------------------
+
+    def field_decisions(self) -> list[FieldDecision]:
+        """
+        What happened to each field: repaired, held, discarded, or unresolved.
+
+        See ``stateguard.core.explain.field_decisions``.
+        """
+        from stateguard.core.explain import field_decisions  # noqa: PLC0415
+
+        return field_decisions(self)
+
+    def explain(self) -> str:
+        """
+        A short, deterministic, value-free explanation -- safe to log.
+
+        See ``stateguard.core.explain.explain_result``.
+        """
+        from stateguard.core.explain import explain_result  # noqa: PLC0415
+
+        return explain_result(self)
+
+    def to_dict(self) -> dict[str, Any]:
+        """
+        The complete record as JSON-ready data, payloads included.
+
+        See ``stateguard.core.explain.result_to_dict``.
+        """
+        from stateguard.core.explain import result_to_dict  # noqa: PLC0415
+
+        return result_to_dict(self)

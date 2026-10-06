@@ -48,6 +48,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from stateguard.core.errors.results import RepairResult, RepairStatus
+from stateguard.core.explain import root_normalisation
 
 if TYPE_CHECKING:
     from stateguard.guard import ContractGuard
@@ -123,6 +124,31 @@ class ToolCallOutcome:
     def should_forward(self) -> bool:
         """Whether the call proceeds at all (``FORWARD`` or ``HOLD``)."""
         return self.action in (MCPAction.FORWARD, MCPAction.HOLD)
+
+    def explain(self) -> str:
+        """
+        The decision and why, field by field -- value-free, safe to log.
+
+        The first line is the action and its reason; the rest is
+        ``RepairResult.explain()``.
+        """
+        return f"{self.action.value.upper()}: {self.reason}\n{self.result.explain()}"
+
+    def to_dict(self) -> dict[str, Any]:
+        """
+        The decision plus the full ``RepairResult.to_dict()`` record.
+
+        Includes payloads -- ``arguments``, ``preview`` and the result's own
+        -- so treat it like the data it describes.
+        """
+        return {
+            "action": self.action.value,
+            "should_forward": self.should_forward,
+            "reason": self.reason,
+            "arguments": self.arguments,
+            "preview": self.preview,
+            "result": self.result.to_dict(),
+        }
 
 
 def outcome_for(result: RepairResult, original_arguments: dict[str, Any]) -> ToolCallOutcome:
@@ -283,7 +309,7 @@ def _shadow_outcome(result: RepairResult, original_arguments: dict[str, Any]) ->
         )
 
     repairs = _operation_count(result)
-    if repairs or _root_note(result) is not None:
+    if repairs or root_normalisation(result) is not None:
         reason = (
             f"Shadow mode: {_repairs_phrase(result)} determined and withheld. "
             f"Forward the original arguments and review the preview."
@@ -372,21 +398,6 @@ def _operation_count(result: RepairResult) -> int:
     return sum(len(attempt.applied_operations) for attempt in result.attempts if attempt.kept)
 
 
-def _root_note(result: RepairResult) -> str | None:
-    """
-    What the engine did to a payload whose root was not an object, if anything.
-
-    A JSON-encoded string or a single-element list wrapping the object is
-    unwrapped before any field-level strategy runs, so it never appears as an
-    operation -- which made the reason for such a call read "Repaired 0
-    field(s)", or in shadow claim the arguments "matched the tool's schema".
-    """
-    for entry in result.repair_log:
-        if entry.event == "root.normalised":
-            return str(entry.data.get("action", "normalised the payload root"))
-    return None
-
-
 def _repairs_phrase(result: RepairResult) -> str:
     """
     What was done to the payload, as a lower-case clause.
@@ -396,7 +407,7 @@ def _repairs_phrase(result: RepairResult) -> str:
     same things as nouns, since nothing was done: ``"2 repair(s)"``.
     """
     count = _operation_count(result)
-    root = _root_note(result)
+    root = root_normalisation(result)
     if result.is_shadow:
         fields = f"{count} repair(s)"
         root_part = f"a payload-root normalisation ({root})"
