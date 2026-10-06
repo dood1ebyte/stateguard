@@ -202,6 +202,10 @@ class TestExplainText:
         text = shadow.repair(FORECAST, {"loc": "Mumbai", "days": "5"}).explain()
         assert text.startswith("status: success (shadow) -- proposed, not applied")
 
+    def test_shadow_does_not_claim_a_proposal_for_a_valid_call(self, shadow: ContractGuard) -> None:
+        text = shadow.repair(FORECAST, {"location": "Mumbai", "days": 5}).explain()
+        assert text.splitlines()[0] == "status: already_valid (shadow)"
+
     def test_a_run_with_no_payload_says_so(self, auto: ContractGuard) -> None:
         text = auto.repair(ACCOUNT, {"account": "x"}).explain()
         assert text.startswith("status: ambiguous (auto) -- no payload produced")

@@ -277,7 +277,7 @@ def explain_result(result: RepairResult) -> str:
 
 
 def _payload_note(result: RepairResult) -> str:
-    if result.repaired_output is not None:
+    if result.repaired_output is not None or result.is_already_valid:
         return ""
     if result.proposed_output is not None:
         return " -- proposed, not applied"
