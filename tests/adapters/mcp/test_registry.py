@@ -484,3 +484,28 @@ class TestConcurrency:
         report = registry.sync([_tool("a", description="x"), {"name": "b"}])
         json.dumps(report.to_dict())
         json.dumps([t.to_dict() for t in registry.tools()])
+
+
+class TestUnchangedDefinitionsAreNotRebuilt:
+    """An unchanged listing is the common case; re-syncing it re-derives nothing."""
+
+    def test_no_extraction_on_an_unchanged_sync(
+        self, registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry.sync([_tool("a"), _tool("b")])
+        before = {t.name: t for t in registry.tools()}
+        calls: list[Any] = []
+        original = registry.guard.adapter.compile  # type: ignore[attr-defined]
+        monkeypatch.setattr(
+            registry.guard.adapter, "compile", lambda tool: calls.append(tool) or original(tool)
+        )
+        report = registry.sync([_tool("a"), _tool("b", description="changed")])
+        assert [c.key.name for c in report.unchanged] == ["a"]
+        assert [t["name"] for t in calls] == ["b"]  # only the changed one is re-extracted
+        assert registry.get("a") is before["a"]
+
+    def test_a_duplicate_listing_recovers_when_listed_once(self, registry: ToolRegistry) -> None:
+        registry.sync([_tool("a"), _tool("a")])
+        assert registry.get("a").state is ToolState.INVALID
+        registry.sync([_tool("a")])
+        assert registry.get("a").usable

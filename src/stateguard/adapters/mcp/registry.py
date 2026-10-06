@@ -618,6 +618,16 @@ class ToolRegistry:
         except JSONSchemaError as exc:
             return self._unusable(key, tool, exc)
 
+        # The same definition as the one registered: nothing to re-derive.
+        # A relay re-syncs on every client tools/list, and an unchanged
+        # listing is the common case -- measured, rebuilding it cost ~0.4 ms
+        # per tool (copy, fingerprint, extraction, and a diff that extracted
+        # again). The entry is immutable, so returning it is exact.
+        with self._lock:
+            existing = self._tools.get(key)
+        if existing is not None and existing.definition_fingerprint == definition_fp:
+            return existing
+
         definition: dict[str, Any] = copy.deepcopy(dict(tool))
         try:
             _name, input_schema = split_tool_definition(definition)
@@ -696,7 +706,7 @@ class ToolRegistry:
     def _store(self, built: RegisteredTool) -> ToolChange:
         """Commit *built*, carrying its history over. Caller holds the lock."""
         previous = self._tools.get(built.key)
-        if previous is not None:
+        if previous is not None and built is not previous:
             same = (
                 previous.definition_fingerprint is not None
                 and previous.definition_fingerprint == built.definition_fingerprint
@@ -714,6 +724,20 @@ class ToolRegistry:
     def _change_for(previous: RegisteredTool | None, current: RegisteredTool) -> ToolChange:
         if previous is None:
             return ToolChange(current.key, ToolChangeKind.ADDED, current=current)
+        if current is previous:
+            return ToolChange(
+                current.key,
+                ToolChangeKind.UNCHANGED,
+                SchemaDiff(
+                    SchemaChangeStatus.UNCHANGED,
+                    before=previous.fingerprint,
+                    after=current.fingerprint,
+                    error=None if current.error is None else str(current.error),
+                ),
+                (),
+                previous,
+                current,
+            )
         changed = _changed_fields(previous.definition, current.definition)
         schema = diff_schemas(previous.input_schema, current.input_schema)
         kind = ToolChangeKind.UNCHANGED if not changed else ToolChangeKind.UPDATED
