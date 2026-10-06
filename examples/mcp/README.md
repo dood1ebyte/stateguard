@@ -95,9 +95,14 @@ out of range -- not repairable, and should not be
 | 3 | `limit` absent | filled from the schema's `default` | — |
 | 4 | `limit: 999` | **none** | — |
 
-Every operation carries its evidence. `result.attempts[i].applied_operations`
-holds the strategy, the rationale, the trust score, and what the score was
-built from — so a repair is auditable after the fact, not just applied.
+Every operation carries its evidence — the strategy, the rationale, the
+trust score, and what the score was built from — so a repair is auditable
+after the fact, not just applied. `outcome.explain()` prints it per field;
+`outcome.to_dict()` is the full record. To replay one call from the shell:
+
+```bash
+stateguard check --tool tool.json --payload arguments.json
+```
 
 ## The fourth call is the point
 
@@ -147,8 +152,13 @@ a test, because a shadow diff you cannot trust to match tells you nothing.
   tool definitions actually use. Keywords outside that subset raise rather
   than being ignored, so the gap is bounded and visible. See
   [ADR-0001](../../docs/adr/0001-json-schema-source-of-truth.md).
-* **Double-encoded `arguments`** — a model emitting the whole argument
-  object as a JSON string — is not handled here yet.
+* **Tools whose schema StateGuard cannot read** (`allOf`, a remote
+  `$ref`, …). `call_tool` raises `JSONSchemaError` and sends nothing — this
+  demo fails closed. Passing such tools through unvalidated instead is a
+  per-tool policy for your deployment, not something decided per call.
+
+A whole argument object sent as a JSON string *is* handled: it is parsed
+before repair, and the reason says so.
 
 ## Using the proxy in your own code
 
@@ -166,8 +176,11 @@ async with Client(server_params) as client:
     if call.called:
         print(call.response.content)
     else:
-        print(call.outcome.action, call.outcome.reason)
+        print(call.outcome.explain())   # why, field by field
 ```
+
+The proxy is a thin wrapper over `stateguard.adapters.mcp.repair_tool_call`,
+which is the piece to reuse if you already have your own client loop.
 
 `call.outcome.action` is one of `FORWARD`, `HOLD`, `ESCALATE`, `REFUSE`.
 `ESCALATE` is the one worth handling deliberately: it means a repair *was*

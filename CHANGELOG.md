@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`repair_tool_call(guard, tool, arguments)`** in `stateguard.adapters.mcp`:
+  repair plus `outcome_for` in one step, reading `arguments=None` as `{}`
+  as MCP specifies. The recommended entry point for a proxy.
+- **Per-field explanations.** `RepairResult.field_decisions()` reports each
+  field as `repaired` / `held` / `discarded` / `unresolved`, with the
+  operation, its trust, risk and evidence, and the recorded reason.
+  `RepairResult.explain()` renders that as deterministic, value-free text
+  (safe to log); `RepairResult.to_dict()` is the full record as JSON-ready
+  data. `ToolCallOutcome.explain()` / `to_dict()` lead with the MCP action.
+  All derived from what the engine already recorded — nothing is re-scored.
+- **`stateguard check --tool FILE`** checks a call's arguments against an
+  MCP tool definition or a bare JSON Schema and prints what a repairing
+  proxy would do, field by field (`--json` for the full record). An
+  unreadable schema exits 2 with the named error.
+- **`RepairAttempt.kept`**, `False` for an attempt the engine rolled back.
+  Repair-history records carry it too.
+- **Contract-drift tests** over the real-schema corpus
+  (`tests/adapters/mcp/test_contract_drift.py`), pinning: safe drift is
+  repaired exactly, ambiguous and invalid calls are never forwarded,
+  unsupported schemas raise, and no forwarded value lacks provenance.
 - **Tool-call repair for MCP.** `ContractGuard.with_mcp()` repairs the
   arguments an agent sends to an MCP tool, against the server's declared
   `inputSchema`. Accepts a full tool definition or a bare input schema, in
@@ -47,6 +67,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limitations.
 
 ### Fixed
+- **`pip install "sguard[all]"` installed an unrelated package.** The `all`
+  extra named `stateguard[...]`, but this distribution is `sguard` and
+  `stateguard` on PyPI is a different project (with a torch /
+  sentence-transformers dependency tree); `uv.lock` had resolved it that
+  way. It now self-references `sguard[...]`, the lock is regenerated (it
+  had also never locked the `mcp` extra), and the install hints in
+  `with_pydantic()` and the pydantic adapter say `sguard[pydantic]`.
+- **`with_pydantic()` without pydantic** constructed a guard that then
+  failed on the first `repair()` with a bare `ModuleNotFoundError`. It now
+  raises the documented `ImportError` with the install line at construction.
+- **`5.0` for an integer field was refused.** JSON Schema counts it as an
+  integer and Pydantic accepts it, but StateGuard reported `FAILED` (an MCP
+  `REFUSE`). An integral float is now coerced to `int` — exact both ways,
+  `REVERSIBLE`. `5.5`, NaN and infinities are still refused.
+- **`arguments=None` for a tool without parameters was refused.** Via
+  `repair_tool_call`, absent arguments are `{}`.
+- **`HOLD` carried `arguments=None`** while `should_forward` was `True`, so
+  `if o.should_forward: send(o.arguments)` sent nothing in shadow mode.
+  `arguments` is now the received payload under `HOLD` (never the preview),
+  and is non-`None` exactly when `should_forward` is true.
+- **Reasons for a JSON-encoded argument object** read "Repaired 0
+  field(s)" (auto) or claimed the arguments "matched the tool's schema"
+  (shadow). They now name the root normalisation.
+- **A rolled-back attempt was indistinguishable from a kept one** in
+  `result.attempts` and in the repair history, so an audit reported
+  repairs that are not in the payload. See `RepairAttempt.kept`.
+- **Opposite-meaning renames were applied unsupervised.** With one field
+  missing and one unexpected key, `max_price` became `min_price`,
+  `updated_after` became `created_after`, `last_name` became `first_name` —
+  a confident wrong repair, forwarded. A whole-word substitution (same word
+  count, a shared word, and a differing pair that is neither an
+  abbreviation nor a one-edit typo) is now recorded as
+  `RepairEvidence.contradiction`, and `TrustPolicy` never applies a
+  contradicted operation: it is surfaced as ambiguous or rejected. Scores
+  and bands are unchanged. Four calibration known gaps closed; applied
+  precision on the corpus 91.1% → 100%, with every must-apply case intact.
+- The CLI's `--version` is read from the package rather than duplicated.
+
 - **JSON nesting depth is now StateGuard's decision, not CPython's.**
   `json_loads_strict` applies an explicit depth bound
   (`DEFAULT_MAX_JSON_DEPTH`, 100) and length bound
