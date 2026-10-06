@@ -6,6 +6,8 @@ represents a value of the target type:
 
 * ``str`` → ``int``    — only if the string is a (possibly negative) digit
   sequence, e.g. ``"30"`` or ``"-5"``.
+* ``float`` → ``int``  — only if the float has no fractional part
+  (``5.0``), which JSON Schema already counts as an integer.
 * ``str`` → ``float``  — only if ``float(value)`` succeeds.
 * ``int`` → ``float``  — always safe.
 * ``str`` → ``bool``   — only for the exact strings (case-insensitive)
@@ -196,6 +198,19 @@ def _coercion_evidence(
                 RepairEvidence(
                     value_preserved=fidelity,
                     notes=(f"str -> int round-trips at {fidelity:.2f}",),
+                ),
+                RepairRisk.REVERSIBLE,
+            )
+        if _is_integral_float(value):
+            # JSON Schema counts ``5.0`` as an integer, and so does Pydantic's
+            # lax mode -- but ``type_matches`` does not, so without this the
+            # payload was reported FAILED (and an MCP call REFUSED) although
+            # the tool would have accepted it. Converting is exact both ways:
+            # ``float(int(5.0)) == 5.0``.
+            return (
+                RepairEvidence(
+                    value_preserved=_FIDELITY_EXACT,
+                    notes=("float has no fractional part; float -> int is exact",),
                 ),
                 RepairRisk.REVERSIBLE,
             )
@@ -656,6 +671,16 @@ def _is_integer_string(value: str) -> bool:
     if value.isdecimal():
         return True
     return bool(value.startswith("-") and len(value) > 1 and value[1:].isdecimal())
+
+
+def _is_integral_float(value: Any) -> bool:
+    """
+    ``True`` if *value* is a finite ``float`` with no fractional part.
+
+    ``float.is_integer`` is already ``False`` for NaN and the infinities, so
+    those never qualify.
+    """
+    return isinstance(value, float) and value.is_integer()
 
 
 def _is_float_string(value: str) -> bool:

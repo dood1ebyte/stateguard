@@ -255,6 +255,24 @@
       }
     },
     {
+      "name": "coerce_integral_float_to_int",
+      "description": "A float with no fractional part where an integer is declared. JSON Schema already counts 5.0 as an integer and Pydantic's lax mode accepts it, so refusing it blocked a call the tool would take. float -> int is exact both ways.",
+      "schema": {
+        "fields": [
+          {
+            "path": "count",
+            "type": "integer"
+          }
+        ]
+      },
+      "payload": {
+        "count": 5.0
+      },
+      "expected_payload": {
+        "count": 5
+      }
+    },
+    {
       "name": "coerce_decimal_string_to_float",
       "description": "\"31.5\" -> 31.5.",
       "schema": {

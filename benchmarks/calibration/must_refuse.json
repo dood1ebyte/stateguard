@@ -235,6 +235,24 @@
       }
     },
     {
+      "name": "value_fractional_float_to_int",
+      "description": "5.5 is not an integer under any reading; truncating or rounding it would invent a value the model did not send.",
+      "schema": {
+        "fields": [
+          {
+            "path": "count",
+            "type": "integer"
+          }
+        ]
+      },
+      "payload": {
+        "count": 5.5
+      },
+      "expected_payload": {
+        "count": 5.5
+      }
+    },
+    {
       "name": "value_superscript_digit",
       "description": "'²'.isdigit() is True but int('²') raises. A cast that cannot be performed must not be proposed.",
       "schema": {

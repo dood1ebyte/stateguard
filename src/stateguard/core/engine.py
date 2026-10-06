@@ -402,6 +402,8 @@ def _coerce_value(
                 return int(value)
             except ValueError:
                 return _COERCE_FAILED
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
         return _COERCE_FAILED
 
     if target_type is FieldType.FLOAT:
