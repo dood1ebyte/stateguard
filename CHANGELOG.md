@@ -8,6 +8,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`ToolRegistry`** (`stateguard.adapters.mcp`): the in-memory record of a
+  server's tools, keyed by `ToolKey(name, server)` so two servers' `search`
+  tools never collide. `sync(tools, server=)` replaces a listing atomically
+  and returns a `SyncReport` (added / removed / updated / unchanged /
+  unusable / breaking, with `explain()` and `to_dict()`); `register`,
+  `compare` (dry run), `remove`, `clear`, `get`, `find`, `tools`, `servers`.
+  `process_call(name, arguments, server=)` validates against the *current*
+  definition only: a replacement StateGuard cannot read makes the tool
+  unusable (`ToolSchemaUnusableError`) rather than leaving the old schema
+  in force. Each `RegisteredTool` is a frozen snapshot with its state
+  (`READY` / `INVALID` / `UNSUPPORTED`), error, fingerprints, extraction
+  warnings and revision. Description changes are reported even when the
+  schema is unchanged. Re-syncing an unchanged listing reuses entries
+  (about 0.6 ms for 35 tools). Thread-safe.
+- **Schema identity** (`stateguard.adapters.jsonschema`):
+  `fingerprint_schema` returns a `SchemaFingerprint` with a *document*
+  digest (exact canonical JSON) and a *contract* digest (over
+  `normalize_schema`, which drops annotations and `x-*` keys, resolves
+  local `$ref`s, sorts order-free lists and unifies equivalent spellings).
+  The MCP contract cache now keys on the document fingerprint, so the
+  cache, the registry and change detection share one definition of "same
+  schema".
+- **Structural schema diff.** `diff_schemas(before, after)` → `SchemaDiff`
+  with a status (`UNCHANGED`, `EQUIVALENT`, `COMPATIBLE`, `INCOMPATIBLE`,
+  `INVALID`, `UNSUPPORTED`) and every `SchemaChange` (kind, path, keyword,
+  before/after, `breaking`, detail). `COMPATIBLE` is a guarantee — every
+  payload the old schema accepted, the new one accepts — held to by
+  mutation property tests against the validator; anything not provably
+  safe is breaking.
+- **JSON-RPC boundary helpers** (`stateguard.adapters.mcp.jsonrpc`, main
+  names re-exported): `ToolCallRequest.parse`, `forward_message` (the
+  original message byte-for-byte when arguments are unchanged, otherwise
+  only `params.arguments` replaced — `id` and `_meta` preserved),
+  `refusal_response` / `tool_error_response` (a `CallToolResult` with
+  `isError: true`, with `resultType` for protocol `2026-07-28`+),
+  `error_response`, and `ToolListAccumulator` for paginated `tools/list`.
+- **`stateguard diff BEFORE AFTER`** compares two tool definitions, bare
+  schemas or whole `tools/list` results; exits 1 if anything is breaking,
+  for CI gating. **`stateguard replay --tools --calls`** runs recorded calls
+  (JSON array or JSON lines; plain or raw `tools/call` messages) and
+  summarises the outcomes; with `--shadow` it also prints what auto mode
+  would do.
+- **An SDK-free stdio relay** (`examples/mcp/stdio_proxy.py`): launched in
+  place of a server, it passes every message through byte for byte, keeps
+  a registry synced from `tools/list` and `list_changed`, repairs or
+  answers `tools/call`, and writes a value-free JSON-lines audit log.
+  Tested end to end against the MCP Python SDK and byte by byte against a
+  scripted server that changes a schema mid-session.
+- **Array-of-object validation.** `FieldSpec.item_spec` carries the element
+  contract and `ContractValidator` checks each element, reporting paths
+  like `files[0].path`. Element violations are refused, never repaired.
+- **`exclusiveMinimum` / `exclusiveMaximum` are enforced**
+  (`FieldConstraintType.EXCLUSIVE_MINIMUM` / `EXCLUSIVE_MAXIMUM`), in the
+  numeric form and draft 4's boolean form. They were dropped with a
+  warning, so `mcp-server-fetch`'s `max_length: 0` passed StateGuard and
+  was rejected by the server. A differential run against the `jsonschema`
+  reference validator now finds no disagreement in either direction.
+- **`MalformedSchemaError`** (a subclass of `UnsupportedSchemaError`)
+  separates "not valid JSON Schema" from "valid but unsupported";
+  `MalformedReferenceError` likewise for `$ref`. MCP-specific errors share
+  a base, `MCPAdapterError`: `InvalidToolDefinitionError`,
+  `ToolNotFoundError` (with `known` and `elsewhere` — the servers that do
+  have that name), `ToolSchemaUnusableError` (`.cause`),
+  `MalformedMessageError`, `ForwardingInvariantError`.
+- **An MCP drift corpus** (`tests/adapters/mcp/corpus/drift_corpus.json`):
+  14 tools, 37 labelled calls and 20 labelled schema changes, each checked
+  for its label and for the cross-cutting invariants; plus an outcome truth
+  table, property tests over generated drifted calls, and hostile-input
+  tests.
+- **`benchmarks/mcp_bench.py`**: per-listing and per-call timings for the
+  MCP hot paths.
+- **`docs/mcp-adapter.md`** (usage, outcome table, registry, diff, CLI,
+  bounds, non-claims) and **`docs/mcp-architecture.md`** (layers,
+  interfaces, invariants, dependency rules).
 - **`repair_tool_call(guard, tool, arguments)`** in `stateguard.adapters.mcp`:
   repair plus `outcome_for` in one step, reading `arguments=None` as `{}`
   as MCP specifies. The recommended entry point for a proxy.
@@ -67,6 +141,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limitations.
 
 ### Fixed
+- **Exponential `$ref` expansion.** A schema of nested `$ref`s that each
+  reference the previous level twice took 3.4 s to read at 16 levels and
+  grew ×2 per level. Expansion is now capped at 10,000 resolutions
+  (`DEFAULT_MAX_EXPANSIONS`); beyond it the schema is refused with
+  `SchemaReferenceError`.
+- **Deeply nested arguments crashed the engine** with `RecursionError`
+  (about 900 levels). Payloads nested deeper than `MAX_PAYLOAD_DEPTH` (100)
+  are refused with a value-free reason, checked iteratively.
+- **Arrays of objects were reported as matched without being checked.**
+  See *Array-of-object validation* above.
+- **`properties: []`** and property names containing `[` / `]` are refused
+  rather than mis-read.
+- **A shadow-mode call that needed nothing** explained itself as
+  "proposed, not applied".
 - **Shadow mode blocked calls.** A call auto mode would refuse or escalate
   was refused or escalated in shadow too, so a shadow deployment blocked
   real traffic — including every call StateGuard refused *wrongly*, which is

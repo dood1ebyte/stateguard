@@ -21,6 +21,7 @@ The table itself is the documentation: ``docs/mcp-adapter.md`` reproduces it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -297,3 +298,15 @@ class TestTheForwardingGateFires:
         )
         with pytest.raises(ForwardingInvariantError, match="does not validate"):
             repair_tool_call(guard, FORECAST, {"loc": "Mumbai", "days": "5"})
+
+
+def test_the_documented_table_has_every_row() -> None:
+    """``docs/mcp-adapter.md`` reproduces this table; a row added here must appear there."""
+    doc = (Path(__file__).parents[3] / "docs" / "mcp-adapter.md").read_text()
+    table = doc.split("### The outcome truth table", 1)[1].split("\n### ", 1)[0]
+    documented = {
+        line.split("|")[1].strip().replace("`", "")
+        for line in table.splitlines()
+        if line.startswith("| ") and not line.startswith("| Scenario")
+    }
+    assert {row.scenario for row in ROWS} <= documented

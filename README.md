@@ -165,8 +165,49 @@ see the `HOLD` view.
   share a word but swap another, which is a different field, not a typo. At
   most the call escalates with the candidate. Abbreviations (`usr_id`,
   `src_tz`) and typos (`recieve_date`) still repair.
+- **Inside array elements.** `files[0].path` is validated, and a violation
+  there is refused, not repaired.
 - **Tool results.** Only arguments are repaired, not `outputSchema` /
   `structuredContent`.
+
+### Tracking a server's tools
+
+In a running proxy the tool definitions are state: learned from
+`tools/list`, changed by later listings. `ToolRegistry` holds them, says
+what changed, and validates each call against the *current* definition:
+
+```python
+from stateguard.adapters.mcp import ToolRegistry
+
+registry = ToolRegistry()
+report = registry.sync(listing["tools"], server="github")   # atomic; returns a SyncReport
+outcome = registry.process_call("search_issues", arguments, server="github")
+```
+
+```text
+tools/list (github): 0 added, 0 removed, 1 updated, 1 unchanged; 1 breaking
+  UPDATED   github/search_issues  BREAKING
+    INCOMPATIBLE
+      ! constraint_changed             limit: 'maximum' tightened: 100 -> 50
+      ! field_added                    repo: new required parameter: calls that omit it are now rejected
+      ~ enum_changed                   state: added ['all']
+```
+
+`COMPATIBLE` is a guarantee — every call the old schema accepted, the new
+one accepts — and anything not provably safe is reported as breaking. A
+tool whose new schema StateGuard cannot read becomes unusable rather than
+silently keeping the old one. The same diff is available on its own as
+`diff_schemas`, and from the command line as `stateguard diff`.
+
+For a proxy that handles raw JSON-RPC, `ToolCallRequest`,
+`forward_message` and `refusal_response` change only `params.arguments`
+and preserve the request `id` and `_meta`. `examples/mcp/stdio_proxy.py`
+puts all of it together as an SDK-free stdio relay.
+
+**The full guide is [`docs/mcp-adapter.md`](docs/mcp-adapter.md)** —
+outcome truth table, registry, schema changes, the JSON-RPC boundary, the
+bounds on hostile input, and what StateGuard deliberately does not do. How
+the layers fit is in [`docs/mcp-architecture.md`](docs/mcp-architecture.md).
 
 A runnable before/after demo, over real MCP stdio, is in
 [`examples/mcp/`](examples/mcp/README.md). The supported JSON Schema subset,
@@ -209,10 +250,17 @@ stateguard check --tool tool.json --payload arguments.json
 
 # Machine-readable output, for piping into other tools
 stateguard check --schema contract.json --payload payload.json --json
+
+# Two versions of a tool list (or one tool, or a bare schema): what could break?
+stateguard diff tools-v1.json tools-v2.json        # exit 1 if anything is breaking
+
+# Replay recorded calls against a tool list (add --shadow for the rollout view)
+stateguard replay --tools tools.json --calls calls.jsonl
 ```
 
-Exit codes: `0` = success/already valid, `1` = partially repaired, `2` =
-failed (or a usage error). Run `stateguard check --help` for the full flag
+Exit codes for `check`: `0` = success/already valid, `1` = partially
+repaired, `2` = failed (or a usage error). `diff` exits `1` when a change is
+breaking; `replay` exits `0`, or `2` when its input cannot be read. Run `stateguard check --help` for the full flag
 reference, including `--strict`, `--max-attempts`, and
 `--confidence-threshold`.
 
