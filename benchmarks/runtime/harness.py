@@ -314,6 +314,7 @@ class Rig:
         *,
         unreadable: str = "forward",
         listing_wait: float | None = None,
+        refresh_before_intervening: bool = True,
     ) -> None:
         from stateguard import ContractGuard, GuardConfig
         from stateguard.core.models.config import RepairMode
@@ -343,6 +344,7 @@ class Rig:
             _AuditSink(self.audit),
             unreadable=unreadable,
             passthrough=mode is RelayMode.PASSTHROUGH,
+            refresh_before_intervening=refresh_before_intervening,
         )
         server_in, server_out = os.fdopen(r2s_r, "rb"), os.fdopen(s2r_w, "wb")
         self._threads = [

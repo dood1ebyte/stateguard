@@ -256,6 +256,14 @@ it never reaches the client as an error and never stops the relay.
 `--shadow` observes without changing anything; `--passthrough` turns
 StateGuard off entirely, which is the baseline for measurement.
 
+Before the relay changes or blocks a call, it re-lists the tools and decides
+again on a listing requested after the call arrived. Under protocol
+`2026-07-28` a server announces `tools/list_changed` only on
+`subscriptions/listen` streams, which the relay does not hold, so it cannot
+rely on being told that a schema changed. Calls that pass unchanged cost no
+extra round trip. If no fresh listing arrives, the call is forwarded
+unchanged. `--no-listing-refresh` turns this off.
+
 It speaks both protocol generations: the `initialize` handshake, and the
 stateless revision (`2026-07-28`) in which every request carries its
 protocol version in `params._meta` — which the relay preserves on forwarded

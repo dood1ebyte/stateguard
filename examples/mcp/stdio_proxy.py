@@ -18,11 +18,28 @@ byte for byte, except three it acts on:
     continues against a listing the server has replaced. Calls that arrive
     while the refresh is in flight wait for it.
 ``tools/call`` requests
-    Validated against the tool's *current* schema. ``FORWARD`` sends the
+    Validated against the tool's *current* schema. Before the relay changes
+    or blocks a call it re-lists the tools and decides again (see below). ``FORWARD`` sends the
     original request, with only ``params.arguments`` replaced when it was
     repaired; ``HOLD`` (shadow) sends it unchanged; ``ESCALATE`` / ``REFUSE``
     are answered by the relay with a ``CallToolResult`` carrying
     ``isError: true`` and the reason, and never reach the server.
+
+Never acting on a stale listing
+-------------------------------
+Under protocol 2026-07-28 a server announces ``tools/list_changed`` only on
+``subscriptions/listen`` streams, which the relay does not hold -- so the
+relay cannot rely on hearing that a schema changed. Validating against a
+listing the server has replaced would refuse calls that are now valid, or
+"repair" them back into the old shape.
+
+So the relay never *intervenes* (repairs, refuses, escalates -- anything but
+forwarding the call unchanged) on a listing it has not just confirmed: it
+sends its own ``tools/list``, waits for a listing that was requested after
+the call arrived, and decides again on that. A call that passes unchanged
+needs no refresh -- the server decides it either way. If no fresh listing
+arrives in time, the call is forwarded unchanged. ``--no-listing-refresh``
+turns this off (one fewer round trip per intervention, at the risk above).
 
 Results are never touched. A response from the server is written to the
 client as the exact bytes the server produced.
@@ -75,6 +92,8 @@ from stateguard import ContractGuard
 from stateguard.adapters.mcp import (
     ForwardingInvariantError,
     MalformedMessageError,
+    MCPAction,
+    ToolCallOutcome,
     ToolCallRequest,
     ToolListAccumulator,
     ToolNotFoundError,
@@ -119,6 +138,7 @@ class StdioRelay:
         *,
         unreadable: str = "forward",
         passthrough: bool = False,
+        refresh_before_intervening: bool = True,
     ) -> None:
         self.registry = ToolRegistry(guard)
         self._client_in, self._client_out = client_in, client_out
@@ -127,6 +147,18 @@ class StdioRelay:
         self._unreadable = unreadable
         # The kill switch: relay bytes, decide nothing, learn nothing.
         self._passthrough = passthrough
+        self._refresh_before_intervening = refresh_before_intervening
+        # Freshness: every relay-initiated listing gets an epoch. A call may
+        # only be intervened on after a listing whose epoch began after the
+        # call arrived has completed -- an older listing in flight cannot
+        # vouch for the server's state now.
+        self._epoch_counter = itertools.count(1)
+        self._epoch_of: dict[Any, int] = {}  # own request id -> epoch
+        self._first_page_ids: set[Any] = set()
+        self._chain_epoch = 0  # epoch of the listing being accumulated
+        self._fresh_epoch = 0  # newest epoch whose listing completed
+        self._failed_epochs: set[int] = set()
+        self._listing_done = threading.Condition()
         self._client_lists = ToolListAccumulator()
         self._own_lists = ToolListAccumulator()
         self._own_ids = (f"{OWN_ID_PREFIX}{n}" for n in itertools.count(1))
@@ -160,19 +192,50 @@ class StdioRelay:
             self._audit.write(json.dumps({"event": event, **fields}, default=str) + "\n")
             self._audit.flush()
 
-    def _request_listing(self, cursor: str | None = None) -> None:
+    def _request_listing(self, cursor: str | None = None, epoch: int | None = None) -> int:
+        """Send a relay-owned ``tools/list`` (page); return its listing epoch."""
         self._listed = True
         params: dict[str, Any] = {} if cursor is None else {"cursor": cursor}
         if self._protocol_meta:
             params["_meta"] = dict(self._protocol_meta)
+        identifier = next(self._own_ids)
+        with self._listing_done:
+            epoch = next(self._epoch_counter) if epoch is None else epoch
+            self._epoch_of[identifier] = epoch
+            if cursor is None:
+                self._first_page_ids.add(identifier)
         message = {
             "jsonrpc": JSONRPC_VERSION,
-            "id": next(self._own_ids),
+            "id": identifier,
             "method": TOOLS_LIST,
             "params": params,
         }
         self._own_lists.observe_request(message)
         self._send_json(self._server_in, self._to_server, message)
+        return epoch
+
+    def _finish_epoch(self, epoch: int, *, ok: bool) -> None:
+        with self._listing_done:
+            if ok:
+                self._fresh_epoch = max(self._fresh_epoch, epoch)
+            else:
+                self._failed_epochs.add(epoch)
+            self._listing_done.notify_all()
+
+    def _refresh_listing(self) -> bool:
+        """
+        Re-list and wait for a listing requested *now*. True if one completed.
+
+        A later epoch completing also counts -- it was requested later still.
+        False on an error response, or after ``LISTING_WAIT_SECONDS``.
+        """
+        epoch = self._request_listing()
+        with self._listing_done:
+            self._listing_done.wait_for(
+                lambda: self._fresh_epoch >= epoch or epoch in self._failed_epochs,
+                timeout=LISTING_WAIT_SECONDS,
+            )
+            return self._fresh_epoch >= epoch
 
     def _sync(self, tools: list[Any], source: str) -> None:
         report = self.registry.sync(tools)
@@ -278,24 +341,30 @@ class StdioRelay:
             return True, line  # the server's to reject
 
         stale = not self._listing_ready.wait(LISTING_WAIT_SECONDS) or self._listing_stale
-        try:
-            outcome = self.registry.process_call(request.name, request.arguments)
-        except ToolNotFoundError:
-            self._log(
-                "call",
-                id=request.id,
-                tool=request.name,
-                action="unvalidated",
-                reason="no definition for this tool; forwarded for the server to answer",
-            )
-            return True, line
-        except ToolSchemaUnusableError as exc:
-            return self._on_unreadable(line, request, exc)
-        except ForwardingInvariantError as exc:
-            # The gate rejected StateGuard's *own* payload. The client's
-            # arguments are not suspect -- forward those, as if no relay.
-            self._internal_error("forwarding gate", exc, id=request.id, action="unvalidated")
-            return True, line
+        evaluated = self._evaluate(line, request)
+        if isinstance(evaluated, tuple):
+            return evaluated
+        outcome, listing = evaluated, "stale" if stale else "current"
+
+        if self._refresh_before_intervening and _intervenes(request, outcome):
+            # About to change or block the call: only on a listing that is
+            # known to be the server's current one. See the module docstring.
+            if not self._refresh_listing():
+                self._log(
+                    "call",
+                    id=request.id,
+                    tool=request.name,
+                    action="unvalidated",
+                    auto_action=(outcome.auto_action or outcome.action).value,
+                    reason="could not confirm the tool listing is current; "
+                    "forwarded unchanged rather than act on a possibly stale schema",
+                    listing="unconfirmed",
+                )
+                return True, line
+            evaluated = self._evaluate(line, request)
+            if isinstance(evaluated, tuple):
+                return evaluated
+            outcome, listing = evaluated, "confirmed"
 
         self._log(
             "call",
@@ -304,7 +373,7 @@ class StdioRelay:
             action=outcome.action.value,
             auto_action=(outcome.auto_action or outcome.action).value,
             reason=outcome.reason,
-            listing="stale" if stale else "current",
+            listing=listing,
             decisions=[
                 {
                     "path": d.path,
@@ -321,6 +390,29 @@ class StdioRelay:
         if forwarded == request.message:
             return True, line  # byte-for-byte
         return True, self._encode(forwarded)
+
+    def _evaluate(
+        self, line: bytes, request: ToolCallRequest
+    ) -> ToolCallOutcome | tuple[bool, bytes]:
+        """The outcome against the current registry, or a final ``(to_server, bytes)``."""
+        try:
+            return self.registry.process_call(request.name, request.arguments)
+        except ToolNotFoundError:
+            self._log(
+                "call",
+                id=request.id,
+                tool=request.name,
+                action="unvalidated",
+                reason="no definition for this tool; forwarded for the server to answer",
+            )
+            return True, line
+        except ToolSchemaUnusableError as exc:
+            return self._on_unreadable(line, request, exc)
+        except ForwardingInvariantError as exc:
+            # The gate rejected StateGuard's *own* payload. The client's
+            # arguments are not suspect -- forward those, as if no relay.
+            self._internal_error("forwarding gate", exc, id=request.id, action="unvalidated")
+            return True, line
 
     def _on_unreadable(
         self, line: bytes, request: ToolCallRequest, exc: ToolSchemaUnusableError
@@ -366,6 +458,7 @@ class StdioRelay:
                     self._on_own_listing(message)
                 except Exception as exc:  # noqa: BLE001 -- fail open
                     self._internal_error("relay tools/list", exc)
+                    self._finish_epoch(self._epoch_of.get(identifier, self._chain_epoch), ok=False)
                     self._listing_ready.set()  # never hold calls on a listing that failed
                 continue  # the client never asked for this one
             try:
@@ -383,17 +476,41 @@ class StdioRelay:
             self._send(self._client_out, self._to_client, line)  # untouched
 
     def _on_own_listing(self, message: Any) -> None:
+        identifier = request_id(message)
+        with self._listing_done:
+            epoch = self._epoch_of.pop(identifier, 0)
+            if identifier in self._first_page_ids:
+                self._first_page_ids.discard(identifier)
+                if "result" in message:
+                    self._chain_epoch = epoch  # this listing starts accumulating now
         listing = self._own_lists.observe_response(message)
         if listing is not None:
             self._sync(listing, source="relay tools/list")
+            self._finish_epoch(self._chain_epoch, ok=True)
             return
         result = message.get("result")
         cursor = result.get("nextCursor") if isinstance(result, dict) else None
         if isinstance(cursor, str) and cursor:
-            self._request_listing(cursor)
+            self._request_listing(cursor, epoch)
         elif "error" in message:
             self._log("tools_list_failed", error=message["error"])
+            self._finish_epoch(epoch, ok=False)
             self._listing_ready.set()  # do not hold calls forever
+
+
+def _intervenes(request: ToolCallRequest, outcome: ToolCallOutcome) -> bool:
+    """
+    Whether auto mode would do anything but forward the call as received.
+
+    Judged on ``auto_action`` / ``proposed_arguments``, not on this mode's
+    action: in shadow the call is forwarded regardless, but the recorded
+    decision is what a shadow rollout is measured on, so it must not come
+    from a stale listing either.
+    """
+    if outcome.auto_action is not MCPAction.FORWARD:
+        return True
+    received = {} if request.arguments is None else request.arguments
+    return outcome.proposed_arguments != received or type(received) is not dict
 
 
 def _parse(line: bytes) -> Any:
@@ -414,6 +531,11 @@ def main(argv: list[str] | None = None) -> int:
         choices=["refuse", "forward"],
         default="forward",
         help="Calls to a tool whose schema StateGuard cannot read (default: forward, unvalidated).",
+    )
+    parser.add_argument(
+        "--no-listing-refresh",
+        action="store_true",
+        help="Do not re-list tools before repairing or blocking a call (see the module docs).",
     )
     parser.add_argument(
         "--passthrough",
@@ -439,6 +561,7 @@ def main(argv: list[str] | None = None) -> int:
         audit,
         unreadable=args.unreadable,
         passthrough=args.passthrough,
+        refresh_before_intervening=not args.no_listing_refresh,
     )
     relay._log(
         "relay_started",

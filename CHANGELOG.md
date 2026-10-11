@@ -141,6 +141,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limitations.
 
 ### Fixed
+- **The relay could act on a stale tool listing.** Under protocol
+  `2026-07-28`, servers send `tools/list_changed` only on
+  `subscriptions/listen` streams (verified in MCP SDK 2.3.0), and the relay
+  holds none. After an unannounced schema change it refused or rewrote calls
+  that were valid for the new schema: 5 of 5 in the staleness scenarios.
+  The relay now re-lists before any intervention (repair, refusal,
+  escalation) and decides again on a listing requested after the call
+  arrived. If none arrives, it forwards unchanged. Calls that pass unchanged
+  cost no extra round trip. `--no-listing-refresh` turns this off.
 - **The stdio relay failed closed.** By default it refused every call to a
   tool whose schema StateGuard cannot read (valid JSON Schema such as
   `allOf` or `uniqueItems`), so valid calls to valid tools were blocked. An
