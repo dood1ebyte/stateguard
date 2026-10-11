@@ -23,7 +23,7 @@ from typing import Any
 
 import jsonschema
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from stateguard import ContractGuard
@@ -189,5 +189,6 @@ def test_differential_unique_items(value: list[Any]) -> None:
     ),
     factor=st.sampled_from([1, 2, 5, 0.5, 0.1, 1.5, 3]),
 )
+@example(value=5e-324, factor=2)  # underflow: the quotient rounds to 0.0
 def test_differential_multiple_of(value: float, factor: float) -> None:
     _agree({"type": "number", "multipleOf": factor}, value)

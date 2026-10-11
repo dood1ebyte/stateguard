@@ -639,6 +639,10 @@ def _is_multiple(value: float, factor: float) -> bool:
         quotient = value / factor
     except (OverflowError, ZeroDivisionError):
         return False
+    if quotient == 0:
+        # Underflow: a tiny non-zero value (5e-324 / 2) divides to 0.0, which
+        # looks like an integer quotient. Only zero is a multiple of anything.
+        return value == 0
     return math.isfinite(quotient) and quotient == int(quotient)
 
 
