@@ -73,10 +73,10 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Circuit breaking | MISSING | — | — | |
 | Result validation (`outputSchema`) | MISSING | results pass through untouched (VERIFIED) | — | Safe absence; must start Shadow-only. |
 | Auth signal classification | MISSING | — | — | |
-| Fault injection | MISSING | — | — | Only hostile-*input* tests exist. |
+| Fault injection | PARTIAL (T4, `198aa25`) | `benchmarks/runtime/harness.py`: 11 server fault actions; StateGuard-internal faults in `test_relay_fail_open.py` | — | Seeded; one fault per invocation. Missing: 429/Retry-After (no HTTP transport), delayed-but-arriving responses, session faults (D). |
 | Property tests (repair layer) | COMPLETE | `test_mcp_properties.py`, `test_diff.py` | — | None for runtime primitives (do not exist). |
-| Replay / benchmark | PARTIAL | `stateguard replay`, `mcp_bench.py` (latency), `calibrate.py` (repair precision) | — | No before/after failure measurement. |
-| Category Z tracking | MISSING | — | — | Z risks are found by tests, not counted per run. |
+| Replay / benchmark | PARTIAL | `stateguard replay`, `mcp_bench.py`, `calibrate.py`, **`benchmarks/runtime/measure.py` (before/after per category, 4 arms)** | — | No record/replay of real traffic yet (T13); the corpus interface is pluggable. |
+| Category Z tracking | PARTIAL (T2, T4) | relay logs `category: "Z"`; `measure.py` counts StateGuard-induced failures, incorrect repair/refusal, duplicates, crashes per category | — | Counted per measurement run; not yet exported as runtime telemetry. |
 
 **Contradictions found.** The docs claimed applied precision of 100%
 (CHANGELOG, calibration). That is true only of the calibration corpus, which
@@ -102,7 +102,7 @@ list-changed delivery at 2026-07-28.
 | T1 | Opposite-meaning rename guard (extend contradiction evidence) + calibration family | 1 unsafe defect | DONE `dc67d52` | — |
 | T2 | Relay call path fails open: unexpected error / gate failure → raw passthrough + Z record; `--unreadable` default `forward`; `--passthrough` kill switch | 1 unsafe defect | DONE `384fe2a` | — |
 | T3 | Stale-listing safety at 2026-07-28: never act (repair/refuse/escalate) on a listing not known fresh — re-list then re-decide | 2 spec compat | DONE `3be1e3e` | T2 |
-| T4 | Measurement vertical slice: seeded workload × fault injectors × arms (raw, naive retry, shadow, auto) → per-category report incl. Z | 3 measurement | IN PROGRESS | T1–T3 |
+| T4 | Measurement vertical slice: seeded workload × fault injectors × arms (raw, naive retry, shadow, auto) → per-category report incl. Z | 3 measurement | DONE `198aa25` | T1–T3 |
 | T5 | JSON Schema 2020-12 coverage: annotation keywords, simple assertions, single-branch `allOf`, `true` subschema; differential-verified | 2/4 | TODO | T4 (to measure) |
 | T6 | Execution state + invocation ledger (request id → SENT / RESPONDED / FAILED_BEFORE_SEND / UNKNOWN) | 5 | TODO | T4 |
 | T7 | Effect model: operator-declared only; annotations recorded as untrusted hints | 5 | TODO | T6 |
@@ -203,6 +203,40 @@ forwarded once, unmodified; relay alive for the next call; each logged as Z.
 | Extra round trips for calls that pass unchanged | — | 0 (measured over 5 calls) |
 | Extra round trips per intervention | 0 | 1 `tools/list` (+ pages) |
 
+**M4 — first before/after slice, T4.** `python benchmarks/runtime/measure.py
+--per-fault 8`, seed 0. **SYNTHETIC**: 14 drift-corpus tools, 37 labelled
+calls, generated faults, a scripted in-process server with a deliberately
+simple validator. There are 123 invocations per arm. These are not
+production rates. VERIFIED by running.
+
+| Cat | N | raw | naive retry | shadow | auto | auto: prevented / escalated / unresolved / Z | failure kinds (raw → auto) |
+|---|---|---|---|---|---|---|---|
+| A | 37 | 21 | 21 | 21 | 1 | 20 / 2 / 1 / 0 | raw: 17 not executed, 5 wrong execution, 5 phantom success → auto: 1 (known gap: object union) |
+| B | 6 | 0 | 0 | 0 | 0 | 0 / 0 / 0 / 0 | (5 Z before T3; see M3) |
+| C | 8 | 0 | 0 | 0 | 0 | 0 / 0 / 0 / 0 | auto refused 8 malformed envelopes the server would also reject |
+| D | 0 | — | — | — | — | — | **not exercised** |
+| E | 8 | 8 | 8 | 8 | 8 | 0 / 0 / 8 / 0 | no response (hidden) |
+| F | 16 | 16 | **0** | 16 | 16 | 0 / 0 / 16 / 0 | naive "recovers" all, but only because these faults happened *before* execution — unknowable to a client |
+| G | 8 | 8 | 8 (**8 dup**) | 8 | 8 | 0 / 0 / 8 / 0 | executed, reported failed |
+| H | 8 | 8 | 8 (**8 dup**) | 8 | 8 | 0 / 0 / 8 / 0 | truncated response: hidden |
+| I | 16 | 16 | 16 (**8 dup**) | 16 | 16 | 0 / 0 / 16 / 0 | response lost after execution: hidden |
+| J | 8 | 8 | 8 | 8 | 8 | 0 / 0 / 8 / 0 | duplicate response delivered to client |
+| K | 8 | 8 | 8 | 8 | 8 | 0 / 0 / 8 / 0 | auth error (persistent) |
+
+- **Totals:** 93 failures before, 73 after, **0 StateGuard-induced**, 0 auto
+  duplicate executions, 0 crashes. Shadow ≡ raw in every category.
+- **Latency (category A, in-process):** raw p50 0.4 / p99 0.6 ms; auto p50
+  2.7 / p99 4.0 ms. The difference is about 2.3 ms p50 of in-process overhead,
+  which includes the refresh round trip on interventions.
+- **Round trips:** A avoided 14 failing `tools/call` round trips and added 35
+  refresh `tools/list` round trips. That is one per intervention, by design
+  (T3).
+- **The naive-retry arm is the hazard:** 24 duplicate executions across G,
+  H and I. The same client-side signal (error or timeout) means "safe to
+  retry" in F and "already executed" in G, H and I. **A retry primitive
+  cannot be built on the client-visible signal alone.** It needs execution
+  state plus an operator-declared effect model.
+
 ## Known risks / unresolved categories
 
 - **Unresolved:** C (detect only), D, E, F, G, H, I, J, K — no runtime
@@ -213,4 +247,13 @@ forwarded once, unmodified; relay alive for the next call; each logged as Z.
 
 ## Next task
 
-T4: the measurement vertical slice.
+T6: execution state + invocation ledger in the relay. It is deterministic,
+and needs no effect model, for three uses:
+
+- (a) drop a second response for an id already answered (J);
+- (b) when the server's pipe closes, answer every outstanding call with an
+  explicit "delivery uncertain, may have executed" error instead of
+  silence (E, I): surface, never hide;
+- (c) record per-call execution state for T7/T8.
+
+The measurement gains a "hidden vs surfaced" split.
