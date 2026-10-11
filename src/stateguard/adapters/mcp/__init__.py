@@ -21,6 +21,14 @@ from __future__ import annotations
 
 from stateguard.adapters.mcp.adapter import MCPToolAdapter, split_tool_definition
 from stateguard.adapters.mcp.cache import DEFAULT_CACHE_SIZE, SchemaCache
+from stateguard.adapters.mcp.effects import (
+    Effect,
+    EffectDeclaration,
+    EffectPolicy,
+    Observed,
+    RetryVerdict,
+    decide_retry,
+)
 from stateguard.adapters.mcp.errors import (
     ForwardingInvariantError,
     InvalidToolDefinitionError,
@@ -60,6 +68,12 @@ from stateguard.adapters.mcp.registry import (
 
 __all__ = [
     "DEFAULT_CACHE_SIZE",
+    "Effect",
+    "EffectDeclaration",
+    "EffectPolicy",
+    "Observed",
+    "RetryVerdict",
+    "decide_retry",
     "ExecutionState",
     "Invocation",
     "InvocationLedger",
