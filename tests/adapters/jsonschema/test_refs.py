@@ -290,8 +290,8 @@ class TestRefusals:
 
     def test_boolean_schema_is_refused_clearly(self) -> None:
         with (
-            pytest.raises(UnsupportedSchemaError, match="Boolean schemas"),
-            RefResolver({}).resolved(True),  # type: ignore[arg-type]
+            pytest.raises(UnsupportedSchemaError, match="`false`"),
+            RefResolver({}).resolved(False),  # type: ignore[arg-type]
         ):
             pass
 

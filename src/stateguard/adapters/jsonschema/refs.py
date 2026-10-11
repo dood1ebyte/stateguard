@@ -70,7 +70,13 @@ from stateguard.adapters.jsonschema.errors import (
     UnsupportedSchemaError,
 )
 
-__all__ = ["DEFAULT_MAX_DEPTH", "DEFAULT_MAX_EXPANSIONS", "RefResolver"]
+__all__ = [
+    "ALL_OF_ANNOTATION_SIBLINGS",
+    "DEFAULT_MAX_DEPTH",
+    "DEFAULT_MAX_EXPANSIONS",
+    "RefResolver",
+    "flatten_single_all_of",
+]
 
 
 #: Maximum number of nested ``resolved()`` contexts before a schema is
@@ -100,6 +106,52 @@ DEFAULT_MAX_DEPTH = 100
 #: 10,000 leaves several hundredfold headroom for legitimate schemas while
 #: refusing the blow-up a dozen levels in.
 DEFAULT_MAX_EXPANSIONS = 10_000
+
+
+#: Sibling keywords that do not constrain what an instance may be. A
+#: single-branch ``allOf`` beside only these is exactly its branch.
+ALL_OF_ANNOTATION_SIBLINGS = frozenset(
+    {
+        "$comment",
+        "$anchor",
+        "title",
+        "description",
+        "default",
+        "examples",
+        "example",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+        "contentEncoding",
+        "contentMediaType",
+        "contentSchema",
+    }
+)
+
+
+def flatten_single_all_of(schema: Mapping[str, Any]) -> Mapping[str, Any]:
+    """
+    ``{"allOf": [X], "description": ...}`` -> ``X`` with the annotations on top.
+
+    Generators emit this shape to attach a description or a default to a
+    ``$ref`` (older Pydantic, zod-to-json-schema). With a single branch and
+    only annotation siblings, "valid against every branch and the siblings"
+    is "valid against X", so the rewrite changes nothing an instance can be.
+    Anything else -- two branches, or a sibling that asserts -- is left for
+    the keyword screen to refuse.
+    """
+    current = schema
+    for _ in range(64):  # nested single-branch allOf; bounded
+        branches = current.get("allOf")
+        if not (
+            isinstance(branches, list) and len(branches) == 1 and isinstance(branches[0], Mapping)
+        ):
+            return current
+        siblings = {key: value for key, value in current.items() if key != "allOf"}
+        if set(siblings) - ALL_OF_ANNOTATION_SIBLINGS:
+            return current
+        current = {**branches[0], **siblings}
+    return current
 
 
 class RefResolver:
@@ -163,10 +215,13 @@ class RefResolver:
         the active stack, and still counts one level of depth -- the bound
         has to hold for schemas that nest without using references at all.
         """
+        if schema is True:  # type: ignore[comparison-overlap]
+            # The boolean schema ``true`` accepts every instance: exactly ``{}``.
+            schema = {}
         if not isinstance(schema, Mapping):
             raise UnsupportedSchemaError(
                 f"Expected a schema object, got {type(schema).__name__}. "
-                f"Boolean schemas (`true` / `false`) are not supported."
+                f"The boolean schema `false` (accept nothing) is not supported."
             )
 
         if self._depth >= self._max_depth:
@@ -231,7 +286,7 @@ class RefResolver:
         """
         pointers: list[str] = []
         seen: set[str] = set()
-        current: Mapping[str, Any] = schema
+        current: Mapping[str, Any] = flatten_single_all_of(schema)
 
         while "$ref" in current:
             raw_ref = current["$ref"]
@@ -252,6 +307,7 @@ class RefResolver:
             target = self._dereference(pointer, raw_ref)
             siblings = {key: value for key, value in current.items() if key != "$ref"}
             current = {**target, **siblings} if siblings else target
+            current = flatten_single_all_of(current)
 
         return current, pointers
 

@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **More of JSON Schema 2020-12 is read instead of refused.**
+  - Supported now: the annotations `$anchor`, `contentEncoding`,
+    `contentMediaType`, `contentSchema` and OpenAPI `example`; the boolean
+    schema `true`; and single-branch `allOf` beside annotation-only siblings
+    (the `{"allOf": [{"$ref": ...}], "description": ...}` shape generators
+    emit).
+  - `multipleOf` and `uniqueItems` are enforced. They agree with the
+    `jsonschema` reference validator on generated instances, in both
+    directions.
+  - Keywords that may loosen validation (`nullable`) stay refused, as do
+    multi-branch `allOf`, `not`, conditionals and object-level assertions.
 - **Effect model and retry decision** (`EffectPolicy`, `Effect`,
   `decide_retry`, `Observed`, `RetryVerdict`):
   - Effects are declared by the operator per `(tool, server)`: read-only,

@@ -102,7 +102,7 @@ class TestOptionalRefKeepsWhatTheSchemaSaid:
         every payload.
         """
         with pytest.raises(UnsupportedSchemaError, match="allOf"):
-            _extract(self._optional_ref({"allOf": [{"type": "string"}]}))
+            _extract(self._optional_ref({"allOf": [{"type": "string"}, {"minLength": 2}]}))
 
     def test_redos_screen_is_reached_through_the_ref(self) -> None:
         """
@@ -234,7 +234,7 @@ class TestChainedOptionalRefs:
         Pinned so the fix cannot regress it.
         """
         with pytest.raises(UnsupportedSchemaError, match="allOf"):
-            _extract(self._chained({"allOf": [{"type": "string"}]}))
+            _extract(self._chained({"allOf": [{"type": "string"}, {"minLength": 2}]}))
 
     def test_a_genuine_cycle_through_the_chain_is_still_caught(self) -> None:
         """

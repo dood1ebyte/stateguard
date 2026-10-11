@@ -85,6 +85,11 @@ __all__ = [
 ANNOTATION_KEYWORDS = frozenset(
     {
         "$comment",
+        "$anchor",
+        "contentEncoding",
+        "contentMediaType",
+        "contentSchema",
+        "example",
         "$defs",
         "$id",
         "$schema",

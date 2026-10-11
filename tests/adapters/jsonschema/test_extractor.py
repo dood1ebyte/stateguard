@@ -419,9 +419,14 @@ class TestRefusals:
         with pytest.raises(UnsupportedSchemaError, match="must not be empty"):
             extractor.extract({"type": "object", "properties": {"": {"type": "string"}}})
 
-    def test_boolean_subschema_is_refused(self, extractor: JSONSchemaExtractor) -> None:
+    def test_boolean_subschema_false_is_refused(self, extractor: JSONSchemaExtractor) -> None:
         with pytest.raises(UnsupportedSchemaError, match="Boolean schemas"):
-            extractor.extract({"type": "object", "properties": {"a": True}})
+            extractor.extract({"type": "object", "properties": {"a": False}})
+
+    def test_boolean_subschema_true_accepts_anything(self, extractor: JSONSchemaExtractor) -> None:
+        """2020-12: ``true`` is the schema that accepts every instance, i.e. ``{}``."""
+        spec = extractor.extract({"type": "object", "properties": {"a": True}})
+        assert _field(spec, "a").field_type is FieldType.ANY
 
     def test_non_list_required_is_refused(self, extractor: JSONSchemaExtractor) -> None:
         with pytest.raises(UnsupportedSchemaError, match="'required' must be a list"):

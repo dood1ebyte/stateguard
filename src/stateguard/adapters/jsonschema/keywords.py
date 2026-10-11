@@ -90,6 +90,15 @@ DROPPED_KEYWORDS: dict[str, str] = {}
 IGNORED_KEYWORDS = frozenset(
     {
         "$comment",
+        # Annotations in 2020-12: they never change what an instance may be.
+        # "$anchor" only names a fragment (a "$ref" to it is refused by the
+        # resolver); the content* keywords are annotation-only unless a
+        # validator opts in; "example" is OpenAPI's descriptive keyword.
+        "$anchor",
+        "contentEncoding",
+        "contentMediaType",
+        "contentSchema",
+        "example",
         "$defs",
         "$id",
         "$schema",
@@ -116,11 +125,13 @@ IGNORED_KEYWORDS = frozenset(
         "minItems",
         "minLength",
         "minimum",
+        "multipleOf",
         "oneOf",
         "pattern",
         "properties",
         "required",
         "type",
+        "uniqueItems",
     }
 )
 

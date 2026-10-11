@@ -260,6 +260,8 @@ class JSONSchemaExtractor:
         path = f"{prefix}.{name}" if prefix else name
         self._check_property_name(name, path)
 
+        if subschema is True:
+            subschema = {}  # the boolean schema `true`: any value
         if not isinstance(subschema, Mapping):
             raise UnsupportedSchemaError(
                 f"Field '{path}': expected a schema object, "
@@ -440,6 +442,27 @@ class JSONSchemaExtractor:
         return constraints
 
     @staticmethod
+    def _multiple_and_unique(schema: Mapping[str, Any], path: str) -> list[FieldConstraint]:
+        """``multipleOf`` (a number > 0) and ``uniqueItems`` (a boolean)."""
+        constraints: list[FieldConstraint] = []
+        if "multipleOf" in schema:
+            factor = schema["multipleOf"]
+            if isinstance(factor, bool) or not isinstance(factor, (int, float)) or factor <= 0:
+                raise MalformedSchemaError(
+                    f"Field '{path}': 'multipleOf' must be a number greater than 0, got {factor!r}"
+                )
+            constraints.append(FieldConstraint(FieldConstraintType.MULTIPLE_OF, factor))
+        if "uniqueItems" in schema:
+            unique = schema["uniqueItems"]
+            if not isinstance(unique, bool):
+                raise MalformedSchemaError(
+                    f"Field '{path}': 'uniqueItems' must be a boolean, got {unique!r}"
+                )
+            if unique:
+                constraints.append(FieldConstraint(FieldConstraintType.UNIQUE_ITEMS, True))
+        return constraints
+
+    @staticmethod
     def _default(schema: Mapping[str, Any]) -> Any:
         """
         The declared default, or ``MISSING``.
@@ -495,6 +518,7 @@ class JSONSchemaExtractor:
                 constraints.append(FieldConstraint(constraint_type, bound))
 
         constraints.extend(self._exclusive_bounds(schema, path))
+        constraints.extend(self._multiple_and_unique(schema, path))
         warn_dropped_keywords(schema, path)
 
         if mapped.enum_values is not None:

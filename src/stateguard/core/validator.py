@@ -12,6 +12,7 @@ field_types, contract, violations).
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -466,6 +467,30 @@ class ContractValidator:
                     field_spec,
                 )
 
+        elif ctype is FieldConstraintType.MULTIPLE_OF:
+            if (
+                isinstance(value, _NUMERIC_TYPES)
+                and not isinstance(value, bool)
+                and not _is_multiple(value, bound)
+            ):
+                return self._constraint_violation(
+                    full_path,
+                    f"Field '{full_path}' value {value!r} is not a multiple of {bound!r}.",
+                    bound,
+                    value,
+                    field_spec,
+                )
+
+        elif ctype is FieldConstraintType.UNIQUE_ITEMS:
+            if isinstance(value, list) and bound and not _all_distinct(value):
+                return self._constraint_violation(
+                    full_path,
+                    f"Field '{full_path}' has repeated elements; they must be unique.",
+                    bound,
+                    value,
+                    field_spec,
+                )
+
         elif ctype is FieldConstraintType.MIN_LENGTH:
             if isinstance(value, _SIZED_TYPES) and len(value) < bound:
                 return self._constraint_violation(
@@ -604,3 +629,35 @@ class ContractValidator:
         field the caller can see, rather than a phantom repair.
         """
         return f"{prefix}.{local_name}" if prefix else str(local_name)
+
+
+def _is_multiple(value: float, factor: float) -> bool:
+    """JSON Schema ``multipleOf``: exact for integers, by quotient otherwise."""
+    if isinstance(value, int) and isinstance(factor, int):
+        return value % factor == 0
+    try:
+        quotient = value / factor
+    except (OverflowError, ZeroDivisionError):
+        return False
+    return math.isfinite(quotient) and quotient == int(quotient)
+
+
+def _json_key(value: Any) -> Any:
+    """
+    A hashable key under JSON equality: ``1`` and ``1.0`` are equal, ``true``
+    and ``1`` are not (Python says they are), object key order is ignored.
+    """
+    if isinstance(value, bool):
+        return ("bool", value)
+    if isinstance(value, (int, float)):
+        return ("num", float(value)) if math.isfinite(value) else ("num", repr(value))
+    if isinstance(value, list):
+        return ("arr", tuple(_json_key(item) for item in value))
+    if isinstance(value, dict):
+        return ("obj", tuple(sorted((str(k), _json_key(v)) for k, v in value.items())))
+    return (type(value).__name__, value)
+
+
+def _all_distinct(items: list[Any]) -> bool:
+    keys = [_json_key(item) for item in items]
+    return len(set(keys)) == len(keys)

@@ -85,6 +85,8 @@ class FieldConstraintType(StrEnum):
     MAXIMUM = "maximum"  # numeric upper bound (inclusive)
     EXCLUSIVE_MINIMUM = "exclusive_minimum"  # numeric lower bound, value must exceed it
     EXCLUSIVE_MAXIMUM = "exclusive_maximum"  # numeric upper bound, value must stay below it
+    MULTIPLE_OF = "multiple_of"  # numeric value must be a multiple of the bound
+    UNIQUE_ITEMS = "unique_items"  # array elements must be distinct (JSON equality)
     MIN_LENGTH = "min_length"  # minimum string / array length
     MAX_LENGTH = "max_length"  # maximum string / array length
     PATTERN = "pattern"  # regex pattern the string must match

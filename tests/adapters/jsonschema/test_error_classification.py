@@ -49,7 +49,7 @@ MALFORMED: list[tuple[str, Any]] = [
 UNSUPPORTED: list[tuple[str, Any]] = [
     ("allOf", {"type": "object", "allOf": [{}]}),
     ("not", _obj(a={"not": {"type": "string"}})),
-    ("boolean subschema", _obj(a=True)),
+    ("boolean subschema false", _obj(a=False)),
     ("dotted property name", _obj(**{"a.b": {"type": "string"}})),
     ("remote $ref", _obj(a={"$ref": "https://example.test/s.json"})),
     (
@@ -61,7 +61,7 @@ UNSUPPORTED: list[tuple[str, Any]] = [
         },
     ),
     ("non-object root", {"type": "string"}),
-    ("unrecognised keyword", _obj(a={"type": "string", "contentEncoding": "base64"})),
+    ("unrecognised keyword", _obj(a={"type": "integer", "divisibleBy": 3})),
 ]
 
 
