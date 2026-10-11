@@ -58,7 +58,7 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Stale-schema prevention (library) | COMPLETE | registry replaces unconditionally; cache keys on content | n/a | Correct *given* a fresh listing. |
 | Stale-listing detection (relay, protocol 2026-07-28) | COMPLETE (T3, `3be1e3e`) — was **UNSAFE** | SDK 2.3.0 `mcp/server/mcpserver/context.py:136`, `mcp/shared/subscriptions.py:84`; relay never opens `subscriptions/listen` | auto | **VERIFIED from spec source**: list-changed rides only on listen streams. If the client does not subscribe, the relay validates against a stale listing indefinitely. |
 | A: opposite-meaning rename guard | COMPLETE (T1, `dc67d52`) | was: 102/132 single-word opposite renames FORWARDED. Now 0/152 (probe), 0/118 (calibration family) | both | VERIFIED. `fuzzy.opposed_names` → contradiction → TrustPolicy AMBIGUOUS. |
-| JSON Schema 2020-12 coverage | PARTIAL | probe: refused `allOf` (even single `$ref`), `uniqueItems`, `multipleOf`, `min/maxProperties`, `dependentRequired`, `contains`, `contentMediaType`, `$id`/`$anchor`, `true` subschema, unknown keywords | n/a | VERIFIED. Refusal makes the tool unvalidated, not broken, *if the host fails open*. |
+| JSON Schema 2020-12 coverage | PARTIAL (T5, `3d93145`) | probe: 7/22 previously refused constructs now read (annotations, `true`, single-branch `allOf`, `multipleOf`, `uniqueItems`); `test_2020_12_conformance.py` differential vs `jsonschema` 0 disagreements | n/a | Still refused, deliberately: unknown keywords (some loosen, e.g. `nullable`), multi-branch `allOf`, `not`, conditionals, `false`, object-level assertions (`min/maxProperties`, `dependentRequired`), `prefixItems`, `contains`. Refusal fails open in the relay. |
 | Relay fail-open on unreadable schema | COMPLETE (T2, `384fe2a`) — was **UNSAFE** | default now `--unreadable forward`; `test_stdio_relay_protocol.py` | both | VERIFIED. |
 | Relay fail-open on internal error | COMPLETE (T2, `384fe2a`) — was **UNSAFE** | `test_relay_fail_open.py`: exception / RecursionError / gate failure / sync failure / client-message failure → forwarded once, unmodified, logged `category: "Z"` | both | VERIFIED. Single-write structure: no StateGuard-made double send. |
 | Kill switch | COMPLETE (T2) | `--passthrough`; `test_passthrough_is_a_byte_relay` | — | Also the raw-baseline arm. |
@@ -106,12 +106,12 @@ list-changed delivery at 2026-07-28.
 | T2 | Relay call path fails open: unexpected error / gate failure → raw passthrough + Z record; `--unreadable` default `forward`; `--passthrough` kill switch | 1 unsafe defect | DONE `384fe2a` | — |
 | T3 | Stale-listing safety at 2026-07-28: never act (repair/refuse/escalate) on a listing not known fresh — re-list then re-decide | 2 spec compat | DONE `3be1e3e` | T2 |
 | T4 | Measurement vertical slice: seeded workload × fault injectors × arms (raw, naive retry, shadow, auto) → per-category report incl. Z | 3 measurement | DONE `198aa25` | T1–T3 |
-| T5 | JSON Schema 2020-12 coverage: annotation keywords, simple assertions, single-branch `allOf`, `true` subschema; differential-verified | 2/4 | TODO | T4 (to measure) |
+| T5 | JSON Schema 2020-12 coverage: annotation keywords, simple assertions, single-branch `allOf`, `true` subschema; differential-verified | 2/4 | DONE `3d93145` | T4 |
 | T6 | Execution state + invocation ledger; relay: dedupe (J), surface unknown on transport close (E/I), opt-in deadline | 5 | DONE `c1c9acc` | T4 |
 | T7 | Effect model: operator-declared only; annotations recorded as untrusted hints | 5 | DONE `ad6f041` | T6 |
 | T8 | Retry decision (TrustDecision vocabulary + Shadow/Auto): operator-declared read-only/idempotent only; UNKNOWN on undeclared → ESCALATE; relay integration | 5 | DONE `88a5afa` | T6, T7 |
 | T9 | Circuit breaker per (server, tool), Shadow-first | 5 | TODO | T6 |
-| T10 | Result integrity: `outputSchema` / `structuredContent` validation, Shadow-only | 4 | TODO | T4 |
+| T10 | Result integrity: `outputSchema` / `structuredContent` validation, Shadow-only | 4 | IN PROGRESS | T4 |
 | T11 | Auth-signal classification + operator callback | 4 | TODO | T6 |
 | T12 | Stdio reconnect when idle; in-flight → escalate | 5 | TODO | T6, T8 |
 | T13 | Record/replay with redaction; pluggable corpus | 6 | TODO | T4 |
@@ -358,6 +358,17 @@ VERIFIED by running.
     (no reconnect).
   - Non-idempotent and undeclared tools: never retried.
 
+**M7 — T5 schema reading.** VERIFIED.
+
+- **Keyword probe:** 0/22 → 7/22 constructs read.
+- **Differential vs `jsonschema` Draft 2020-12:**
+  - `uniqueItems`: 500 generated instances, 0 disagreements.
+  - `multipleOf`: 500 generated instances, 0 disagreements.
+  - Corpus differential: 6,000 payloads, 0 disagreements, unchanged.
+- **Calibration:** unchanged (199/200, precision 100%).
+- **Coverage on real traffic:** not measured. No corpus of real MCP schemas
+  using these keywords exists in the repo.
+
 ## Known risks / unresolved categories
 
 - **Unresolved:** C (detect only), D, E, F, G, H, I, J, K — no runtime
@@ -368,16 +379,10 @@ VERIFIED by running.
 
 ## Next task
 
-T5: JSON Schema 2020-12 conformance in schema reading (priority 2, spec
-compatibility). This comes before new primitives.
+T10: result integrity (Shadow-only).
 
-Annotation keywords and unknown keywords are refused today, against the
-2020-12 rule that unknown keywords are annotations. Simple assertions are
-also refused (`uniqueItems`, `multipleOf`, `min/maxProperties`,
-`dependentRequired`), as are single-branch `allOf` and the `true`
-subschema. With the relay failing open, a refused schema means **no**
-validation or repair for that tool. That is strictly less protection than
-reading the parts StateGuard understands.
+Check `CallToolResult` shape, and `structuredContent` against a declared
+`outputSchema`. Log the finding (category H) and never alter the result.
 
-Then T10 (result integrity, Shadow-only), T12 (reconnect), T11 (auth
-classification), T9 (breaker), T13 (record/replay).
+Then T12 (reconnect), T11 (auth classification), T9 (breaker), T13
+(record/replay).
