@@ -176,6 +176,9 @@ class ScriptedServer:
     require_initialize: bool = False
     #: Set by kill(): the process is gone and processes nothing more.
     dead: bool = False
+    #: Called with every call whose action is not NORMAL -- what a recording
+    #: of a fault-injection run stores as its ground truth.
+    on_fault: Callable[[ServerCall, ServerAction], None] | None = None
     _initialized: bool = False
     _writer: Any = None
     _calls: int = 0
@@ -290,6 +293,8 @@ class ScriptedServer:
             self._calls += 1
             tool = next((t for t in self.tools if t.name == name), None)
         action = self.faults(call)
+        if action is not ServerAction.NORMAL and self.on_fault is not None:
+            self.on_fault(call, action)
 
         if action is ServerAction.CLOSE_BEFORE_EXECUTE:
             self.dead = True
@@ -389,6 +394,7 @@ class Rig:
         server_factory: Callable[[], ScriptedServer] | None = None,
         max_restarts: int = 0,
         restart_policy: str = "idle-only",
+        recorder: Any = None,
     ) -> None:
         from stateguard import ContractGuard, GuardConfig
         from stateguard.core.models.config import RepairMode
@@ -436,6 +442,7 @@ class Rig:
             max_restarts=max_restarts,
             restart_policy=restart_policy,
             restart_backoff=0.0,
+            recorder=recorder,
         )
         server_in, server_out = os.fdopen(r2s_r, "rb"), os.fdopen(s2r_w, "wb")
         self._threads = [

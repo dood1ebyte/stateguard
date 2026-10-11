@@ -56,6 +56,18 @@ from stateguard.adapters.mcp.outcomes import (
     outcome_for,
     repair_tool_call,
 )
+from stateguard.adapters.mcp.recording import (
+    Direction,
+    Provenance,
+    Recorder,
+    Recording,
+    RecordingError,
+    RedactionMode,
+    RedactionPolicy,
+    Redactor,
+    parse_recording,
+    read_recording,
+)
 from stateguard.adapters.mcp.registry import (
     RegisteredTool,
     SyncReport,
@@ -74,6 +86,16 @@ from stateguard.adapters.mcp.results import (
 
 __all__ = [
     "DEFAULT_CACHE_SIZE",
+    "Direction",
+    "Provenance",
+    "Recorder",
+    "Recording",
+    "RecordingError",
+    "RedactionMode",
+    "RedactionPolicy",
+    "Redactor",
+    "parse_recording",
+    "read_recording",
     "ResultCheck",
     "ResultIssue",
     "ResultIssueKind",

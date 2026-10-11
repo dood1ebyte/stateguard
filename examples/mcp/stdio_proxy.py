@@ -131,12 +131,25 @@ listing sync (added / removed / updated / breaking, description changes) and
 every call decision (action, what auto mode would do, the reason, and the
 field decisions -- paths, kinds and trust, never argument values).
 
+Recording (opt-in)
+------------------
+``--record FILE`` writes every line in all four directions, every audit
+event and the server generation to a redacted, versioned recording
+(``stateguard.adapters.mcp.recording``) that the replay benchmark reads.
+Redaction runs before anything is written. Recording observes only: the
+taps sit *after* a write succeeded or *after* a line was read, so they
+cannot add, drop, delay past the write, or reorder a message. A recorder
+that fails stops recording, the audit log says so once
+(``recording_stopped``), and the traffic carries on exactly as without it.
+``--record-provenance`` (default ``local_development``) is written into the
+file; claim ``real_capture`` only for real use.
+
 Scope
 -----
 An example of where StateGuard sits on the wire, kept small enough to read:
-no reconnection, no timeouts beyond the listing wait, one server per relay.
-MCP's stdio transport is newline-delimited JSON-RPC, which is all this
-parses.
+one server process at a time, no timeouts beyond the listing wait and the
+opt-in call deadline. MCP's stdio transport is newline-delimited JSON-RPC,
+which is all this parses.
 """
 
 from __future__ import annotations
@@ -184,6 +197,8 @@ from stateguard.adapters.mcp.jsonrpc import (
     request_id,
     tool_error_response,
 )
+from stateguard.adapters.mcp.recording import Direction, Provenance, Recorder, RedactionPolicy
+from stateguard.adapters.mcp.recording import RedactionMode as RecordRedaction
 from stateguard.core.models.config import GuardConfig, RepairMode
 
 #: Prefix for the ids of the relay's own requests, so their responses can be
@@ -226,8 +241,12 @@ class StdioRelay:
         max_restarts: int = 0,
         restart_policy: str = "idle-only",
         restart_backoff: float = 0.1,
+        recorder: Recorder | None = None,
     ) -> None:
         self.registry = ToolRegistry(guard)
+        # Observes only; see "Recording" in the module docstring.
+        self._recorder = recorder
+        self._recording_reported = False
         self._client_in, self._client_out = client_in, client_out
         self._server_in, self._server_out = server_in, server_out
         self._audit = audit
@@ -307,6 +326,8 @@ class StdioRelay:
                 stream.flush()
             except ValueError as exc:  # closed by the other side's shutdown
                 raise BrokenPipeError(str(exc)) from exc
+            if stream is self._client_out:
+                self._tap(Direction.RELAY_TO_CLIENT, line)  # written: now it happened
 
     def _send_server(self, line: bytes) -> None:
         """Write to the *current* server process (the stream is swapped on restart)."""
@@ -317,6 +338,7 @@ class StdioRelay:
                 stream.flush()
             except ValueError as exc:  # closed: the client left, or a restart replaced it
                 raise BrokenPipeError(str(exc)) from exc
+            self._tap(Direction.RELAY_TO_SERVER, line)
 
     def _send_json(self, stream: IO[bytes], lock: threading.Lock, message: Any) -> None:
         self._send(stream, lock, json.dumps(message, separators=(",", ":")).encode("utf-8"))
@@ -324,6 +346,43 @@ class StdioRelay:
     def _log(self, event: str, **fields: Any) -> None:
         with self._to_audit:
             self._audit.write(json.dumps({"event": event, **fields}, default=str) + "\n")
+            self._audit.flush()
+        recorder = self._recorder
+        if recorder is not None:
+            try:
+                recorder.audit({"event": event, **fields})
+            except Exception:  # noqa: BLE001 -- never; but a recorder never breaks a call
+                self._recorder = None
+            self._check_recorder(recorder)
+
+    def _tap(self, direction: Direction, line: bytes) -> None:
+        """Give one wire line to the recorder. Never raises, never alters *line*."""
+        recorder = self._recorder
+        if recorder is None:
+            return
+        try:
+            recorder.message(direction, line, generation=self.generation)
+        except Exception:  # noqa: BLE001 -- Recorder never raises; belt and braces
+            self._recorder = None
+        self._check_recorder(recorder)
+
+    def _check_recorder(self, recorder: Recorder) -> None:
+        """Say once, in the audit log, that recording stopped. The traffic is unaffected."""
+        if self._recording_reported or (recorder.healthy and self._recorder is not None):
+            return
+        self._recording_reported = True
+        self._recorder = None
+        with contextlib.suppress(Exception), self._to_audit:
+            self._audit.write(
+                json.dumps(
+                    {
+                        "event": "recording_stopped",
+                        "failures": list(recorder.failure_types),
+                        "impact": "recording only; traffic continues unchanged",
+                    }
+                )
+                + "\n"
+            )
             self._audit.flush()
 
     def _request_listing(self, cursor: str | None = None, epoch: int | None = None) -> int:
@@ -413,6 +472,7 @@ class StdioRelay:
 
     def _pump_client(self) -> None:
         for line in self._client_in:
+            self._tap(Direction.CLIENT_TO_RELAY, line)
             if self._passthrough:
                 self._send_server(line)
                 continue
@@ -967,6 +1027,7 @@ class StdioRelay:
 
     def _pump_server(self) -> None:
         for line in self._server_out:
+            self._tap(Direction.SERVER_TO_RELAY, line)
             if self._passthrough:
                 self._send(self._client_out, self._to_client, line)
                 continue
@@ -1200,6 +1261,23 @@ def main(argv: list[str] | None = None) -> int:
         help="idle-only: never restart while a request's outcome is unknown (default).",
     )
     parser.add_argument(
+        "--record",
+        metavar="FILE",
+        help="Write a redacted recording of all traffic (JSON lines) for replay.",
+    )
+    parser.add_argument(
+        "--record-provenance",
+        choices=[p.value for p in Provenance],
+        default=Provenance.LOCAL_DEVELOPMENT.value,
+        help="Provenance written into the recording (default: local_development).",
+    )
+    parser.add_argument(
+        "--record-redaction",
+        choices=[m.value for m in RecordRedaction],
+        default=RecordRedaction.MASK.value,
+        help="mask (default): persist no free-form values; secrets_only: drop credentials only.",
+    )
+    parser.add_argument(
         "--passthrough",
         action="store_true",
         help="Kill switch: relay bytes only, StateGuard off. The measurement baseline.",
@@ -1230,6 +1308,27 @@ def main(argv: list[str] | None = None) -> int:
         processes.append(new)
         return new.stdin, new.stdout
 
+    recorder = None
+    if args.record:
+        import uuid
+
+        recorder = Recorder(
+            open(args.record, "w", encoding="utf-8"),  # noqa: SIM115 -- closed at exit
+            provenance=Provenance(args.record_provenance),
+            session=uuid.uuid4().hex,
+            policy=RedactionPolicy(mode=RecordRedaction(args.record_redaction)),
+            deterministic=False,
+            # The relay's settings only: the server command may carry secrets.
+            config={
+                "mode": "passthrough" if args.passthrough else mode.value,
+                "retry": args.retry,
+                "restart": args.restart,
+                "restart_policy": args.restart_policy,
+                "call_deadline": args.call_deadline,
+                "listing_refresh": not args.no_listing_refresh,
+                "unreadable": args.unreadable,
+            },
+        )
     relay = StdioRelay(
         ContractGuard.with_mcp(config=GuardConfig(mode=mode)),
         sys.stdin.buffer,
@@ -1246,6 +1345,7 @@ def main(argv: list[str] | None = None) -> int:
         restart=restart,
         max_restarts=args.restart,
         restart_policy=args.restart_policy,
+        recorder=recorder,
     )
     relay._log(
         "relay_started",
@@ -1256,7 +1356,10 @@ def main(argv: list[str] | None = None) -> int:
     to_server.start()
     threading.Thread(target=relay.run_deadlines, daemon=True).start()
     relay.pump_server()  # until the server closes its stdout for good
-    return processes[-1].wait()
+    code = processes[-1].wait()
+    if recorder is not None:
+        recorder.close()
+    return code
 
 
 if __name__ == "__main__":
