@@ -74,7 +74,7 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Call deadline (F/H/I) | PARTIAL (T6) — opt-in only | M5: hidden 25 → 1, but **8 Z** on slow successes | auto, opt-in | Off by default; the operator must set it above legitimate tool latency. |
 | Retry decision logic | COMPLETE (T8, `ad6f041`, `88a5afa`) | `decide_retry`; relay `--retry`; `test_relay_retry.py` (server ledger checked) | **Shadow by default**; Auto opt-in with `--effects` | Never after auth/protocol error; one retry max; undeclared + unknown outcome → ESCALATE. |
 | Circuit breaking | MISSING | — | — | |
-| Result validation (`outputSchema`) | MISSING | results pass through untouched (VERIFIED) | — | Safe absence; must start Shadow-only. |
+| Result validation (`outputSchema`) | COMPLETE, detection only (T10) | `adapters/mcp/results.py`; `test_results.py`, `test_relay_results.py`; M8: 8/8 injected detected, 0 elsewhere | observe in all modes; **never alters** | Missing `structuredContent` = advisory (2026-07-28 text: optional). Non-object `outputSchema` not checked (advisory). |
 | Auth signal classification | MISSING | — | — | |
 | Fault injection | PARTIAL (T4, `198aa25`) | `benchmarks/runtime/harness.py`: 11 server fault actions; StateGuard-internal faults in `test_relay_fail_open.py` | — | Seeded; one fault per invocation. Missing: 429/Retry-After (no HTTP transport), delayed-but-arriving responses, session faults (D). |
 | Property tests (repair layer) | COMPLETE | `test_mcp_properties.py`, `test_diff.py` | — | None for runtime primitives (do not exist). |
@@ -111,7 +111,7 @@ list-changed delivery at 2026-07-28.
 | T7 | Effect model: operator-declared only; annotations recorded as untrusted hints | 5 | DONE `ad6f041` | T6 |
 | T8 | Retry decision (TrustDecision vocabulary + Shadow/Auto): operator-declared read-only/idempotent only; UNKNOWN on undeclared → ESCALATE; relay integration | 5 | DONE `88a5afa` | T6, T7 |
 | T9 | Circuit breaker per (server, tool), Shadow-first | 5 | TODO | T6 |
-| T10 | Result integrity: `outputSchema` / `structuredContent` validation, Shadow-only | 4 | IN PROGRESS | T4 |
+| T10 | Result integrity: `outputSchema` / `structuredContent` validation, detection only | 4 | DONE | T4 |
 | T11 | Auth-signal classification + operator callback | 4 | TODO | T6 |
 | T12 | Stdio reconnect when idle; in-flight → escalate | 5 | TODO | T6, T8 |
 | T13 | Record/replay with redaction; pluggable corpus | 6 | TODO | T4 |
@@ -239,6 +239,21 @@ safety boundary / Z modes / Shadow-first / Auto conditions / evidence).
   - A deadline above the tools' legitimate latency, if deadlines are used.
 - **Evidence:** `test_effects.py`, `test_relay_retry.py` (10, server ledger
   checked), M6. Real-traffic evidence: none yet.
+
+### P-T10 Result integrity check (T10)
+
+- **Ownable:** detection yes. Repair no, ever: a repaired result is
+  fabricated.
+- **Deterministic:** yes, by the JSON Schema adapter.
+- **State:** none.
+- **Safety boundary:** read-only, and value-free findings. Exceptions fail
+  open (the result is delivered).
+- **Z modes:** a false finding (log noise only; results are never altered).
+  Measured: 0 false findings in M8.
+- **Auto:** there is no Auto action to promote. Surfacing findings *to the
+  client* (e.g. via `_meta`) would alter the result. That is a product
+  decision not taken here.
+- **Evidence:** M8.
 
 ## Measured results
 
@@ -369,6 +384,19 @@ VERIFIED by running.
 - **Coverage on real traffic:** not measured. No corpus of real MCP schemas
   using these keywords exists in the repo.
 
+**M8 — after T10.** Same corpus and seed. New H injector
+`output_schema_violation` (8 invocations). **SYNTHETIC.** VERIFIED by
+running.
+
+- **Failures:** raw 101 → auto 73 → auto_ops 64. N rose by 8; the new
+  violations fail in every arm by design.
+- **Hidden failures:** raw 61 → auto 33 → auto_ops 9 (8 of those are the
+  result-contract violations, detected but not altered).
+- **Result-integrity findings:** shadow 8, auto 8, auto_ops 8; raw 0. That
+  is exactly the injected count, so 0 false findings.
+- **Unchanged from M6:** StateGuard-induced auto 0 / auto_ops 5; duplicate
+  executions of non-declared tools 0.
+
 ## Known risks / unresolved categories
 
 - **Unresolved:** C (detect only), D, E, F, G, H, I, J, K — no runtime
@@ -379,10 +407,13 @@ VERIFIED by running.
 
 ## Next task
 
-T10: result integrity (Shadow-only).
+T12: reconnect. Restart a dead stdio server when no call is in flight;
+in-flight calls stay UNKNOWN and escalate. A read-only declared call may then
+be retried on the new connection.
 
-Check `CallToolResult` shape, and `structuredContent` against a declared
-`outputSchema`. Log the finding (category H) and never alter the result.
+- E is currently 8/8 unresolved.
+- I's stdio-kill cases are escalated.
 
-Then T12 (reconnect), T11 (auth classification), T9 (breaker), T13
-(record/replay).
+Then T11 (auth classification + operator callback), T9 (circuit breaker,
+which needs multi-call workloads in the harness), and T13 (record/replay
+with redaction, a pluggable real-traffic corpus).
