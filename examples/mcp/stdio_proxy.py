@@ -1318,6 +1318,8 @@ def main(argv: list[str] | None = None) -> int:
             session=uuid.uuid4().hex,
             policy=RedactionPolicy(mode=RecordRedaction(args.record_redaction)),
             deterministic=False,
+            # Redact and write off the call path: a slow disk never stalls traffic.
+            background=True,
             # The relay's settings only: the server command may carry secrets.
             config={
                 "mode": "passthrough" if args.passthrough else mode.value,

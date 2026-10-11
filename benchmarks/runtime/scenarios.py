@@ -58,7 +58,7 @@ CATEGORIES = {
 #: send or move something are NON_IDEMPOTENT; tools whose effect depends on
 #: arguments or implementation (write_file, set_role, query_db) are left
 #: UNKNOWN, as an operator who had not checked would leave them.
-SIMULATED_EFFECTS: dict[str, str] = {
+SIMULATED_EFFECTS: dict[tuple[str, str | None] | str, str] = {
     "read_file": "read_only",
     "list_issues": "read_only",
     "search_users": "read_only",

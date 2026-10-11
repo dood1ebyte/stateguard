@@ -83,3 +83,51 @@ These are counted separately and never folded into those outcomes:
 
 A fall in failures therefore shows whether it was recovered, contained
 (unknown or not sent), made visible (connection closed), or merely hidden.
+
+## Record and replay
+
+```bash
+python benchmarks/runtime/record_corpus.py            # re-record tapes/ (A-H)
+python benchmarks/runtime/replay.py                   # replay every tape under every arm
+python benchmarks/runtime/replay.py --tapes DIR --json out.json
+```
+
+The relay can record what crosses it (`stdio_proxy.py --record FILE`; library:
+`stateguard.adapters.mcp.recording`). A recording is versioned JSON lines.
+It holds every line in all four directions, the relay's decisions and audit
+events, and the server generation. Fault-injection recordings also hold the
+injected faults and per-request ground-truth labels. Everything is
+**redacted before it is written**:
+
+- credentials are removed by key name and by value shape;
+- free-form text is masked shape-preservingly;
+- only protocol structure, and argument values the tool's own schema vouches
+  for, are kept verbatim.
+
+`replay.py` drives the recorded client lines through the relay. The server
+side is a `TapeServer`, an in-process scripted server that answers each call
+exactly as the recording says the real one did. Arms:
+
+| Arm | What it is |
+|---|---|
+| `raw` | StateGuard off. |
+| `shadow` | Observing; must equal raw. |
+| `auto` | Acting, default settings. |
+| `auto_ops` | Acting, with a 0.3 s deadline, declared effects, retry on, and restart (idle-only). |
+| `as_recorded` | The configuration the tape was recorded with: the **fidelity** check. Replay must reproduce every recorded answer and decision. |
+
+Reported separately, never folded into one "failures solved" number:
+
+- raw failures, plus failures prevented, recovered and safely escalated;
+- UNKNOWN outcomes, duplicate executions and StateGuard-induced failures (Z);
+- reconnects and retries, latency, and recording overhead;
+- **counterfactual answers**: what the TapeServer predicted for traffic the
+  recording never saw, such as repaired arguments or a retry. Every
+  "prevented" or "recovered" figure says how many of its cases rest on one.
+
+**`tapes/` is fault injection on a synthetic workload** (`record_corpus.py`,
+sessions A–H). The report says so on its first line. Record/replay
+infrastructure enables real-traffic measurement but does not itself
+constitute real-traffic evidence. To measure real traffic, record with
+`--record-provenance real_capture` against a real deployment and point
+`--tapes` at those files. Replay never contacts the original server.

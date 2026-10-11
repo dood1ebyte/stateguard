@@ -70,7 +70,9 @@ that it is not user data: it equals, up to case and separators, or is
 within two edits of, a member of the argument's ``enum`` / ``const``; or
 the schema says the field is a number or boolean and the string is a small
 number or a boolean word. Anything the redactor cannot classify -- an
-unexpected type, nesting beyond 64 levels -- is replaced.
+unexpected type, nesting beyond 64 levels -- is replaced. A JSON object or
+array sent as a string is redacted as the structure it holds and re-encoded
+(no longer byte-identical, but its declared keys survive).
 
 ``mode="secrets_only"`` keeps free-form values and applies layers 1 and 2
 only. It is for traffic known to hold no personal data, and the header says
@@ -87,8 +89,10 @@ Zero external dependencies.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
+import queue
 import re
 import threading
 import time
@@ -110,6 +114,8 @@ __all__ = [
     "MalformedRecordingError",
     "Provenance",
     "Recorder",
+    "RecorderCloseTimeoutError",
+    "RecorderOverflowError",
     "Recording",
     "RecordingError",
     "RedactionMode",
@@ -245,8 +251,10 @@ _SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 
 #: Strings kept verbatim where the structure allows it must look like this.
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_./:$\-\[\]*]{0,128}$")
-#: Dict keys kept verbatim (outside a schema that declares them) must look like this.
-_IDENTIFIER_KEY = re.compile(r"^[A-Za-z0-9_.:$/\-]{1,64}$")
+#: Dict keys kept verbatim (outside a schema that declares them) must look like
+#: this: a word-like identifier of at most 40 characters and at most 3 digits.
+#: An opaque token used as a key (``{"a8f93c0d7e...": ...}``) does not.
+_IDENTIFIER_KEY = re.compile(r"^(?=(?:[^0-9]*[0-9]){0,3}[^0-9]*$)[A-Za-z0-9_.:$/\-]{1,40}$")
 _BOOLEAN_WORDS = frozenset(
     {"true", "false", "yes", "no", "y", "n", "t", "f", "on", "off", "1", "0"}
 )
@@ -532,8 +540,29 @@ class Redactor:
         if isinstance(value, (int, float)):
             return self._number(value)
         if isinstance(value, str):
+            embedded = self._embedded_json(value, schema, depth)
+            if embedded is not None:
+                return embedded
             return self.string(value, keep=_schema_vouches(value, schema))
         return self._changed(REDACTED)  # not JSON: nothing to vouch for it
+
+    def _embedded_json(self, text: str, schema: Mapping[str, Any] | None, depth: int) -> str | None:
+        """
+        A JSON object or array sent as a string (a common drift): redacted as
+        the structure it holds, so declared keys survive, then re-encoded.
+        A string that is itself a credential never gets here.
+        """
+        stripped = text.strip()
+        if not stripped or stripped[0] not in "[{" or secret_pattern(text) is not None:
+            return None
+        try:
+            parsed = json.loads(stripped, parse_constant=_reject_constant)
+        except (ValueError, RecursionError):
+            return None
+        if not isinstance(parsed, (dict, list)):
+            return None
+        self.redactions += 1
+        return json.dumps(self.value(parsed, schema=schema, depth=depth + 1), allow_nan=False)
 
     # -- MCP structure ----------------------------------------------------------
 
@@ -745,6 +774,7 @@ class Redactor:
             "got",
             "description_changed",
             "paths",
+            "tools",
         }
     )
 
@@ -800,12 +830,29 @@ class _Pending:
     tool: str | None
 
 
+class RecorderOverflowError(RuntimeError):
+    """The background queue was full: a record was dropped rather than block the host."""
+
+
+class RecorderCloseTimeoutError(RuntimeError):
+    """The background writer did not finish in time (a blocked sink)."""
+
+
+_CLOSE = object()
+
+
 class Recorder:
     """
     Writes one recording. Thread-safe; **never raises** into the code that
     feeds it. On any failure it stops, counts it, and leaves the file
     without a complete ``end`` record, so nothing replays a recording with
     a gap as if it were whole.
+
+    ``background=True`` moves redaction and writing to a writer thread behind
+    a bounded queue, so a slow or blocked sink can never stall the host: when
+    the queue is full the record is dropped and recording stops (the file is
+    then incomplete). Without it, each call redacts and writes before it
+    returns -- simplest, and deterministic, but the host waits for the sink.
     """
 
     def __init__(
@@ -818,9 +865,13 @@ class Recorder:
         deterministic: bool = True,
         config: Mapping[str, Any] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        background: bool = False,
+        queue_size: int = 10_000,
+        close_timeout: float = 5.0,
     ) -> None:
         self._sink = sink
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._failure_lock = threading.Lock()
         self.redactor = Redactor(policy)
         self.provenance = Provenance(provenance)
         self._deterministic = deterministic
@@ -834,6 +885,9 @@ class Recorder:
         self.stopped = False
         self.closed = False
         self._sink_failed = False
+        self._close_timeout = close_timeout
+        self._queue: queue.Queue[Any] | None = None
+        self._writer: threading.Thread | None = None
         self._emit(
             {
                 "type": "header",
@@ -843,9 +897,27 @@ class Recorder:
                 "session": str(session),
                 "deterministic": deterministic,
                 "redaction": self.redactor.policy.describe(),
-                "config": self.redactor.value(dict(config or {})),
+                "config": self._config(config or {}),
             }
         )
+        if background:
+            self._queue = queue.Queue(maxsize=queue_size)
+            self._writer = threading.Thread(
+                target=self._drain, name="stateguard-recorder", daemon=True
+            )
+            self._writer.start()
+
+    def _config(self, config: Mapping[str, Any]) -> dict[str, Any]:
+        """Host settings: flag-like values kept, anything else redacted like any value."""
+        out: dict[str, Any] = {}
+        for k, v in config.items():
+            if self.redactor._sensitive(str(k)):
+                self.redactor._put(out, k, self.redactor._scrub(v))
+            elif isinstance(v, str):
+                self.redactor._put(out, k, self.redactor.identifier(v))
+            else:
+                self.redactor._put(out, k, self.redactor.value(v))
+        return out
 
     # -- the never-raising core -----------------------------------------------
 
@@ -867,39 +939,70 @@ class Recorder:
                 self._stop(exc)
 
     def _stop(self, exc: BaseException) -> None:
-        self.failures += 1
-        self.failure_types.append(type(exc).__name__)
-        self.stopped = True
+        # A leaf lock of its own: the host may record a failure while the
+        # writer thread holds the main lock, blocked in the sink.
+        with self._failure_lock:
+            self.failures += 1
+            self.failure_types.append(type(exc).__name__)
+            self.stopped = True
 
     def _guard(self, build: Callable[[], dict[str, Any] | None]) -> None:
         if self.stopped or self.closed:
             return
-        try:
-            record = build()
-        except Exception as exc:  # noqa: BLE001 -- e.g. a value redaction cannot handle
-            with self._lock:
-                self._stop(exc)
+        if self._queue is not None:
+            try:
+                self._queue.put_nowait(build)
+            except queue.Full:
+                if not self.stopped:
+                    self._stop(RecorderOverflowError())
             return
-        if record is not None:
-            self._emit(record)
+        self._run(build)
 
-    def _diag(self, **fields: Any) -> dict[str, Any]:
-        if not self._deterministic:
-            fields["t_ms"] = round((self._clock() - self._start) * 1000.0, 3)
+    def _run(self, build: Callable[[], dict[str, Any] | None]) -> None:
+        """Build (redact) and write one record, in order, under the lock."""
+        with self._lock:
+            if self.stopped or self.closed:
+                return
+            try:
+                record = build()
+            except Exception as exc:  # noqa: BLE001 -- e.g. a value redaction cannot handle
+                self._stop(exc)
+                return
+            if record is not None:
+                self._emit(record)
+
+    def _drain(self) -> None:
+        assert self._queue is not None
+        while True:
+            build = self._queue.get()
+            if build is _CLOSE:
+                self._write_end()
+                return
+            self._run(build)
+
+    def _now(self) -> float | None:
+        return None if self._deterministic else self._clock()
+
+    def _diag(self, at: float | None, **fields: Any) -> dict[str, Any]:
+        if at is not None:
+            fields["t_ms"] = round((at - self._start) * 1000.0, 3)
         return fields
 
     # -- what the host feeds in -----------------------------------------------
 
     def message(self, direction: Direction | str, line: bytes, *, generation: int = 0) -> None:
         """One line as it crossed the wire (already written, or just read)."""
-        self._guard(lambda: self._message_record(Direction(direction), line, generation))
+        at = self._now()  # when it crossed, not when a background writer got to it
+        self._guard(lambda: self._message_record(Direction(direction), line, generation, at))
 
-    def _message_record(self, direction: Direction, line: bytes, generation: int) -> dict[str, Any]:
+    def _message_record(
+        self, direction: Direction, line: bytes, generation: int, at: float | None
+    ) -> dict[str, Any]:
         record: dict[str, Any] = {
             "type": "message",
             "dir": direction.value,
             "gen": int(generation),
-            "diag": self._diag(bytes=len(line)),
+            "diag": self._diag(at, bytes=len(line)),
         }
         try:
             message = json.loads(line)
@@ -942,6 +1045,7 @@ class Recorder:
 
     def audit(self, event: Mapping[str, Any]) -> None:
         """A relay audit event (the relay's ``_log``)."""
+        event = dict(event)
         self._guard(lambda: {"type": "audit", "event": self.redactor.audit(event)})
 
     def fault(self, fault: str, **fields: Any) -> None:
@@ -977,6 +1081,21 @@ class Recorder:
         """Write ``end``. A recorder that stopped early says so: ``complete: false``."""
         if self.closed:
             return
+        if self._queue is None or self._writer is None:
+            self._write_end()
+            return
+        # The writer thread writes ``end`` after everything queued before it;
+        # the host waits at most ``close_timeout`` for that, never for the sink.
+        with contextlib.suppress(queue.Full):
+            self._queue.put(_CLOSE, timeout=self._close_timeout)
+        self._writer.join(self._close_timeout)
+        if self._writer.is_alive():
+            # Blocked in the sink: give up without waiting. If it ever
+            # finishes, its end record says the recording is incomplete.
+            self._stop(RecorderCloseTimeoutError())
+        self.closed = True
+
+    def _write_end(self) -> None:
         end = {
             "type": "end",
             "records": self.records,

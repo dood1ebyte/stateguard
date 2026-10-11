@@ -79,7 +79,8 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Auth signal classification | MISSING | — | — | |
 | Fault injection | PARTIAL (T4, `198aa25`) | `benchmarks/runtime/harness.py`: 11 server fault actions; StateGuard-internal faults in `test_relay_fail_open.py` | — | Seeded; one fault per invocation. Missing: 429/Retry-After (no HTTP transport), delayed-but-arriving responses, session faults (D). |
 | Property tests (repair layer) | COMPLETE | `test_mcp_properties.py`, `test_diff.py` | — | None for runtime primitives (do not exist). |
-| Replay / benchmark | PARTIAL | `stateguard replay`, `mcp_bench.py`, `calibrate.py`, **`benchmarks/runtime/measure.py` (before/after per category, 4 arms)** | — | No record/replay of real traffic yet (T13); the corpus interface is pluggable. |
+| Replay / benchmark | PARTIAL (T13) | `stateguard replay`, `mcp_bench.py`, `calibrate.py`, `measure.py`, `recovery.py`, **`replay.py` (recorded sessions × raw / shadow / auto / auto_ops / as-recorded)** | — | Record/replay works end to end (M11). **No real-traffic recording exists yet**: the committed corpus is fault injection. |
+| Traffic recording + redaction | COMPLETE (T13) | `adapters/mcp/recording.py`; relay `--record`; `test_recording.py`, `test_relay_recording.py`, `test_replay.py` | observe only, every mode | Deterministic rule-based redaction, mask by default. Recorder never raises; background mode never blocks the relay. |
 | Category Z tracking | PARTIAL (T2, T4) | relay logs `category: "Z"`; `measure.py` counts StateGuard-induced failures, incorrect repair/refusal, duplicates, crashes per category | — | Counted per measurement run; not yet exported as runtime telemetry. |
 
 **Contradictions found.** The docs claimed applied precision of 100%
@@ -115,7 +116,8 @@ list-changed delivery at 2026-07-28.
 | T10 | Result integrity: `outputSchema` / `structuredContent` validation, detection only | 4 | DONE | T4 |
 | T11 | Auth-signal classification + operator callback | 4 | TODO | T6 |
 | T12 | Safe server restart: idle death only by default; in-flight → UNKNOWN, never replayed; re-initialize + re-list + registry reset; bounded; session recovery workload | 5 | DONE (`9d1f401`, `24011f5`, + measurement commit) | T6, T8 |
-| T13 | Record/replay with redaction; pluggable corpus | 6 | TODO | T4 |
+| T13 | Record/replay with redaction: versioned format, deterministic redaction, fail-open relay taps, replay engine + A–H fault-injection corpus, provenance-labelled report | 6 | DONE (`bbb660b` + replay commit) | T4, T12 |
+| T14 | Relay: wait for the link before a listing refresh (mid-restart race, found by T13 replay) | 1 | TODO | T12 |
 
 ## Primitive records
 
@@ -427,6 +429,233 @@ registry reset):
   cannot loop.
 - **Evidence:** E tests; property (dies-on-start mode); M10.
 
+### T13 Record / replay with redaction
+
+**Record/replay infrastructure enables real-traffic measurement but does not
+itself constitute real-traffic evidence.** Every number below comes from the
+committed corpus, which is deterministic fault injection on a synthetic
+workload.
+
+**Architecture.** No second event system: the recorder taps what already
+exists.
+
+- **Library.** `stateguard.adapters.mcp.recording`:
+  - `Recorder`;
+  - `Redactor` and `RedactionPolicy`;
+  - `Provenance`;
+  - the parser: `parse_recording` / `read_recording`.
+
+  It is zero-dependency.
+- **Relay taps.** Five points in `examples/mcp/stdio_proxy.py`:
+  - the client read loop;
+  - `_send_server`, after the write succeeded;
+  - the server read loop;
+  - `_send` to the client, after the write;
+  - `_log` (audit events, which already carry every StateGuard decision,
+    execution-state change, restart and generation).
+- **Harness.** `Rig(recorder=…)`, and `ScriptedServer.on_fault`, which
+  records the injected faults.
+- **Replay.** `benchmarks/runtime/replay.py`:
+  - `derive()` turns a recording into a `TapeEnvironment`: client steps,
+    listings by position, tool-call attempts per client id, idle deaths,
+    restart possibility and labels.
+  - `TapeServer` is a `ScriptedServer` subclass that answers from it.
+  - `run_arm()` drives the existing `Rig`.
+- **Corpus.** `benchmarks/runtime/record_corpus.py` produces
+  `benchmarks/runtime/tapes/` (A–H).
+
+**Format** (`stateguard.mcp.recording`, version 1). JSON lines with keys
+sorted; `header` first, `end` last; `seq` strictly increasing.
+
+- **Replay-required.**
+  - `message` records: direction, generation, kind
+    (request / notification / response / error / unparsed / other), id,
+    method, tool, and the redacted message.
+  - `audit` records: StateGuard decisions, `outcome_unknown`,
+    `server_lost`, restarts.
+  - `fault` records: injected failures, keyed by request id.
+  - `label` records: ground truth, redacted like the request.
+- **Diagnostic.** `diag`: byte length, and a monotonic timestamp only when
+  `deterministic=False`. Never read by replay.
+- **Sensitive.** Never written. The header names the policy; `end` counts
+  values changed.
+- **Version gate.** Unknown versions raise
+  `UnsupportedRecordingVersionError`. The parser raises `RecordingError`
+  only, and its messages name a line and a reason, never content.
+
+**Redaction model.** Deterministic and rule-based; no probabilistic
+detector. Three layers, recursive at every depth:
+
+1. **Key names.** A normalized name that marks a credential (`authorization`,
+   `*token*`, `*secret*`, `password`, `api_key`, `cookie`, `key`, `auth*`
+   but not `author*`, …) scrubs the subtree and keeps only JSON types. This
+   covers arguments, `_meta`, results, errors, audit and labels. A schema
+   property with such a name has its `default` / `enum` / `const` /
+   `examples` scrubbed.
+2. **Value shapes.** Twelve patterns replace the whole string anywhere, even
+   in positions otherwise kept: auth schemes, JWT, AWS, GitHub, Slack,
+   Stripe and `sk-` keys, Google keys, PEM private keys, URL userinfo,
+   secret query params, `password=` assignments.
+3. **Mask mode (the default).** Fail-safe: anything not vouched for is
+   masked, shape-preservingly (letters → `a`/`A`, digits and numerals → `1`).
+   - **Kept verbatim:**
+     - protocol structure: `jsonrpc`, `method`, ids, tool names, protocol
+       versions, `resultType`, `isError`, content `type`;
+     - error codes and StateGuard execution states;
+     - published schemas, except prose;
+     - argument values the tool's own schema vouches for: an enum/const
+       member up to case and separators or within two edits, a numeric
+       string under 10⁶ in a numeric field, a boolean word in a boolean
+       field;
+     - small numbers and booleans.
+   - **Reduced:** integers of seven or more digits.
+   - **Keys:** undeclared dict keys are kept only when word-like (≤ 40
+     characters, ≤ 3 digits); otherwise masked, with collisions suffixed,
+     never overwritten.
+   - **JSON in a string:** a JSON object or array sent as a string is
+     redacted as structure.
+   - **Unclassifiable:** unknown types and nesting beyond depth 64 become
+     `[redacted]`.
+
+`secrets_only` mode is opt-in: it keeps free text and is declared in the
+header. The server command line is never written.
+
+**Recorder failure semantics.**
+
+- **It never raises into the host.** Recorder bugs are also caught at the
+  relay taps.
+- **On any failure** (sink, redaction, queue overflow, close timeout) it
+  stops. `end` says `complete: false`, or is absent if the sink failed.
+  Replay refuses incomplete files by default.
+- **The relay** logs `recording_stopped` once, with exception type names
+  only, and traffic continues unchanged.
+- **`background=True`** (used by `--record`) redacts and writes on a writer
+  thread behind a bounded queue. A blocked sink makes records drop
+  (recording stops) and never stalls the host. `close()` waits at most
+  `close_timeout`.
+- **This is not category Z.** A recorder failure that changed traffic would
+  be Z. The tests show it does not:
+  - three failure modes × three relay modes;
+  - client bytes, server lines and executions are identical to an
+    unrecorded run.
+
+**Replay semantics.**
+
+- **Sequential.** Recorded client lines are sent in order with their ids.
+  Each request waits for its answer. No line is sent mid-restart or while
+  the relay is stopping, which keeps the recorded order.
+- **The server comes from the recording.**
+  - The listing in effect at each step is the latest one recorded before
+    the next client step.
+  - Each `tools/call` attempt replays the recorded response bytes (id
+    rewritten), garbage, a silent drop, or a closed pipe. Matching uses
+    exact JSON identity after declared defaults, so `2` ≠ `2.0`.
+  - Idle deaths are replayed before the same step. A restart fails if the
+    recording's did.
+- **Counterfactuals** are answers from the `TapeServer`'s model. They cover
+  arguments StateGuard changed, retries, and calls on a server generation
+  the recording never had. Each is marked `io.stateguard/replay:
+  counterfactual` and counted per arm and per "prevented" / "recovered"
+  figure.
+- **Ground truth for execution.**
+  - Fault-injection recordings: from the `fault` records.
+  - Real captures: assumed executed unless refused at the protocol level
+    (conservative for duplicates).
+  - Without faults, the unanswered request a server died on is the latest
+    one; earlier ones are drops (stated convention, tested).
+- **Refused, never guessed:** incomplete recordings, client ids in the
+  relay's reserved prefixes, and reused request ids.
+- **Isolation.** Replay never starts a process or opens a socket (tested by
+  forbidding both).
+
+**Provenance classes:** `synthetic`, `fault_injection`, `local_development`,
+`real_capture`.
+
+- Only `real_capture` is real traffic.
+- The report's first line states the corpus's evidence class, and mixed
+  corpora report as not real.
+- The relay CLI defaults to `local_development`.
+
+**Tests** (VERIFIED):
+
+- `tests/adapters/mcp/test_recording.py`:
+  - 35 key-name and 14 value-pattern cases;
+  - masking, schema vouching, `_meta`, errors and results, listings,
+    `secrets_only`;
+  - id and key aliasing, depth and unparsed lines, audit and labels;
+  - redactor isolation per recording;
+  - recorder sink, redaction, overflow and close-timeout failures, and
+    background ≡ synchronous output;
+  - 25 malformed-recording cases and an unsupported version;
+  - 6 hypothesis properties: no credential under any key in any mode, no
+    credential shape anywhere, determinism and structure, no free text in
+    mask mode, parser fuzz, damaged recordings.
+- `tests/examples/test_relay_recording.py`:
+  - recording changes no traffic, in all three modes;
+  - the 3 × 3 recorder-failure isolation matrix;
+  - the wire order and ids are what crossed;
+  - an UNKNOWN stays unknown, with no fabricated server response;
+  - generations across a restart;
+  - the CLI `--record`, end to end.
+- `tests/examples/test_replay.py`:
+  - corpus provenance, complete, no fake credential;
+  - re-recording gives identical per-stream content;
+  - as-recorded fidelity;
+  - replaying twice is identical (D, E, H × 3 arms);
+  - per-scenario A–H semantics;
+  - no Z and no duplicates;
+  - counterfactual marking;
+  - no process or socket;
+  - refusals for incomplete files, reserved ids and reused ids;
+  - malformed and unsupported files;
+  - the real-capture convention;
+  - provenance reporting;
+  - a damaged-record derive property.
+
+**Security review (T13).**
+
+| Concern | Finding | Status |
+|---|---|---|
+| Secret leakage into recordings | Key-name + shape rules everywhere; mask mode persists no free text; property-tested in both modes. Residual: in `secrets_only` mode, or in a word-like dict key, an unshaped secret under an innocuous name persists. | Mitigated; residual stated. |
+| Raw credential persistence | Server command never written; header settings are flags; `relay_started` audit `server` field is masked like any value. | VERIFIED (test). |
+| Secrets in exception messages | Recorder records exception *type names* only; parser and replay errors name line/seq and reason only. | VERIFIED (tests with a secret in the exception and in the bad line). |
+| Secrets in benchmark output | The report holds counts, session names, answer classes. No message content. | INFERRED (by construction). |
+| Replay contacting external systems | In-process `TapeServer`; no command in recordings. | VERIFIED (Popen/socket forbidden). |
+| Cross-session leakage | One `Redactor` (schemas, aliases) per recording; one `ReplayState` per run. | VERIFIED (test). |
+| Identifier collisions | Ids keyed by canonical JSON (`1` ≠ `"1"`); reserved prefixes and reuse refused; aliases deterministic per recording. Residual: a real client id spelled `[redacted-id-N]`. | VERIFIED / negligible residual. |
+| Malformed records | Parser: strict, `RecordingError` only (fuzzed). `derive`: `RecordingError` only (fuzzed on damaged bodies). | VERIFIED. |
+| Recorder failure affecting live calls | Exceptions: isolated (matrix). **A blocking sink would have stalled the relay** in synchronous mode: found in review, fixed with `background=True` (bounded queue, drop, never block), used by `--record`. Residual: synchronous mode (library default, used by the harness) still waits for its sink. | Fixed for the relay; residual stated. |
+| Pre-existing: the relay's *audit log* is not redacted | `internal_error` carries exception text; `relay_started` carries the server command. Outside T13's recording path. | Not changed; recorded as a risk. |
+
+**Findings outside the recorder** (surfaced by replay; not fixed in T13):
+
+- **Mid-restart refresh race (relay, T12 path).**
+  - **What happens:** a call that arrives while an after-unknown restart is
+    in progress gets its relay `tools/list` refresh written to the dead
+    server's pipe (`tools_list_unsent`). The call is then forwarded
+    unvalidated.
+  - **Reproduced:** 16 of 20 runs. The call was repairable (`limit: "5"`)
+    and failed at the server; it would have been repaired with a confirmed
+    listing.
+  - **Severity:** fails open, so not unsafe. It is a lost improvement, not
+    a regression against raw.
+  - **Fix:** `_refresh_listing` should wait for the link (bounded) before
+    requesting.
+  - **Why replay sees it:** replay avoids the race by never sending
+    mid-restart; the corpus generator does the same.
+
+**What is required before real-world validation:**
+
+- Recordings with provenance `real_capture` from real MCP deployments,
+  captured in shadow mode with `--record`, ideally per server type.
+- A redaction review of a sample by a human: masking is fail-safe, but the
+  vouching rules decide what stays.
+- Ground truth for real calls. Labels do not exist for captured traffic, so
+  correctness can only be judged on the subset someone labels. The rest
+  reports outcome distributions only.
+- Concurrent-traffic replay (replay is sequential today) and timing replay
+  (deadline effects are not reproduced).
+
 ## Measured results
 
 (Populated as tasks land. Synthetic corpora are labelled as such; nothing here
@@ -672,6 +901,65 @@ UNKNOWN / connection closed / replayed / duplicate:
 | auto | 24 / 0 / 0 / 0 / 0 / 8 / 16 / 0 / 0 |
 | auto_ops | 24 / 32 / 24 / 8 / 8 / 8 / 8 / 0 / 0 |
 
+**M11 — T13 record/replay** (`benchmarks/runtime/replay.py` on
+`benchmarks/runtime/tapes/`). **FAULT INJECTION ON A SYNTHETIC WORKLOAD — NOT
+REAL-WORLD EVIDENCE.** VERIFIED by running.
+
+The corpus is 8 sessions (A–H), 68 client requests, 59 `tools/call`, of
+which 58 are labelled (category labels: A 45, B 2, E 5, F 1, G 1, H 1, I 2,
+K 1). Redaction: mask mode, 847 values changed, every recording complete.
+
+| Arm | Failures (of 58) | Hidden | Prevented (on counterfactual) | Recovered (on counterfactual) | Safely escalated | Z | UNKNOWN | Dup. exec | Counterfactual answers | Restarts | Retries | p50 ms |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| raw | 31 | 12 | — | — | — | — | 0 | 0 | 0 | 0 | 0 | 0.18 |
+| shadow | 31 | 12 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1.99 |
+| auto | 11 | 6 | 20 (17) | 0 | 2 | 0 | 2 | 0 | 17 | 0 | 0 | 2.02 |
+| auto_ops | 8 | 3 | 20 (17) | 3 (1) | 3 | 0 | 3 | 0 | 18 | 1 | 1 | 2.03 |
+| as_recorded | 28 | 7 | 0 | 3 (0) | 2 | 0 | 2 | 0 | 0 | 2 | 0 | 1.97 |
+
+How to read it:
+
+- **Prevented rests mostly on counterfactuals.** 17 of auto's 20
+  prevented failures are H (drift) calls whose repaired arguments the
+  recording never saw. The server's answer to them is the `TapeServer`'s
+  model (its own argument check), not an observation. Only 3 are fully
+  observed.
+- **Recovered.**
+  - D: 2 calls ran exactly once on the restarted server, observed (the
+    recording restarted too).
+  - E (as-recorded only): 1 call after an after-unknown restart.
+  - B (auto_ops): 1 retry of a transient error. This is counterfactual:
+    the recording never retried.
+- **UNKNOWN is contained, not resolved.**
+  - C: the in-flight call when the server died before executing.
+  - E: one dropped response, one death after executing. These count as
+    "safely escalated" where raw left them silent or closed.
+  - Each executed once and was never re-sent.
+- **Fidelity:** replaying under the recorded configuration reproduces
+  68/68 client-visible answers and 59/59 StateGuard decisions.
+- **Determinism:** 40/40 (session, arm) runs give identical outcomes when
+  replayed twice. Re-recording the corpus gives identical per-stream
+  content (byte-identical in 3 of 3 trials, apart from the interleaving of
+  concurrent lines).
+- **Z = 0 and duplicate executions = 0** in every arm. Shadow ≡ raw for
+  every outcome.
+- **Unmoved by any arm:** B's tool error after a side effect; G's auth
+  error; H's result that breaks its `outputSchema` (detected, never
+  altered).
+- **Latency** is in-process pipes on one machine, not network latency.
+  Raw's p50 (0.18 ms) is a byte relay; the StateGuard arms add about 1.8 ms
+  p50.
+- **Recording overhead** (auto arm, 189 calls × 3 runs), p50 per call:
+  - none 1.92 ms;
+  - synchronous recorder 3.80 ms (+1.88);
+  - background recorder 4.44 ms (+2.52).
+
+  In one process the background writer still competes for the interpreter.
+  Its benefit is that a stalled sink cannot block traffic, not lower CPU.
+  About 39 KB per session (H, 38 requests, dominates).
+- **Replay overhead:** parse + derive 0.6–0.9 ms per small session, 8 ms
+  for H.
+
 ## Known risks / unresolved categories
 
 - **Unresolved or partly resolved:**
@@ -702,15 +990,35 @@ UNKNOWN / connection closed / replayed / duplicate:
 - **Opposite lexicon is finite.** Pairs outside it and outside the affix rule
   (e.g. `buy`/`sell` as single tokens) fall back to similarity, which is
   usually low for true antonyms. This is measured, not assumed.
-- **Measurement is synthetic throughout.** No real-traffic corpus exists yet
-  (T13).
+- **Measurement is synthetic throughout.** Record/replay infrastructure
+  enables real-traffic measurement but does not itself constitute
+  real-traffic evidence. No `real_capture` recording exists yet.
+- **Replay limits** (T13): sequential only; timing not replayed (deadline
+  effects not reproduced); counterfactual answers are model predictions;
+  decisions that depend on masked values can differ (fidelity is measured,
+  59/59 on this corpus).
+- **Redaction residuals** (T13): `secrets_only` mode, and a credential
+  without a recognised shape stored as a word-like dict key, persist. Mask
+  mode keeps string *lengths*.
+- **Recording overhead** is +1.9 ms (synchronous) / +2.5 ms (background)
+  p50 per call in-process. A synchronous recorder (library default) waits
+  for its sink.
+- **The relay's own audit log is not redacted** (`internal_error` exception
+  text, `relay_started` server command). Pre-existing; only the recording
+  path is redacted.
+- **Mid-restart refresh race** (found by T13 replay; T14): a call arriving
+  during a restart can be forwarded unvalidated. It fails open, so it is
+  not unsafe, but the repair is lost; reproduced in 16 of 20 runs.
 
 ## Next task
 
 Recommended next:
 
-- **T13:** record/replay with redaction. This is the only route to
-  non-synthetic numbers.
+- **T14:** wait for the link before a listing refresh. This is the
+  mid-restart race found by T13. It is small, it is a defect, and replay
+  can verify it (as-recorded fidelity under a race-provoking ordering).
+- **Real capture:** run the relay with
+  `--record --record-provenance real_capture` in shadow mode against real
+  MCP servers, then `replay.py --tapes`. This needs a deployment, not code.
 - **T11:** auth-signal classification + operator callback.
-- **T9:** circuit breaker. It can now build on `recovery.py`'s multi-call
-  sessions.
+- **T9:** circuit breaker.

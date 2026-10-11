@@ -147,6 +147,9 @@ jobs:
       - name: Session recovery workload (synthetic, quick)
         run: python benchmarks/runtime/recovery.py --per-type 1
 
+      - name: Record/replay measurement (fault-injection corpus, quick)
+        run: python benchmarks/runtime/replay.py --no-determinism --overhead-runs 0
+
       # Gates on regressions and on stale known_gap markers only -- a
       # documented gap failing is the corpus doing its job, not CI breaking.
       - name: Calibration corpus

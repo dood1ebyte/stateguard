@@ -8,6 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **MCP traffic recording with redaction** (`stateguard.adapters.mcp.recording`:
+  `Recorder`, `Redactor`, `RedactionPolicy`, `Provenance`, `read_recording`).
+  - **Format.** Versioned JSON lines (`stateguard.mcp.recording` v1). It
+    holds every wire line in all four directions with ids, methods, tools and
+    server generation; relay audit events; injected faults; and ground-truth
+    labels.
+  - **Diagnostics are kept apart.** Timing lives under `diag`, so it is
+    never needed to replay.
+  - **Redaction runs before anything is written.** It is deterministic and
+    rule-based:
+    - credential key names remove the value;
+    - credential value shapes are removed anywhere;
+    - other free-form text is masked shape-preservingly;
+    - only protocol structure and schema-vouched argument values are kept.
+  - **A recorder never raises into its host.** On failure it stops, and the
+    file says it is incomplete.
+  - **The parser raises `RecordingError` only**, and never echoes content.
+- **The stdio relay records** (`--record FILE`, `--record-provenance`,
+  `--record-redaction`). The taps run after a line is written or read, so
+  they cannot change traffic. A failing recorder is logged once
+  (`recording_stopped`) and traffic is unchanged.
+- **Replay benchmark** (`benchmarks/runtime/replay.py`, corpus
+  `benchmarks/runtime/tapes/` from `record_corpus.py`).
+  - It replays recorded sessions A–H through the relay in the raw, shadow,
+    auto, auto_ops and as-recorded arms. The server side is an in-process
+    `TapeServer` built from the recording.
+  - **Fidelity is checked.** Replaying under the recorded configuration
+    must reproduce every recorded answer and StateGuard decision.
+  - **Counterfactuals are marked and counted.** These are answers to
+    traffic the recording never saw.
+  - **The report says when the corpus is not real traffic.** The committed
+    corpus is fault injection.
 - **Session recovery workload** (`benchmarks/runtime/recovery.py`):
   deterministic multi-call sessions with a server failure injected, run in
   raw, shadow, auto, restart idle-only and restart after-unknown arms.

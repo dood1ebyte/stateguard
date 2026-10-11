@@ -264,6 +264,23 @@ rely on being told that a schema changed. Calls that pass unchanged cost no
 extra round trip. If no fresh listing arrives, the call is forwarded
 unchanged. `--no-listing-refresh` turns this off.
 
+`--record FILE` (off by default) writes a redacted, versioned JSON-lines
+recording of every line in all four directions, plus the relay's decisions.
+`benchmarks/runtime/replay.py` replays it against an in-process server built
+from the recording, never against the original.
+
+- **Redaction runs before anything is written.** Credentials are removed by
+  key name and by value shape. Other free-form text is masked (letters to
+  `a`, digits to `1`). The server command line is never written.
+- **Recording only observes.** It records a line after it was written or
+  read, so it cannot add, drop or reorder anything. A recorder that fails
+  stops and is logged once as `recording_stopped`; traffic carries on
+  unchanged.
+- **Provenance is part of the file.** `--record-provenance` defaults to
+  `local_development`. Claim `real_capture` only for real use.
+  `--record-redaction secrets_only` keeps free-form text and is meant for
+  traffic known to hold no personal data.
+
 `--restart N` (off by default) restarts a server process that exits, at most
 N times.
 

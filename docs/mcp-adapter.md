@@ -675,9 +675,56 @@ It works with both protocol generations:
 It is tested end to end against the MCP Python SDK client and server. See
 [`examples/mcp/README.md`](../examples/mcp/README.md#on-the-wire-the-stdio-relay).
 
+`--record FILE` writes a redacted, versioned recording of everything that
+crosses the relay, for replay measurement (see
+[Recording traffic](#recording-traffic)).
+
 It is an example of where StateGuard sits on the wire, not a production
-gateway. It has no reconnection, no timeouts beyond the listing wait, and
-serves one server per relay.
+gateway. It serves one server process at a time.
+
+### Recording traffic
+
+`stateguard.adapters.mcp.recording` holds the recording format, the
+redactor, a `Recorder` and the parser:
+
+```python
+from stateguard.adapters.mcp import Provenance, Recorder, read_recording
+
+recorder = Recorder(open("session.jsonl", "w"), provenance=Provenance.LOCAL_DEVELOPMENT,
+                    session="dev-1")
+recorder.message("client_to_relay", line)   # every wire line, any direction
+recorder.audit(event)                        # StateGuard decisions
+recorder.close()                             # writes "end"; complete only if nothing failed
+
+recording = read_recording("session.jsonl")  # raises RecordingError, never anything else
+```
+
+- **Format.** `stateguard.mcp.recording` version 1: JSON lines, keys sorted.
+  - It starts with a `header` (provenance, session, redaction policy, host
+    settings) and ends with `end`.
+  - In between: `message`, `audit`, `fault` and `label` records, in a
+    strictly increasing `seq`.
+  - Timing and line lengths live under `diag` and are never needed to
+    replay. Timestamps are written only with `deterministic=False`.
+  - Unknown versions are refused (`UnsupportedRecordingVersionError`).
+- **Redaction.** It runs before anything is written. It is deterministic and
+  rule-based, not a detector.
+  - Credential key names remove the whole value at any depth: in
+    arguments, `_meta`, results and errors.
+  - Credential value shapes are removed wherever they appear: bearer and
+    basic schemes, JWTs, cloud and VCS keys, PEM private keys, URL
+    userinfo, secret query parameters and `password=` assignments.
+  - In the default `mask` mode, every other free-form string is masked
+    shape-preservingly.
+  - Values are kept verbatim only for protocol structure, and for arguments
+    the tool's own schema vouches for (an enum member or a near miss of one,
+    a numeric string in a numeric field).
+- **Failure.** A recorder never raises into its host. If it fails, it stops,
+  and the file is marked incomplete; replay refuses incomplete files by
+  default.
+- **Provenance.** `synthetic`, `fault_injection`, `local_development` or
+  `real_capture`. Only `real_capture` is real traffic, and the replay report
+  says so on its first line.
 
 ---
 

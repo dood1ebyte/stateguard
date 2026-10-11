@@ -786,3 +786,113 @@ def test_property_parser_on_damaged_recordings(
     except RecordingError:
         return
     assert recording.header["format"] == FORMAT
+
+
+def test_json_sent_as_a_string_is_redacted_as_structure() -> None:
+    redactor = Redactor()
+    redactor.learn_tools(LISTING["result"]["tools"])
+    out = redactor.arguments_for(
+        "list_issues", '{"state": "Closed", "q": "Jane Doe", "token": "abc123"}'
+    )
+    assert isinstance(out, str)
+    assert json.loads(out) == {"state": "Closed", "q": "Aaaa Aaa", "token": REDACTED}
+    # A string that is itself a credential is never parsed, only replaced.
+    assert redactor.value('{"a": "' + SECRETS["github"] + '"}') == REDACTED
+
+
+@pytest.mark.parametrize(
+    "key,kept",
+    [
+        ("channelId", True),
+        ("per_page", True),
+        ("v2_api", True),
+        ("acct_12345", False),  # four digits: could be an opaque id
+        ("a8f93c0d7e1b", False),
+        ("x" * 41, False),
+        ("user name", False),
+    ],
+)
+def test_undeclared_keys_kept_only_when_word_like(key: str, kept: bool) -> None:
+    out = Redactor().value({key: 1})
+    assert (key in out) is kept
+
+
+# ---------------------------------------------------------------------------
+# Background recording
+# ---------------------------------------------------------------------------
+
+
+def _feed(recorder: Recorder) -> None:
+    recorder.message(Direction.SERVER_TO_RELAY, _line(LISTING))
+    for n in range(50):
+        recorder.message(
+            Direction.CLIENT_TO_RELAY,
+            _line(
+                {
+                    "jsonrpc": "2.0",
+                    "id": n,
+                    "method": "tools/call",
+                    "params": {"name": "list_issues", "arguments": {"state": "open", "q": f"n{n}"}},
+                }
+            ),
+        )
+        recorder.audit({"event": "call", "id": n, "action": "forward"})
+
+
+def test_background_recording_equals_synchronous_recording() -> None:
+    sync, sync_sink = _recorder()
+    _feed(sync)
+    sync.close()
+    background, background_sink = _recorder(background=True)
+    _feed(background)
+    background.close()
+    assert background.healthy
+    assert background_sink.getvalue() == sync_sink.getvalue()
+
+
+class _BlockingSink(io.StringIO):
+    """A sink that blocks (a full pipe, a stalled disk) until released."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = __import__("threading").Event()
+        self.writes = 0
+
+    def write(self, text: str) -> int:
+        self.writes += 1
+        if self.writes > 1:  # the header goes through; then the sink stalls
+            self.release.wait(10)
+        return super().write(text)
+
+
+def test_a_blocked_sink_never_blocks_the_host() -> None:
+    import time
+
+    sink = _BlockingSink()
+    recorder = Recorder(
+        sink,
+        provenance=Provenance.SYNTHETIC,
+        session="s",
+        background=True,
+        queue_size=8,
+        close_timeout=0.2,
+    )
+    started = time.monotonic()
+    for _ in range(100):
+        recorder.message(Direction.CLIENT_TO_RELAY, b'{"jsonrpc":"2.0","method":"x"}')
+    recorder.close()
+    elapsed = time.monotonic() - started
+    sink.release.set()
+    assert elapsed < 2.0  # never waited for the sink beyond the close timeout
+    assert recorder.stopped and "RecorderOverflowError" in recorder.failure_types
+    assert "RecorderCloseTimeoutError" in recorder.failure_types
+
+
+def test_background_failures_are_reported_and_never_raised() -> None:
+    sink = _BrokenSink(fail_after=3)
+    recorder = Recorder(sink, provenance=Provenance.SYNTHETIC, session="s", background=True)
+    for _ in range(10):
+        recorder.message(Direction.CLIENT_TO_RELAY, b'{"jsonrpc":"2.0","method":"x"}')
+    recorder.close()
+    assert recorder.stopped and recorder.failure_types == ["OSError"]
+    assert not parse_recording(sink.getvalue().splitlines()).complete
