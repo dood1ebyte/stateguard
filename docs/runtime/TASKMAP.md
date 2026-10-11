@@ -56,11 +56,12 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Schema/contract fingerprints | COMPLETE | `jsonschema/identity.py` | n/a | |
 | Contract diff (sound COMPATIBLE) | COMPLETE | `jsonschema/diff.py`; mutation properties | n/a | |
 | Stale-schema prevention (library) | COMPLETE | registry replaces unconditionally; cache keys on content | n/a | Correct *given* a fresh listing. |
-| Stale-listing detection (relay, protocol 2026-07-28) | **UNSAFE** | SDK 2.3.0 `mcp/server/mcpserver/context.py:136`, `mcp/shared/subscriptions.py:84`; relay never opens `subscriptions/listen` | auto | **VERIFIED from spec source**: list-changed rides only on listen streams. If the client does not subscribe, the relay validates against a stale listing indefinitely. |
+| Stale-listing detection (relay, protocol 2026-07-28) | COMPLETE (T3, `3be1e3e`) — was **UNSAFE** | SDK 2.3.0 `mcp/server/mcpserver/context.py:136`, `mcp/shared/subscriptions.py:84`; relay never opens `subscriptions/listen` | auto | **VERIFIED from spec source**: list-changed rides only on listen streams. If the client does not subscribe, the relay validates against a stale listing indefinitely. |
 | A: opposite-meaning rename guard | COMPLETE (T1, `dc67d52`) | was: 102/132 single-word opposite renames FORWARDED. Now 0/152 (probe), 0/118 (calibration family) | both | VERIFIED. `fuzzy.opposed_names` → contradiction → TrustPolicy AMBIGUOUS. |
 | JSON Schema 2020-12 coverage | PARTIAL | probe: refused `allOf` (even single `$ref`), `uniqueItems`, `multipleOf`, `min/maxProperties`, `dependentRequired`, `contains`, `contentMediaType`, `$id`/`$anchor`, `true` subschema, unknown keywords | n/a | VERIFIED. Refusal makes the tool unvalidated, not broken, *if the host fails open*. |
-| Relay fail-open on unreadable schema | **UNSAFE** | `stdio_proxy.py` default `--unreadable refuse` | auto | VERIFIED. Valid calls to valid tools are blocked. |
-| Relay fail-open on internal error | **UNSAFE** | `stdio_proxy.py:_on_call`: `ForwardingInvariantError` in auto → `-32603`; any other exception escapes the pump thread | auto | INFERRED (read). A StateGuard bug becomes an outage. |
+| Relay fail-open on unreadable schema | COMPLETE (T2, `384fe2a`) — was **UNSAFE** | default now `--unreadable forward`; `test_stdio_relay_protocol.py` | both | VERIFIED. |
+| Relay fail-open on internal error | COMPLETE (T2, `384fe2a`) — was **UNSAFE** | `test_relay_fail_open.py`: exception / RecursionError / gate failure / sync failure / client-message failure → forwarded once, unmodified, logged `category: "Z"` | both | VERIFIED. Single-write structure: no StateGuard-made double send. |
+| Kill switch | COMPLETE (T2) | `--passthrough`; `test_passthrough_is_a_byte_relay` | — | Also the raw-baseline arm. |
 | Protocol-aware refusal (`resultType`) | COMPLETE | `jsonrpc.tool_error_response`; SDK e2e test | auto | |
 | Stdio relay | PARTIAL | `examples/mcp/stdio_proxy.py`; SDK e2e + scripted tests | both | Example only; no reconnect, no timeouts. |
 | Audit log | PARTIAL | relay JSON lines, value-free | both | No invocation ledger / execution state. |
@@ -99,9 +100,9 @@ list-changed delivery at 2026-07-28.
 | # | Task | Priority class | Status | Depends on |
 |---|---|---|---|---|
 | T1 | Opposite-meaning rename guard (extend contradiction evidence) + calibration family | 1 unsafe defect | DONE `dc67d52` | — |
-| T2 | Relay call path fails open: unexpected error / gate failure → raw passthrough + Z record; `--unreadable` default `forward` | 1 unsafe defect | TODO | — |
-| T3 | Stale-listing safety at 2026-07-28: never act (repair/refuse/escalate) on a listing not known fresh — re-list then re-decide | 2 spec compat | TODO | T2 |
-| T4 | Measurement vertical slice: seeded workload × fault injectors × arms (raw, naive retry, shadow, auto) → per-category report incl. Z | 3 measurement | TODO | T1–T3 |
+| T2 | Relay call path fails open: unexpected error / gate failure → raw passthrough + Z record; `--unreadable` default `forward`; `--passthrough` kill switch | 1 unsafe defect | DONE `384fe2a` | — |
+| T3 | Stale-listing safety at 2026-07-28: never act (repair/refuse/escalate) on a listing not known fresh — re-list then re-decide | 2 spec compat | DONE `3be1e3e` | T2 |
+| T4 | Measurement vertical slice: seeded workload × fault injectors × arms (raw, naive retry, shadow, auto) → per-category report incl. Z | 3 measurement | IN PROGRESS | T1–T3 |
 | T5 | JSON Schema 2020-12 coverage: annotation keywords, simple assertions, single-branch `allOf`, `true` subschema; differential-verified | 2/4 | TODO | T4 (to measure) |
 | T6 | Execution state + invocation ledger (request id → SENT / RESPONDED / FAILED_BEFORE_SEND / UNKNOWN) | 5 | TODO | T4 |
 | T7 | Effect model: operator-declared only; annotations recorded as untrusted hints | 5 | TODO | T6 |
@@ -133,6 +134,38 @@ safety boundary / Z modes / Shadow-first / Auto conditions / evidence).
 - **Evidence:** M1 below. No Auto *promotion* is involved: the rule only
   withholds.
 
+### P-T2 Relay fail-open (T2)
+
+- **Ownable:** yes. It is StateGuard's own failure handling.
+- **Deterministic:** yes.
+- **State:** none.
+- **Safety boundary:** fallback = the raw baseline (forward the client's bytes
+  unmodified). Exactly one write per call (`_decide` computes, `_on_call`
+  writes), so the fallback can never double-send.
+- **Z modes it removes:** outage from a StateGuard bug; blocked valid calls
+  to tools with unreadable schemas.
+- **Z mode it accepts:** a call StateGuard *would* have refused, when
+  StateGuard is broken, is forwarded; the server still validates it.
+- **Shadow-first / Auto:** active in both; it only removes StateGuard
+  actions.
+- **Evidence:** `tests/examples/test_relay_fail_open.py` (7 tests).
+
+### P-T3 Refresh-before-intervening (T3)
+
+- **Ownable:** yes. The relay owns its own `tools/list` requests, which are
+  read-only on the server.
+- **Deterministic:** yes, by epoch ordering; the only timing is the
+  `LISTING_WAIT_SECONDS` bound, whose expiry fails open.
+- **State:** listing epochs (relay-local).
+- **Safety boundary:** it never intervenes on an unconfirmed listing. On
+  timeout or error it forwards unchanged.
+- **Z modes:** one extra `tools/list` round trip per intervention (latency
+  and server load). It blocks the client pump while waiting (bounded). A
+  server that rate-limits `tools/list` turns interventions into
+  pass-throughs (a missed repair, not a wrong one).
+- **Shadow-first / Auto:** active in both (it keeps shadow records honest).
+- **Evidence:** `tests/examples/test_relay_staleness.py` (14 tests); M3.
+
 ## Measured results
 
 (Populated as tasks land. Synthetic corpora are labelled as such; nothing here
@@ -155,6 +188,21 @@ that are also similar enough to be proposed. The hold-out suggests a residual
 in the low single-digit percent of such pairs. This has not been measured on
 real traffic.
 
+**M2 — relay fail-open (Category Z), T2. Fault injection into StateGuard,
+VERIFIED.** 5 injected StateGuard failures (exception, `RecursionError`,
+forwarding-gate failure, listing-sync failure, client-message failure): before
+T2, gate failure → client got `-32603` (INFERRED from code); any other
+exception in the call path → relay thread died (INFERRED). After T2: 5/5
+forwarded once, unmodified; relay alive for the next call; each logged as Z.
+
+**M3 — stale listing (Category B / Z), T3. Synthetic scenarios, VERIFIED.**
+
+| Scenario (schema changed, no notification) | Without refresh | With refresh |
+|---|---|---|
+| param renamed / required added / enum extended / type widened / bound loosened | 5/5 valid calls blocked or rewritten (incorrect refusal/repair, Z) | 5/5 forwarded unchanged, executed once |
+| Extra round trips for calls that pass unchanged | — | 0 (measured over 5 calls) |
+| Extra round trips per intervention | 0 | 1 `tools/list` (+ pages) |
+
 ## Known risks / unresolved categories
 
 - **Unresolved:** C (detect only), D, E, F, G, H, I, J, K — no runtime
@@ -165,4 +213,4 @@ real traffic.
 
 ## Next task
 
-T2: the relay call path fails open.
+T4: the measurement vertical slice.
