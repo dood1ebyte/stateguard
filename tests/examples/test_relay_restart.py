@@ -6,6 +6,27 @@ Every test checks the servers' own execution ledgers (``Rig.all_executed``,
 the failure a restart can cause -- a request sent twice, or run by two
 processes -- only shows there.
 
+Scenario map (the T12 fault-injection list):
+
+  A  idle death -> restart -> next call succeeds
+       test_idle_death_restarts_and_the_next_call_succeeds
+  B  death before dispatch -> safe restart -> executed exactly once
+       test_a_request_arriving_during_the_restart_waits_and_is_sent_once
+  C  death after dispatch -> UNKNOWN, no replay
+       test_death_after_dispatch_is_unknown_and_blocks_restart_by_default,
+       test_after_unknown_policy_restarts_but_never_replays,
+       test_a_request_written_to_a_server_that_just_died_is_unknown_not_lost
+  D  several calls across a failure keep their own states, no replay
+       test_several_requests_in_flight_are_all_unknown_and_none_replayed,
+       test_each_call_keeps_its_own_state_across_a_restart
+  E  restart keeps failing -> bounded, observable, clean stop
+       test_repeated_restart_failure_is_bounded_and_observable,
+       test_a_server_that_dies_on_start_uses_up_the_budget_then_stops
+  F  listing changed after restart -> registry refreshed, stale never used
+       test_a_changed_listing_after_restart_replaces_the_old_registry,
+       test_a_removed_tool_is_not_validated_against_its_old_schema,
+       test_if_the_new_listing_never_comes_nothing_is_checked_against_the_old_one
+
 Invariants:
 * a request sent before the server died is UNKNOWN, answered so, and never
   sent again -- not to the restarted server either;
@@ -385,6 +406,143 @@ def test_a_restarted_server_on_another_protocol_version_is_refused() -> None:
         rig.close()
 
 
+def test_each_call_keeps_its_own_state_across_a_restart() -> None:
+    """
+    D: one call completed before the death, one in flight at it, one arriving
+    during the restart. Their states are COMPLETED / UNKNOWN / COMPLETED-on-
+    the-new-server, and the restart does not upgrade the UNKNOWN one.
+    """
+    started = threading.Event()
+
+    def slow_factory() -> ScriptedServer:
+        started.set()
+        time.sleep(0.2)
+        return ScriptedServer([_tool()])
+
+    plan = Plan({1: ServerAction.HANG_BEFORE_EXECUTE})
+    rig = Rig(
+        ScriptedServer([_tool()], faults=plan),
+        RelayMode.AUTO,
+        server_factory=slow_factory,
+        max_restarts=1,
+        restart_policy="after-unknown",
+    )
+    try:
+        _discover(rig)
+        done = rig.call("search", {"q": "1"})
+        done_id = rig.sent_ids[-1]
+        rig.send(
+            {
+                "jsonrpc": "2.0",
+                "id": "inflight",
+                "method": "tools/call",
+                "params": {"name": "search", "arguments": {"q": "2"}, "_meta": META},
+            }
+        )
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and "inflight" not in _call_ids_received(rig):
+            time.sleep(0.01)
+        rig.kill_server()
+        assert started.wait(2)
+        late = rig.call("search", {"q": "3"}, timeout=3.0)  # arrives mid-restart
+        late_id = rig.sent_ids[-1]
+        # call() drains the response queue while it waits; read the in-flight
+        # request's answer from everything the client received.
+        inflight = next(
+            m for m in rig.client_received if isinstance(m, dict) and m.get("id") == "inflight"
+        )
+
+        assert _ok(done) and _ok(late) and _state(inflight) == "unknown"
+        ledger = rig.relay.ledger
+        assert ledger.get(done_id).state is ExecutionState.COMPLETED
+        assert ledger.get("inflight").state is ExecutionState.UNKNOWN
+        assert ledger.get(late_id).state is ExecutionState.COMPLETED
+        assert [c.message["id"] for c in rig.servers[0].executed] == [done_id]
+        assert [c.message["id"] for c in rig.servers[1].executed] == [late_id]
+        _no_request_sent_twice(rig)
+    finally:
+        rig.close()
+
+
+def test_a_removed_tool_is_not_validated_against_its_old_schema() -> None:
+    """F: the new server dropped a tool; a call to it goes to the server unvalidated."""
+    other = ServerTool(
+        {
+            "name": "other",
+            "inputSchema": {"type": "object", "properties": {"n": {"type": "integer"}}},
+        }
+    )
+    rig = _rig(tools_after=[other])
+    try:
+        _discover(rig)
+        rig.kill_server()
+        _wait_event(rig, "server_restarted")
+        _wait_event(rig, "tools_synced", count=2)
+        assert rig.relay.registry.find("search") is None
+        response = rig.call("search", {"qq": "x"})  # drift StateGuard would have repaired
+        assert response is not None and response["result"]["isError"] is True  # server: unknown
+        forwarded = [json.loads(x) for x in rig.servers[1].received if b'"tools/call"' in x][-1]
+        assert forwarded["params"]["arguments"] == {"qq": "x"}  # not repaired to the old shape
+        assert _events(rig, "call")[-1]["action"] == "unvalidated"
+    finally:
+        rig.close()
+
+
+def test_if_the_new_listing_never_comes_nothing_is_checked_against_the_old_one() -> None:
+    """F: a restarted server that fails tools/list leaves an empty registry, not a stale one."""
+
+    class NoListing(ScriptedServer):
+        def _handle(self, line: bytes, writer: Any) -> bool:
+            message = json.loads(line)
+            if message.get("method") == "tools/list":
+                self._write(
+                    writer,
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": message["id"],
+                            "error": {"code": -1, "message": "x"},
+                        }
+                    ).encode(),
+                )
+                return True
+            return super()._handle(line, writer)
+
+    rig = _rig(factory=lambda: NoListing([_tool()]))
+    try:
+        _discover(rig)
+        rig.kill_server()
+        _wait_event(rig, "server_restarted")
+        _wait_event(rig, "tools_list_failed")
+        assert rig.relay.registry.tools() == []
+        rig.call("search", {"qq": "x"})
+        forwarded = [json.loads(x) for x in rig.servers[1].received if b'"tools/call"' in x][-1]
+        assert forwarded["params"]["arguments"] == {"qq": "x"}
+    finally:
+        rig.close()
+
+
+def test_a_stateguard_failure_during_restart_is_category_z_and_fails_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rig = _rig()
+    try:
+        _discover(rig)
+
+        def explode(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("injected registry failure")
+
+        monkeypatch.setattr(rig.relay.registry, "clear", explode)
+        rig.kill_server()
+        _wait_event(rig, "server_restarted")
+        z = [e for e in rig.audit if e.get("category") == "Z"]
+        assert z and "injected registry failure" in z[0]["error"]
+        assert _ok(rig.call("search", {"q": "x"}))  # still serving
+        _no_request_sent_twice(rig)
+    finally:
+        rig.close()
+
+
 def test_a_request_written_to_a_server_that_just_died_is_unknown_not_lost() -> None:
     """
     The relay learns of a death from EOF, so a request can be written in the
@@ -449,7 +607,7 @@ STEPS = st.lists(
 
 
 @settings(
-    max_examples=25,
+    max_examples=40,
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow],
 )
@@ -457,18 +615,38 @@ STEPS = st.lists(
     steps=STEPS,
     policy=st.sampled_from(["idle-only", "after-unknown"]),
     max_restarts=st.integers(0, 2),
-    factory_fails=st.booleans(),
+    factory_mode=st.sampled_from(["ok", "fails", "dies_on_start", "changed_listing"]),
 )
-def test_property_no_replay_no_duplicate_no_lost_request(
-    steps: list[str], policy: str, max_restarts: int, factory_fails: bool
+def test_property_restart_invariants(
+    steps: list[str], policy: str, max_restarts: int, factory_mode: str
 ) -> None:
+    """
+    Over random sequences of calls, in-flight deaths, idle deaths and restart
+    outcomes:
+
+    * no request is sent twice, to any server (no replay, no duplicate send);
+    * nothing executes twice;
+    * every request answered "unknown" was written, is still UNKNOWN at the
+      end -- after any later restart and any later success -- and was never
+      answered "success" (a reconnect implies nothing about it);
+    * every request answered "not sent" was never received by any server;
+    * restarts never exceed the budget, and a server that keeps dying on
+      start ends with the relay stopped, not looping;
+    * after a restart the registry is either empty (no listing yet) or the
+      new server's listing -- never the dead server's.
+    """
     plan = Plan()
     calls_made = 0
 
     def factory() -> ScriptedServer:
-        if factory_fails:
+        if factory_mode == "fails":
             raise OSError("cannot start")
-        return ScriptedServer([_tool()], faults=plan)
+        server = ScriptedServer(
+            [_tool("query" if factory_mode == "changed_listing" else "q")], faults=plan
+        )
+        if factory_mode == "dies_on_start":
+            threading.Timer(0.02, server.kill).start()
+        return server
 
     rig = Rig(
         ScriptedServer([_tool()], faults=plan),
@@ -501,31 +679,54 @@ def test_property_no_replay_no_duplicate_no_lost_request(
             calls_made = sum(
                 1 for line in rig.all_received if json.loads(line).get("method") == "tools/call"
             )
+        time.sleep(0.1)
 
         received = _call_ids_received(rig)
-        # no request is ever sent twice, to any server
-        assert all(n == 1 for n in received.values()), received
-        # nothing executes twice
+        assert all(n == 1 for n in received.values()), received  # no replay, no duplicate send
         executed_ids = Counter(c.message["id"] for c in rig.all_executed)
-        assert all(n == 1 for n in executed_ids.values())
-        # no request is lost: every call got exactly one answer
+        assert all(n == 1 for n in executed_ids.values())  # nothing executes twice
         for identifier, answer in answers.items():
-            assert answer is not None, (identifier, rig.audit)
+            assert answer is not None, (identifier, rig.audit)  # no request is lost
             state = _state(answer)
+            client_answers = [
+                m
+                for m in rig.client_received
+                if isinstance(m, dict) and m.get("id") == identifier and "method" not in m
+            ]
+            assert len(client_answers) == 1  # one answer per request, never a second
+            inv = rig.relay.ledger.get(identifier)
             if state == "not_sent":
-                assert identifier not in received  # truly never sent
+                assert identifier not in received
+                assert inv.state is ExecutionState.ANSWERED_LOCALLY
             if state == "unknown":
-                # Only what the relay wrote can be unknown. (A server that died
-                # before reading it is still unknown: the relay cannot tell.)
-                inv = rig.relay.ledger.get(identifier)
+                # UNKNOWN stays UNKNOWN: nothing later -- a restart, a success
+                # on the new server -- turns it into a completion.
                 assert inv.state is ExecutionState.UNKNOWN
                 assert ExecutionState.SENT in inv.history
-        # restarts are bounded
-        assert len(_events(rig, "server_restarted")) <= max_restarts
+                assert ExecutionState.COMPLETED not in inv.history
+        # bounded restarts; a server that keeps dying ends with the relay stopped
+        restarted = _events(rig, "server_restarted")
+        assert len(restarted) <= max_restarts
+        if factory_mode in ("fails", "dies_on_start") and _events(rig, "server_lost"):
+            assert rig.relay._stopped.wait(5.0) or not _events(rig, "restart_exhausted")
         # never restarted with a request in flight under idle-only
         if policy == "idle-only":
-            for lost in _events(rig, "server_lost"):
-                if lost["in_flight_unknown"]:
-                    assert lost["restarts_used"] == len(_events(rig, "server_restarted"))
+            assert all(
+                not lost["in_flight_unknown"]
+                or not _events(rig, "server_restarted")
+                or lost["restarts_used"] == len(restarted)
+                for lost in _events(rig, "server_lost")
+            )
+        # post-restart registry: empty or the live server's listing, never the dead one's
+        if restarted and not rig.relay._stopped.is_set():
+            names = {
+                tuple(sorted(t.input_schema["properties"]))
+                for t in rig.relay.registry.tools()
+                if t.input_schema is not None
+            }
+            live = {
+                tuple(sorted(t.definition["inputSchema"]["properties"])) for t in rig.server.tools
+            }
+            assert names in (set(), live), (names, live)
     finally:
         rig.close()

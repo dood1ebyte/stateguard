@@ -888,7 +888,15 @@ class StdioRelay:
             old.close()
         self._server_out = server_out
         self.generation += 1
-        # The old listing describes a process that no longer exists.
+        # The old listing describes a process that no longer exists: forget it,
+        # so nothing is validated -- let alone repaired -- against it. Until
+        # the new process lists its tools, calls wait for that listing, and if
+        # it never comes they are forwarded unvalidated (logged), never checked
+        # against the dead process's schemas.
+        try:
+            self.registry.clear()
+        except Exception as exc:  # noqa: BLE001 -- fail open
+            self._internal_error("registry reset", exc)
         self._listing_stale = True
         self._listing_ready.clear()
         self._listed = False
