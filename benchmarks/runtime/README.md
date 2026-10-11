@@ -44,3 +44,42 @@ real servers, plus 37 hand-labelled calls and generated faults. The numbers
 describe that corpus; they are not production failure rates. The report
 prints its provenance, its size, the injected-fault distribution and its
 limitations every time.
+
+## Session recovery
+
+```bash
+python benchmarks/runtime/recovery.py                 # 5 sessions per kind
+python benchmarks/runtime/recovery.py --per-type 1    # quick
+```
+
+`measure.py` follows the one call that meets a fault. A server death also
+decides the fate of every call *after* it, so `recovery.py` runs multi-call
+sessions instead. It has nine session kinds:
+
+- control (no fault);
+- idle death;
+- death after dispatch;
+- death before execute;
+- a request racing the restart;
+- restart that always fails;
+- restart that dies on start;
+- a listing that changed after the restart;
+- two requests in flight.
+
+Each kind runs in five arms: raw, shadow, auto with restart off, restart
+idle-only, and restart after-unknown.
+
+Every invocation gets exactly one outcome. Those outcomes are succeeded,
+recovered (ran once on a restarted server), unknown, not sent, connection
+closed, silent, and other error.
+
+These are counted separately and never folded into those outcomes:
+
+- replays;
+- duplicate executions;
+- StateGuard-induced failures (category Z);
+- server deaths;
+- reconnects attempted, succeeded and failed.
+
+A fall in failures therefore shows whether it was recovered, contained
+(unknown or not sent), made visible (connection closed), or merely hidden.

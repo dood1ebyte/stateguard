@@ -160,8 +160,14 @@ class Result:
     relay_retries: int = 0
     #: Result-integrity findings the relay logged (category H).
     result_findings: int = 0
-    #: Server processes the relay restarted.
+    #: Server processes the relay restarted (reconnects that produced a server).
     restarts: int = 0
+    #: Server processes that died during the invocation (transport failures).
+    transport_failures: int = 0
+    #: Restart attempts, successful or not.
+    reconnect_attempted: int = 0
+    #: Restart attempts that failed (factory error, or a refused re-initialize).
+    reconnect_failed: int = 0
     #: tools/call messages received by a server beyond the first per request
     #: id, across every server process: a replay.
     replayed: int = 0
@@ -358,6 +364,13 @@ def _judge(
             1 for e in rig.audit if e.get("event") == "result_check" and e.get("category") == "H"
         ),
         restarts=sum(1 for e in rig.audit if e.get("event") == "server_restarted"),
+        transport_failures=sum(1 for server in rig.servers if server.dead),
+        reconnect_attempted=sum(
+            1 for e in rig.audit if e.get("event") in ("server_restarted", "restart_failed")
+        ),
+        reconnect_failed=sum(
+            1 for e in rig.audit if e.get("event") in ("restart_failed", "reinit_failed")
+        ),
         replayed=sum(count - 1 for count in per_id.values()),
     )
 
@@ -487,6 +500,9 @@ def summarise(report: Report) -> dict[str, Any]:
         # closed connection -- or replayed, which must stay zero.
         row["transport"] = {
             arm: {
+                "transport_failures": sum(by[(s, arm)].transport_failures for s in ids),
+                "reconnect_attempted": sum(by[(s, arm)].reconnect_attempted for s in ids),
+                "reconnect_failed": sum(by[(s, arm)].reconnect_failed for s in ids),
                 "restarts": sum(by[(s, arm)].restarts for s in ids),
                 "recovered_by_restart": sum(
                     1
@@ -630,13 +646,17 @@ def render(summary: dict[str, Any]) -> str:
         "hidden failures: " + ", ".join(f"{arm} {n}" for arm, n in t["hidden"].items()),
         "result-integrity findings logged (detection only, results never altered): "
         + ", ".join(f"{arm} {n}" for arm, n in t["result_findings"].items()),
-        "transport (E, I) -- restarts / recovered by restart / unknown / not sent / "
-        "connection closed / silent / replayed / duplicate executions:",
+        "transport (E, I) -- deaths / reconnect attempted / reconnect failed / restarts / "
+        "recovered by restart / unknown / not sent / connection closed / silent / replayed / "
+        "duplicate executions:",
         *[
             f"  {cat} {arm:<8} "
             + " / ".join(
                 str(summary["categories"][cat]["transport"][arm][k])
                 for k in (
+                    "transport_failures",
+                    "reconnect_attempted",
+                    "reconnect_failed",
                     "restarts",
                     "recovered_by_restart",
                     "unknown",

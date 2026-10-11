@@ -292,6 +292,7 @@ class ScriptedServer:
         action = self.faults(call)
 
         if action is ServerAction.CLOSE_BEFORE_EXECUTE:
+            self.dead = True
             return False
         if action is ServerAction.HANG_BEFORE_EXECUTE:
             return True
@@ -319,6 +320,7 @@ class ScriptedServer:
 
         self.executed.append(call)  # the side effect happens here
         if action is ServerAction.CLOSE_AFTER_EXECUTE:
+            self.dead = True
             return False
         if action is ServerAction.DROP_RESPONSE:
             return True

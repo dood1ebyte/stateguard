@@ -64,7 +64,7 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Kill switch | COMPLETE (T2) | `--passthrough`; `test_passthrough_is_a_byte_relay` | — | Also the raw-baseline arm. |
 | Protocol-aware refusal (`resultType`) | COMPLETE | `jsonrpc.tool_error_response`; SDK e2e test | auto | |
 | Stdio relay | PARTIAL | `examples/mcp/stdio_proxy.py`; SDK e2e + scripted + in-process rig tests | both | Example, not a gateway: one server per relay. |
-| Safe server restart (E) | COMPLETE for idle death (T12) | `test_relay_restart.py` (15 incl. 25-example property); M9: 8/8 idle deaths recovered, 0 replays | **opt-in** (`--restart N`), Auto only; shadow never restarts | Default policy idle-only: no restart after a death with requests in flight. |
+| Safe server restart (E) | COMPLETE (T12, `9d1f401`, `24011f5`) | `test_relay_restart.py` (19, incl. 40-example property), real-subprocess e2e, `recovery.py` (M10) | **opt-in** (`--restart N`), Auto only; shadow never restarts | Default policy idle-only. Registry cleared on restart. 0 replays / 0 duplicate executions in every measurement. |
 | Audit log | PARTIAL | relay JSON lines, value-free; `category` on Z / E / I / J events | both | Not exported as structured telemetry. |
 | Telemetry hooks | PARTIAL | `telemetry/hooks.py` `ITelemetryHook` (repair events only) | n/a | No runtime-event hooks. |
 | Effect classification | COMPLETE (T7, `ad6f041`) | `adapters/mcp/effects.py`; `test_effects.py` exhaustive (1,344 cases) | n/a | Operator-declared only; default UNKNOWN; annotations = recorded hints, never decide (VERIFIED incl. contradicting hints). |
@@ -114,7 +114,7 @@ list-changed delivery at 2026-07-28.
 | T9 | Circuit breaker per (server, tool), Shadow-first | 5 | TODO | T6 |
 | T10 | Result integrity: `outputSchema` / `structuredContent` validation, detection only | 4 | DONE | T4 |
 | T11 | Auth-signal classification + operator callback | 4 | TODO | T6 |
-| T12 | Safe server restart: idle death only by default; in-flight → UNKNOWN, never replayed; re-initialize + re-list; bounded | 5 | DONE | T6, T8 |
+| T12 | Safe server restart: idle death only by default; in-flight → UNKNOWN, never replayed; re-initialize + re-list + registry reset; bounded; session recovery workload | 5 | DONE (`9d1f401`, `24011f5`, + measurement commit) | T6, T8 |
 | T13 | Record/replay with redaction; pluggable corpus | 6 | TODO | T4 |
 
 ## Primitive records
@@ -256,64 +256,176 @@ safety boundary / Z modes / Shadow-first / Auto conditions / evidence).
   decision not taken here.
 - **Evidence:** M8.
 
-### P-T12 Safe server restart (T12)
+### T12 Safe server restart: implementation, lifecycle, boundary
 
-- **Ownable:** yes, for the relay's own child process. The relay already
-  owns its lifecycle.
-- **Deterministic:** the decision is. Restart only if:
-  - nothing is in flight (or the policy is after-unknown);
-  - the budget is not spent;
-  - the mode is not shadow;
-  - the client is still connected.
+**Where it lives.** `examples/mcp/stdio_proxy.py` (`StdioRelay`). It adds
+link state beside the T6 `InvocationLedger`, plus a restart factory that
+`main()` builds from the server command. No new library primitive: restart is
+a host concern, and the ledger already holds the execution state. This is not
+a parallel architecture.
 
-  Timing enters only through bounded waits, whose expiry answers "not sent".
-- **State:** a link state (up / restarting / down), the generation, restarts
-  used, and the client's `initialize` and negotiated protocol version, all
-  relay-local; plus the T6 ledger.
-- **Safety boundary:**
-  - A request *written* to a server that then died is UNKNOWN: surfaced,
-    never re-sent to any server, never turned into success by a later
-    restart (ledger history checked).
-  - A request *never written* is sent once after a restart, or answered
-    "not sent" (certain non-execution).
-  - The default policy (idle-only) does not restart after a death with
-    requests in flight: an exited stdio server may leave work running, and a
-    second process beside it is not provably safe.
-  - A restarted server's listing is fetched again before use.
-  - A changed protocol version on re-initialize is refused, counted as a
-    failed attempt, and the server closed.
+**Lifecycle / state model.**
+
+```
+                 server EOF                     restart allowed + factory ok
+   UP ─────────────────────────▶ (settle in-flight) ──────────────────────────▶ RESTARTING
+   ▲                               │ every SENT request → UNKNOWN,                │ registry cleared
+   │                               │ answered "outcome unknown",                  │ initialize replayed
+   │                               │ never re-sent                                │ (if the session used it)
+   │                               ▼                                              ▼
+   │                 restart off / shadow / idle-only        re-init ok (or stateless) → UP + re-list
+   │                 with in-flight / client gone            re-init refused (version) → close it,
+   │                 / budget spent                          counts as a failed attempt
+   │                               ▼                                              │
+   └────────────────────────────  DOWN  ◀───────────── budget spent ─────────────┘
+                                   │ waiting requests answered "not sent"
+                                   ▼ relay stops (client sees its server exit)
+```
+
+Per-request states are T6's: PENDING, ANSWERED_LOCALLY, SENT, COMPLETED,
+UNKNOWN.
+
+| Situation at death | Request state | Relay action |
+|---|---|---|
+| Request SENT (written), no answer | UNKNOWN | Answered "outcome unknown". Never re-sent. Stays UNKNOWN whatever happens later. |
+| Request PENDING (arrived during RESTARTING) | PENDING → SENT → … | Waits (≤ `RECONNECT_WAIT_SECONDS`), then sent **once** to the new server. |
+| Request PENDING, link ends DOWN | ANSWERED_LOCALLY | Answered "not sent". Certainly not executed. |
+| Request COMPLETED before the death | COMPLETED | Unaffected. |
+| Write to a server just dying (before EOF) | UNKNOWN | It may have been read, so it counts as in flight (pinned by a test). |
+
+**Automatic vs escalated.**
+
+| Behaviour | Automatic (auto mode) | Escalated / surfaced |
+|---|---|---|
+| Restart after idle death | yes, if `--restart N` > 0 | — |
+| Restart after a death with requests in flight | only with `--restart-policy after-unknown` | idle-only (default): no restart; the relay stops |
+| Re-send of an in-flight request | **never** | "outcome unknown" to the client |
+| Send of a never-written request after restart | yes, once | — |
+| Re-initialize (initialize-era session) | yes, replaying the client's `initialize` | protocol-version change → refused, attempt counted |
+| Tool listing after restart | registry cleared, then re-listed | listing fails → calls forwarded unvalidated (logged) |
+| Restart budget spent | — | logged `restart_exhausted`; relay stops |
+| Shadow mode | nothing | `restart_would_attempt` logged |
+
+**Recovery safety boundary.**
+
+- **What is recovered.** Only *subsequent* invocations, by sending them to a
+  new process. No invocation that may have executed is ever re-sent.
+- **What a restart implies.** A successful restart says nothing about any
+  earlier invocation. UNKNOWN is resolved by nothing. A late answer from
+  the dead process cannot arrive, and the ledger never moves out of UNKNOWN.
+
+**Fault-injection coverage** (`tests/examples/test_relay_restart.py`; its
+docstring maps tests to A–F):
+
+| Scenario | Tests |
+|---|---|
+| A idle death → restart → success | `test_idle_death_restarts_and_the_next_call_succeeds`; real subprocess `test_restart_spawns_a_real_new_process_after_an_idle_exit` |
+| B death before dispatch → executed once | `test_a_request_arriving_during_the_restart_waits_and_is_sent_once` |
+| C death after dispatch → UNKNOWN, no replay | `test_death_after_dispatch_is_unknown_and_blocks_restart_by_default`; `test_after_unknown_policy_restarts_but_never_replays` (2); `test_a_request_written_to_a_server_that_just_died_is_unknown_not_lost` |
+| D several calls, own states | `test_several_requests_in_flight_are_all_unknown_and_none_replayed`; `test_each_call_keeps_its_own_state_across_a_restart` |
+| E restart keeps failing | `test_repeated_restart_failure_is_bounded_and_observable`; `test_a_server_that_dies_on_start_uses_up_the_budget_then_stops`; `test_a_restarted_server_on_another_protocol_version_is_refused` |
+| F listing changed | `test_a_changed_listing_after_restart_replaces_the_old_registry`; `test_a_removed_tool_is_not_validated_against_its_old_schema`; `test_if_the_new_listing_never_comes_nothing_is_checked_against_the_old_one` |
+| Z attribution | `test_a_stateguard_failure_during_restart_is_category_z_and_fails_safe` |
+| Shadow / defaults | `test_shadow_never_restarts`; `test_restart_off_by_default`; `test_without_restart_the_relay_exits_with_its_server` |
+| Initialize replay | `test_an_initialize_session_is_reinitialized_after_restart` |
+
+**Property test** `test_property_restart_invariants`: 40 examples over random
+call / in-flight-death / idle-death sequences, both policies, budgets 0–2,
+and four factory modes (ok, fails, dies on start, changed listing). It checks:
+
+- no request is sent twice and nothing executes twice;
+- UNKNOWN stays UNKNOWN through later restarts and successes, and is never
+  answered as success;
+- "not sent" means never received by any server;
+- restarts stay within budget, and a dying server ends with the relay
+  stopped;
+- the post-restart registry is either empty or the live server's.
+
+The measurement invariants (`test_recovery_workload.py`,
+`test_runtime_measurement.py`) add: replayed = 0 and duplicate = 0 in every
+arm, Z = 0, shadow = raw, and the UNKNOWN set identical across StateGuard
+arms.
+
+### Primitive records (T12)
+
+**P-T12a Restart decision** (when to restart):
+
+- **Ownable:** yes. The relay owns its child process.
+- **Deterministic:** yes. It depends on in-flight count, policy, budget,
+  mode and client presence.
+- **State:** link state, restarts used, generation.
+- **Safety boundary:** idle-only by default. It never restarts in shadow, or
+  when the client has gone.
 - **Z modes:**
-  - **A death is seen only at EOF.** A request written in the window before
-    the EOF is UNKNOWN even if the dead process never read it (pinned by
-    `test_a_request_written_to_a_server_that_just_died_is_unknown_not_lost`).
-    Under idle-only this blocks a restart that might have been safe. That is
-    a missed recovery, not a wrong one.
-  - Restart adds startup latency, and requests wait up to
-    `RECONNECT_WAIT_SECONDS` (10 s).
-  - The old process is terminated (`terminate`, then `kill`) only by the
-    `main()` factory. A server that closes stdout while children keep
-    running is outside what the relay can see.
-- **Shadow-first:** shadow never restarts; it logs
-  `restart_would_attempt`. Opt-in in auto.
-- **Conditions for Auto (per deployment):**
-  - The server can be restarted without operator action.
-  - Its startup is idempotent (no side effects on start).
-  - A shadow period shows which deaths were idle, from `server_lost` events
-    with `in_flight_unknown`.
-- **Evidence:**
-  - `test_relay_restart.py` (in-process, 15 tests).
-  - `test_stdio_relay_protocol.py::test_restart_spawns_a_real_new_process_after_an_idle_exit`:
-    real subprocesses. `main()`'s factory terminates and spawns, the relay
-    re-lists, and the next call succeeds. VERIFIED.
-  - M9.
-- **Found by that end-to-end test:**
-  - **A pre-existing bug.** When its server exited, the relay process
-    aborted (SIGABRT) at interpreter shutdown, because a daemon thread was
-    blocked reading stdin. Fixed: the process now flushes and exits directly
-    with the server's code.
-  - **The late-death race, live.** A call sent right after the server's exit
-    notification was written before the process exited, so it was in flight:
-    UNKNOWN, with the idle-only restart refused. That is correct behaviour.
+  - **Late death detection.** A request written before the EOF blocks an
+    idle-only restart. That is a missed recovery, never a wrong one.
+  - **Restart latency:** requests wait up to 10 s.
+- **Shadow-first:** yes. Opt-in in auto.
+- **Evidence for broader Auto:**
+  - Per deployment: shadow `server_lost` logs showing deaths are mostly idle.
+  - The server's startup has no side effects.
+  - For `after-unknown`: evidence that the dead process cannot leave work
+    running (e.g. it runs in its own process group that the factory kills).
+
+**P-T12b In-flight settlement on transport loss:**
+
+- **Ownable:** yes (ledger).
+- **Deterministic:** yes.
+- **State:** the ledger.
+- **Safety boundary:** SENT → UNKNOWN, surfaced, never re-sent, never
+  upgraded.
+- **Z modes:** none measured. It replaces EOF with an explicit "unknown" per
+  request.
+- **Shadow / Auto:** shadow logs only; auto answers.
+- **Evidence:** M9, M10 (UNKNOWN set identical across arms, replays 0).
+
+**P-T12c Session re-establishment** (initialize replay + re-list +
+registry reset):
+
+- **Ownable:** yes. The relay replays only what the client itself sent
+  (`initialize` params), under a relay id.
+- **Deterministic:** yes.
+- **State:** the client's `initialize`, the negotiated version.
+- **Safety boundary:** a version change is refused. The old registry is
+  dropped, so stale schemas are never used.
+- **Z modes:**
+  - The client is not told that its server was restarted. Server-side
+    session state (resources, subscriptions) is not re-established, and only
+    tools are re-listed. **UNVERIFIED** for servers with session state
+    beyond tools.
+  - An initialize-era server that sends server→client requests during init
+    is not handled.
+- **Shadow / Auto:** auto only, as part of restart.
+- **Evidence for broader Auto:** a corpus of real initialize-era servers
+  re-initialized after restart.
+
+**P-T12d Not-sent answering:**
+
+- **Ownable:** yes.
+- **Deterministic:** yes.
+- **State:** link state.
+- **Safety boundary:** only for requests never written (PENDING).
+- **Z modes:** a client may treat the JSON-RPC error as fatal where EOF would
+  have been handled the same way. No new failure.
+- **Shadow / Auto:** auto.
+- **Evidence:** unit tests; M10 shows 0 because the workload's calls come
+  after exhaustion, so the relay has stopped. This path is exercised in
+  `test_repeated_restart_failure_is_bounded_and_observable`.
+
+**P-T12e Bounded restart:**
+
+- **Ownable:** yes.
+- **Deterministic:** yes, by budget count.
+- **State:** restarts used.
+- **Safety boundary:**
+  - Total attempts ≤ N per relay lifetime.
+  - A failed factory, a server dying on start, and a refused re-initialize
+    each consume one.
+  - Exhaustion is logged and the relay stops.
+- **Z modes:** a lifetime budget can be spent by early flapping, leaving none
+  for later deaths. This is deliberate: there is no reset timer, so it
+  cannot loop.
+- **Evidence:** E tests; property (dies-on-start mode); M10.
 
 ## Measured results
 
@@ -509,6 +621,57 @@ Totals: raw 117 → auto 89 → auto_ops 80 failures. StateGuard-induced: auto 0
 auto_ops 6 (deadline cuts on slow non-repeatable calls, as in M6). Replays: 0
 in every arm.
 
+**M10 — T12 session recovery workload** (`benchmarks/runtime/recovery.py`,
+seed 0, 5 sessions per kind, 9 kinds, 5 calls per session: 225 invocations
+per arm). Tool `write_note`: side-effecting, not idempotent, no retry
+involved. **SYNTHETIC.** VERIFIED by running.
+
+| Arm | succeeded | **recovered** | UNKNOWN | not sent | conn. closed | silent | replayed | dup. exec | Z | deaths | rc. attempted | rc. succeeded | rc. failed |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| raw | 109 | 0 | 0 | 0 | 116 | 0 | 0 | 0 | 0 | 40 | 0 | 0 | 0 |
+| shadow | 109 | 0 | 0 | 0 | 116 | 0 | 0 | 0 | 0 | 40 | 0 | 0 | 0 |
+| auto (restart off) | 109 | 0 | 20 | 0 | 96 | 0 | 0 | 0 | 0 | 40 | 0 | 0 | 0 |
+| restart idle-only | 109 | **58** | 20 | 0 | 38 | 0 | **0** | **0** | **0** | 45 | 40 | 25 | 15 |
+| restart after-unknown | 109 | **82** | 20 | 0 | 14 | 0 | **0** | **0** | **0** | 45 | 55 | 40 | 15 |
+
+How to read it:
+
+- **Recovered** means it executed exactly once *on a restarted server*,
+  with the client told it succeeded. These are the calls after a death that
+  raw loses to a closed connection.
+- **UNKNOWN (20)** is the same 20 invocations in every StateGuard arm: the
+  in-flight requests of the death-after-dispatch, death-before-execute and
+  two-in-flight sessions. They are contained (told, never re-sent), **not
+  resolved**.
+- **Connection closed** remains where no restart is allowed:
+  - restart-fails sessions (14 invocations in every arm);
+  - in-flight deaths under idle-only.
+- **Deaths:** 45 vs 40 because the dies-on-start sessions lose a restarted
+  server too.
+- **Reconnects:**
+  - Failed attempts: 15, which is 5 unrestartable sessions × 3.
+  - Succeeded: a restarted server that then served its tool list.
+
+Per kind (restart idle-only vs raw):
+
+- idle death 15/15 recovered;
+- request racing the restart 15/15;
+- dies-on-start 15/15;
+- changed listing 13/13;
+- in-flight deaths 0 recovered (idle-only refuses); after-unknown recovers
+  the 10 calls after them;
+- unrestartable 0.
+
+Single-call measurement (`measure.py`, same seed), E category with the new
+counters, as deaths / reconnect attempted / failed / restarts / recovered /
+UNKNOWN / connection closed / replayed / duplicate:
+
+| Arm | Counts |
+|---|---|
+| raw | 24 / 0 / 0 / 0 / 0 / 0 / 24 / 0 / 0 |
+| auto | 24 / 0 / 0 / 0 / 0 / 8 / 16 / 0 / 0 |
+| auto_ops | 24 / 32 / 24 / 8 / 8 / 8 / 8 / 0 / 0 |
+
 ## Known risks / unresolved categories
 
 - **Unresolved or partly resolved:**
@@ -526,6 +689,13 @@ in every arm.
   - a server that ignores `terminate` (the `kill` path);
   - a server whose children outlive it;
   - slow startup under load.
+- **Session state beyond tools is not re-established after a restart**
+  (resources, prompts, subscriptions, server-side session data), and the
+  client is not told its server was restarted. UNVERIFIED against real
+  stateful servers.
+- **The restart budget is per relay lifetime.** Early flapping can spend it.
+  Deliberate (it cannot loop), but it means a long-lived relay eventually
+  stops restarting.
 - **Late death detection.** Requests written between a death and its EOF are
   UNKNOWN, and block an idle-only restart (a missed recovery, never a wrong
   one).
@@ -542,5 +712,5 @@ Recommended next:
 - **T13:** record/replay with redaction. This is the only route to
   non-synthetic numbers.
 - **T11:** auth-signal classification + operator callback.
-- **T9:** circuit breaker. It needs multi-call workloads in the harness
-  first.
+- **T9:** circuit breaker. It can now build on `recovery.py`'s multi-call
+  sessions.

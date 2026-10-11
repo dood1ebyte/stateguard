@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Session recovery workload** (`benchmarks/runtime/recovery.py`):
+  deterministic multi-call sessions with a server failure injected, run in
+  raw, shadow, auto, restart idle-only and restart after-unknown arms.
+  - Every invocation ends as exactly one of: succeeded, recovered (ran once
+    on a restarted server), unknown, not sent, connection closed, silent, or
+    other error.
+  - Counted separately, never folded in: replays, duplicate executions,
+    StateGuard-induced failures, server deaths, and reconnects attempted,
+    succeeded and failed.
+- The relay clears its tool registry when it restarts a server, so nothing
+  is validated against the dead process's schemas.
 - **Safe server restart in the stdio relay** (`--restart N`, off by
   default).
   - **When it restarts.** A server that exits while idle is restarted. The
