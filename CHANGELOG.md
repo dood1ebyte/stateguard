@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Safe server restart in the stdio relay** (`--restart N`, off by
+  default).
+  - **When it restarts.** A server that exits while idle is restarted. The
+    `initialize` handshake is replayed if the session used one (a
+    protocol-version change is refused), and the tool list is fetched again
+    before it is trusted.
+  - **Requests in flight are never re-sent.** Each is answered "outcome
+    unknown" and stays `UNKNOWN`, even if the new server succeeds.
+    `--restart-policy idle-only` (the default) does not restart at all after
+    such a death; `after-unknown` restarts once they have been answered.
+  - **Requests arriving mid-restart** wait, bounded. If they cannot be sent,
+    they are answered "not sent" (a certain non-execution).
+  - **Restarts are bounded and logged.** When they run out, the relay stops.
 - **Result integrity, detection only** (`check_tool_result`, `ResultCheck`,
   `ResultIssueKind`):
   - A `tools/call` result is checked for `CallToolResult` shape, and for
@@ -189,6 +202,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limitations.
 
 ### Fixed
+- **The stdio relay aborted (SIGABRT) when its server exited first.**
+  Interpreter shutdown found a daemon thread holding stdin's lock. The relay
+  now flushes and exits directly with the server's exit code.
 - **The relay could act on a stale tool listing.** Under protocol
   `2026-07-28`, servers send `tools/list_changed` only on
   `subscriptions/listen` streams (verified in MCP SDK 2.3.0), and the relay

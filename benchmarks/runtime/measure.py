@@ -41,7 +41,13 @@ Anything else is a failure, recorded with its kinds:
 * ``duplicate_execution`` -- the intended call ran more than once;
 * ``phantom_success`` -- the client was told it succeeded when the intended
   call did not run;
-* ``no_response`` -- the client got no answer at all;
+* ``no_response`` -- the client got no answer, and its connection stayed
+  open: silence;
+* ``transport_closed`` -- the client got no answer because its server
+  connection closed (EOF). Visible -- the client knows the connection died --
+  but it does not know whether the call ran;
+* ``surfaced_not_sent`` -- the client was told, truthfully, that the call was
+  never sent and did not execute (the server was gone);
 * ``executed_reported_failed`` -- the intended call ran, and the client was
   told it failed: the client's view and the server's state now disagree;
 * ``duplicate_response`` -- the client received more than one response for
@@ -73,6 +79,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import itertools
 import json
 import statistics
 import sys
@@ -108,6 +115,8 @@ from .scenarios import (  # noqa: E402
 )
 
 ARMS = ("raw", "naive", "shadow", "auto", "auto_ops")
+#: Server restarts allowed in the auto_ops arm (restart policy: idle-only).
+RESTARTS_ARM = 3
 DEADLINE_ARM_SECONDS = 0.3
 HIDDEN_KINDS = frozenset(
     {"no_response", "phantom_success", "duplicate_response", "result_contract_violation"}
@@ -123,6 +132,8 @@ FAILURE_KINDS = (
     "surfaced_unknown",
     "repeated_declared",
     "result_contract_violation",
+    "transport_closed",
+    "surfaced_not_sent",
 )
 
 
@@ -149,6 +160,11 @@ class Result:
     relay_retries: int = 0
     #: Result-integrity findings the relay logged (category H).
     result_findings: int = 0
+    #: Server processes the relay restarted.
+    restarts: int = 0
+    #: tools/call messages received by a server beyond the first per request
+    #: id, across every server process: a replay.
+    replayed: int = 0
 
 
 @dataclass
@@ -166,9 +182,15 @@ class Report:
 
 def run_one(scenario: Scenario, arm: str, *, listing_wait: float = 1.0) -> Result:
     plan = dict(scenario.plan)
+    order = itertools.count()  # call order across every server process
 
     def faults(call: ServerCall) -> ServerAction:
-        return plan.get(call.index, ServerAction.NORMAL)
+        return plan.get(next(order), ServerAction.NORMAL)
+
+    def factory() -> ScriptedServer:
+        if scenario.restart_fails:
+            raise OSError("server cannot be started")
+        return ScriptedServer([ServerTool(t) for t in scenario.tools], faults=faults)
 
     server = ScriptedServer([ServerTool(t) for t in scenario.tools], faults=faults)
     mode = {
@@ -186,6 +208,8 @@ def run_one(scenario: Scenario, arm: str, *, listing_wait: float = 1.0) -> Resul
         call_deadline=DEADLINE_ARM_SECONDS if ops else None,
         effects=EffectPolicy(SIMULATED_EFFECTS) if ops else None,
         retry="auto" if ops else "shadow",
+        server_factory=factory,
+        max_restarts=RESTARTS_ARM if ops else 0,
     )
     try:
         rig.request("server/discover")
@@ -193,6 +217,13 @@ def run_one(scenario: Scenario, arm: str, *, listing_wait: float = 1.0) -> Resul
             rig.wait_synced()
         if scenario.tools_after is not None:
             server.set_tools([ServerTool(t) for t in scenario.tools_after])
+        if scenario.kill_before_call:
+            rig.kill_server()
+            # Deterministic: call only once the death has been observed.
+            if mode is RelayMode.PASSTHROUGH:
+                rig.client_eof.wait(2.0)
+            else:
+                _await_event(rig, "server_lost")
 
         first_call_id = len(rig.sent_ids)
         started = time.perf_counter()
@@ -212,9 +243,7 @@ def run_one(scenario: Scenario, arm: str, *, listing_wait: float = 1.0) -> Resul
         tool = next((t for t in scenario.tools if t["name"] == scenario.tool), {})
         call_ids = rig.sent_ids[first_call_id:] if scenario.raw_line is None else [RAW_LINE_ID]
         repeatable = ops and SIMULATED_EFFECTS.get(scenario.tool) in ("read_only", "idempotent")
-        return _judge(
-            scenario, arm, server, rig, response, tool, latency, retried, call_ids, repeatable
-        )
+        return _judge(scenario, arm, rig, response, tool, latency, retried, call_ids, repeatable)
     finally:
         rig.close()
 
@@ -226,10 +255,17 @@ def _client_ok(response: dict[str, Any] | None) -> bool:
     return isinstance(result, dict) and result.get("isError") is not True
 
 
+def _await_event(rig: Rig, name: str, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if any(e.get("event") == name for e in rig.audit):
+            return
+        time.sleep(0.01)
+
+
 def _judge(
     scenario: Scenario,
     arm: str,
-    server: ScriptedServer,
     rig: Rig,
     response: dict[str, Any] | None,
     tool: dict[str, Any],
@@ -238,10 +274,14 @@ def _judge(
     call_ids: list[Any],
     repeatable: bool = False,
 ) -> Result:
-    executed = list(server.executed)
+    executed = list(rig.all_executed)  # every server process, old and new
     client_ok = _client_ok(response)
     unknown = _surfaced_unknown(response)
+    not_sent = _surfaced_state(response) == "not_sent"
     kinds: list[str] = ["surfaced_unknown"] if unknown else []
+    if not_sent:
+        kinds.append("surfaced_not_sent")
+    silent = "transport_closed" if rig.client_eof.is_set() else "no_response"
     if client_ok and ServerAction.BAD_STRUCTURED in scenario.plan.values():
         kinds.append("result_contract_violation")
         client_ok = False  # told "success" with a result that breaks the contract
@@ -256,7 +296,7 @@ def _judge(
         if client_ok and not matching:
             kinds.append("phantom_success")
         if response is None:
-            kinds.append("no_response")
+            kinds.append(silent)
         elif (
             not client_ok and matching and not unknown and "result_contract_violation" not in kinds
         ):
@@ -274,7 +314,7 @@ def _judge(
             kinds.append("phantom_success")
         success = not executed and not client_ok and response is not None
         if response is None:
-            kinds.append("no_response")
+            kinds.append(silent)
 
     for identifier in call_ids:
         answers = [
@@ -288,12 +328,14 @@ def _judge(
 
     calls = [e for e in rig.audit if e.get("event") == "call"]
     action = calls[-1].get("action", "none") if calls else "none"
-    sent = [json.loads(line) for line in server.received if _method(line) == "tools/call"]
+    received = rig.all_received
+    sent = [json.loads(line) for line in received if _method(line) == "tools/call"]
+    per_id = Counter(json.dumps(m.get("id")) for m in sent)
     rewrote = (
         any(m.get("params", {}).get("arguments") != scenario.arguments for m in sent)
         and scenario.raw_line is None
     )
-    own = sum(1 for line in server.received if _is_own_listing(line))
+    own = sum(1 for line in received if _is_own_listing(line))
     return Result(
         scenario=scenario.id,
         category=scenario.category,
@@ -315,13 +357,20 @@ def _judge(
         result_findings=sum(
             1 for e in rig.audit if e.get("event") == "result_check" and e.get("category") == "H"
         ),
+        restarts=sum(1 for e in rig.audit if e.get("event") == "server_restarted"),
+        replayed=sum(count - 1 for count in per_id.values()),
     )
 
 
-def _surfaced_unknown(response: dict[str, Any] | None) -> bool:
+def _surfaced_state(response: dict[str, Any] | None) -> str | None:
     error = response.get("error") if isinstance(response, dict) else None
     data = error.get("data") if isinstance(error, dict) else None
-    return isinstance(data, dict) and data.get("io.stateguard/executionState") == "unknown"
+    state = data.get("io.stateguard/executionState") if isinstance(data, dict) else None
+    return state if isinstance(state, str) else None
+
+
+def _surfaced_unknown(response: dict[str, Any] | None) -> bool:
+    return _surfaced_state(response) == "unknown"
 
 
 def _method(line: bytes) -> str | None:
@@ -433,6 +482,30 @@ def summarise(report: Report) -> dict[str, Any]:
             "repeated_declared": sum(1 for r in ops.values() if "repeated_declared" in r.kinds),
             "duplicate_execution": sum(1 for r in ops.values() if "duplicate_execution" in r.kinds),
         }
+        # Transport outcomes, kept apart so a fall in failures is attributed:
+        # recovered by a restart, surfaced as unknown / not sent, visible as a
+        # closed connection -- or replayed, which must stay zero.
+        row["transport"] = {
+            arm: {
+                "restarts": sum(by[(s, arm)].restarts for s in ids),
+                "recovered_by_restart": sum(
+                    1
+                    for s in ids
+                    if s in raw_fail and by[(s, arm)].success and by[(s, arm)].restarts > 0
+                ),
+                "unknown": sum(1 for s in ids if "surfaced_unknown" in by[(s, arm)].kinds),
+                "not_sent": sum(1 for s in ids if "surfaced_not_sent" in by[(s, arm)].kinds),
+                "connection_closed": sum(
+                    1 for s in ids if "transport_closed" in by[(s, arm)].kinds
+                ),
+                "silent": sum(1 for s in ids if "no_response" in by[(s, arm)].kinds),
+                "replayed": sum(by[(s, arm)].replayed for s in ids),
+                "duplicate_execution": sum(
+                    1 for s in ids if "duplicate_execution" in by[(s, arm)].kinds
+                ),
+            }
+            for arm in ARMS
+        }
         row["result_findings"] = {
             arm: sum(by[(s, arm)].result_findings for s in ids) for arm in ARMS
         }
@@ -506,6 +579,9 @@ LIMITATIONS = [
     "properties, primitive types, enum, min/max). Real servers are stricter or "
     "looser; a lax server turns some refusals into wrong executions.",
     "One fault per invocation, on the first server call; retries see a healthy server.",
+    "Server restarts in auto_ops are in-process (a new scripted server on fresh pipes), "
+    "not a real process spawn; restart latency and process-startup failures are not "
+    "represented beyond a factory that raises.",
     "Transport faults are pipe closes and hangs inside one process, not real "
     "process crashes or network partitions.",
     "Latency is in-process wall time on one machine; it measures added overhead, "
@@ -554,6 +630,27 @@ def render(summary: dict[str, Any]) -> str:
         "hidden failures: " + ", ".join(f"{arm} {n}" for arm, n in t["hidden"].items()),
         "result-integrity findings logged (detection only, results never altered): "
         + ", ".join(f"{arm} {n}" for arm, n in t["result_findings"].items()),
+        "transport (E, I) -- restarts / recovered by restart / unknown / not sent / "
+        "connection closed / silent / replayed / duplicate executions:",
+        *[
+            f"  {cat} {arm:<8} "
+            + " / ".join(
+                str(summary["categories"][cat]["transport"][arm][k])
+                for k in (
+                    "restarts",
+                    "recovered_by_restart",
+                    "unknown",
+                    "not_sent",
+                    "connection_closed",
+                    "silent",
+                    "replayed",
+                    "duplicate_execution",
+                )
+            )
+            for cat in ("E", "I")
+            if summary["categories"][cat].get("exercised")
+            for arm in ("raw", "auto", "auto_ops")
+        ],
         "auto_ops totals: "
         + ", ".join(
             f"{key} "

@@ -89,6 +89,10 @@ class Scenario:
     tools_after: list[dict[str, Any]] | None = None
     #: Raw line the client sends instead of a well-formed request (C).
     raw_line: bytes | None = None
+    #: The server process dies while idle, before the call is sent (E).
+    kill_before_call: bool = False
+    #: Every restart attempt fails (the server cannot be started again).
+    restart_fails: bool = False
     timeout: float = 1.5
     note: str = ""
 
@@ -233,6 +237,17 @@ def build(seed: int = 0, *, corpus: Corpus | None = None, per_fault: int = 8) ->
         )
 
     act = ServerAction
+    # The server exits while idle; the next call finds it gone. Nothing was in
+    # flight, so a restart (where enabled) is safe.
+    fault("E", "server_dies_idle", {}, timeout=1.5, kill_before_call=True)
+    fault(
+        "E",
+        "server_dies_idle_restart_fails",
+        {},
+        timeout=1.5,
+        kill_before_call=True,
+        restart_fails=True,
+    )
     fault("E", "stdio_kill_before_execute", {0: act.CLOSE_BEFORE_EXECUTE}, timeout=0.6)
     fault("F", "hang_then_recover", {0: act.HANG_BEFORE_EXECUTE}, timeout=0.6)
     fault("F", "transient_error", {0: act.TRANSIENT_ERROR})

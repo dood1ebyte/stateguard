@@ -63,7 +63,8 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Relay fail-open on internal error | COMPLETE (T2, `384fe2a`) — was **UNSAFE** | `test_relay_fail_open.py`: exception / RecursionError / gate failure / sync failure / client-message failure → forwarded once, unmodified, logged `category: "Z"` | both | VERIFIED. Single-write structure: no StateGuard-made double send. |
 | Kill switch | COMPLETE (T2) | `--passthrough`; `test_passthrough_is_a_byte_relay` | — | Also the raw-baseline arm. |
 | Protocol-aware refusal (`resultType`) | COMPLETE | `jsonrpc.tool_error_response`; SDK e2e test | auto | |
-| Stdio relay | PARTIAL | `examples/mcp/stdio_proxy.py`; SDK e2e + scripted tests | both | Example only; no reconnect, no timeouts. |
+| Stdio relay | PARTIAL | `examples/mcp/stdio_proxy.py`; SDK e2e + scripted + in-process rig tests | both | Example, not a gateway: one server per relay. |
+| Safe server restart (E) | COMPLETE for idle death (T12) | `test_relay_restart.py` (15 incl. 25-example property); M9: 8/8 idle deaths recovered, 0 replays | **opt-in** (`--restart N`), Auto only; shadow never restarts | Default policy idle-only: no restart after a death with requests in flight. |
 | Audit log | PARTIAL | relay JSON lines, value-free; `category` on Z / E / I / J events | both | Not exported as structured telemetry. |
 | Telemetry hooks | PARTIAL | `telemetry/hooks.py` `ITelemetryHook` (repair events only) | n/a | No runtime-event hooks. |
 | Effect classification | COMPLETE (T7, `ad6f041`) | `adapters/mcp/effects.py`; `test_effects.py` exhaustive (1,344 cases) | n/a | Operator-declared only; default UNKNOWN; annotations = recorded hints, never decide (VERIFIED incl. contradicting hints). |
@@ -113,7 +114,7 @@ list-changed delivery at 2026-07-28.
 | T9 | Circuit breaker per (server, tool), Shadow-first | 5 | TODO | T6 |
 | T10 | Result integrity: `outputSchema` / `structuredContent` validation, detection only | 4 | DONE | T4 |
 | T11 | Auth-signal classification + operator callback | 4 | TODO | T6 |
-| T12 | Stdio reconnect when idle; in-flight → escalate | 5 | TODO | T6, T8 |
+| T12 | Safe server restart: idle death only by default; in-flight → UNKNOWN, never replayed; re-initialize + re-list; bounded | 5 | DONE | T6, T8 |
 | T13 | Record/replay with redaction; pluggable corpus | 6 | TODO | T4 |
 
 ## Primitive records
@@ -254,6 +255,65 @@ safety boundary / Z modes / Shadow-first / Auto conditions / evidence).
   client* (e.g. via `_meta`) would alter the result. That is a product
   decision not taken here.
 - **Evidence:** M8.
+
+### P-T12 Safe server restart (T12)
+
+- **Ownable:** yes, for the relay's own child process. The relay already
+  owns its lifecycle.
+- **Deterministic:** the decision is. Restart only if:
+  - nothing is in flight (or the policy is after-unknown);
+  - the budget is not spent;
+  - the mode is not shadow;
+  - the client is still connected.
+
+  Timing enters only through bounded waits, whose expiry answers "not sent".
+- **State:** a link state (up / restarting / down), the generation, restarts
+  used, and the client's `initialize` and negotiated protocol version, all
+  relay-local; plus the T6 ledger.
+- **Safety boundary:**
+  - A request *written* to a server that then died is UNKNOWN: surfaced,
+    never re-sent to any server, never turned into success by a later
+    restart (ledger history checked).
+  - A request *never written* is sent once after a restart, or answered
+    "not sent" (certain non-execution).
+  - The default policy (idle-only) does not restart after a death with
+    requests in flight: an exited stdio server may leave work running, and a
+    second process beside it is not provably safe.
+  - A restarted server's listing is fetched again before use.
+  - A changed protocol version on re-initialize is refused, counted as a
+    failed attempt, and the server closed.
+- **Z modes:**
+  - **A death is seen only at EOF.** A request written in the window before
+    the EOF is UNKNOWN even if the dead process never read it (pinned by
+    `test_a_request_written_to_a_server_that_just_died_is_unknown_not_lost`).
+    Under idle-only this blocks a restart that might have been safe. That is
+    a missed recovery, not a wrong one.
+  - Restart adds startup latency, and requests wait up to
+    `RECONNECT_WAIT_SECONDS` (10 s).
+  - The old process is terminated (`terminate`, then `kill`) only by the
+    `main()` factory. A server that closes stdout while children keep
+    running is outside what the relay can see.
+- **Shadow-first:** shadow never restarts; it logs
+  `restart_would_attempt`. Opt-in in auto.
+- **Conditions for Auto (per deployment):**
+  - The server can be restarted without operator action.
+  - Its startup is idempotent (no side effects on start).
+  - A shadow period shows which deaths were idle, from `server_lost` events
+    with `in_flight_unknown`.
+- **Evidence:**
+  - `test_relay_restart.py` (in-process, 15 tests).
+  - `test_stdio_relay_protocol.py::test_restart_spawns_a_real_new_process_after_an_idle_exit`:
+    real subprocesses. `main()`'s factory terminates and spawns, the relay
+    re-lists, and the next call succeeds. VERIFIED.
+  - M9.
+- **Found by that end-to-end test:**
+  - **A pre-existing bug.** When its server exited, the relay process
+    aborted (SIGABRT) at interpreter shutdown, because a daemon thread was
+    blocked reading stdin. Fixed: the process now flushes and exits directly
+    with the server's code.
+  - **The late-death race, live.** A call sent right after the server's exit
+    notification was written before the process exited, so it was in flight:
+    UNKNOWN, with the idle-only restart refused. That is correct behaviour.
 
 ## Measured results
 
@@ -397,23 +457,90 @@ running.
 - **Unchanged from M6:** StateGuard-induced auto 0 / auto_ops 5; duplicate
   executions of non-declared tools 0.
 
+**M9 — after T12.** Seed 0, 8 per fault. Two new E injectors:
+`server_dies_idle`, and `server_dies_idle_restart_fails` (the server cannot be
+started again). `auto_ops` now also has `--restart 3` with the idle-only
+policy. **SYNTHETIC.** VERIFIED by running.
+
+**Comparability.** The new injectors consume seeded draws, so the tools
+picked for later injectors changed. Per-category F/G/H/I numbers are **not
+directly comparable** with M8. For example, I's "response lost" injection now
+drew no read-only tool, so I shows 0 retry recoveries (checked per scenario).
+
+**Correction to M5–M8.** The judge counted "no response" as a *hidden*
+failure even when the client's connection had closed. A raw relay exits when
+its server dies, so the client *sees* EOF: a visible failure with an unknown
+outcome, not silence. A new `transport_closed` outcome separates the two.
+Earlier "hidden" totals overstated StateGuard's benefit for server-death
+scenarios. With the correction: hidden raw 45 → auto 33 → auto_ops 9.
+
+Transport outcomes, distinct per arm (restarts / recovered by restart /
+UNKNOWN surfaced / not sent / connection closed / silent / replayed /
+duplicate executions):
+
+| Cat | Arm | restarts | recovered | UNKNOWN | not sent | conn. closed | silent | replayed | dup. exec |
+|---|---|---|---|---|---|---|---|---|---|
+| E (24) | raw | 0 | 0 | 0 | 0 | 24 | 0 | 0 | 0 |
+| E | auto | 0 | 0 | 8 | 0 | 16 | 0 | 0 | 0 |
+| E | auto_ops | 8 | **8** | 8 | 0 | 8 | 0 | **0** | **0** |
+| I (16) | raw | 0 | 0 | 0 | 0 | 8 | 8 | 0 | 0 |
+| I | auto | 0 | 0 | 8 | 0 | 0 | 8 | 0 | 0 |
+| I | auto_ops | 0 | 0 | 16 | 0 | 0 | 0 | **0** | **0** |
+
+E breaks down by injector:
+
+- **Idle death (8):** recovered by a restart in auto_ops. Raw and auto see
+  the connection close.
+- **Death with the request in flight (8):** UNKNOWN in auto and auto_ops,
+  not restarted (idle-only), never replayed.
+- **Restart impossible (8):** bounded at 3 failed attempts, then the relay
+  stops (connection closed, visible).
+
+What this measurement shows, and what it doesn't:
+
+- **Recovered** means the call executed exactly once on the restarted server
+  and the client got its result. That is 8/8 idle deaths.
+- **UNKNOWN** cases are *contained*: the client is told, and nothing is
+  re-sent. They are not resolved.
+- **Connection closed** cases are visible but unresolved.
+- Nothing is prevented here.
+
+Totals: raw 117 → auto 89 → auto_ops 80 failures. StateGuard-induced: auto 0,
+auto_ops 6 (deadline cuts on slow non-repeatable calls, as in M6). Replays: 0
+in every arm.
+
 ## Known risks / unresolved categories
 
-- **Unresolved:** C (detect only), D, E, F, G, H, I, J, K — no runtime
-  primitives yet. Z is not counted per run until T4.
+- **Unresolved or partly resolved:**
+  - **C:** detect only.
+  - **D (session):** not exercised by the measurement. The initialize replay
+    is unit-tested only.
+  - **E:** an in-flight death and an unrestartable server stay unresolved;
+    in-flight deaths are contained as UNKNOWN.
+  - **F / G / H / I:** only operator-declared read-only/idempotent tools are
+    recovered. The rest is surfaced, not resolved.
+  - **K:** the server's error is passed through, with no classification
+    (T11).
+- **Real process restart** is verified for one idle exit (VERIFIED). Not
+  covered:
+  - a server that ignores `terminate` (the `kill` path);
+  - a server whose children outlive it;
+  - slow startup under load.
+- **Late death detection.** Requests written between a death and its EOF are
+  UNKNOWN, and block an idle-only restart (a missed recovery, never a wrong
+  one).
 - **Opposite lexicon is finite.** Pairs outside it and outside the affix rule
   (e.g. `buy`/`sell` as single tokens) fall back to similarity, which is
   usually low for true antonyms. This is measured, not assumed.
+- **Measurement is synthetic throughout.** No real-traffic corpus exists yet
+  (T13).
 
 ## Next task
 
-T12: reconnect. Restart a dead stdio server when no call is in flight;
-in-flight calls stay UNKNOWN and escalate. A read-only declared call may then
-be retried on the new connection.
+Recommended next:
 
-- E is currently 8/8 unresolved.
-- I's stdio-kill cases are escalated.
-
-Then T11 (auth classification + operator callback), T9 (circuit breaker,
-which needs multi-call workloads in the harness), and T13 (record/replay
-with redaction, a pluggable real-traffic corpus).
+- **T13:** record/replay with redaction. This is the only route to
+  non-synthetic numbers.
+- **T11:** auth-signal classification + operator callback.
+- **T9:** circuit breaker. It needs multi-call workloads in the harness
+  first.

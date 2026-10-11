@@ -171,8 +171,22 @@ class ScriptedServer:
     executed: list[ServerCall] = field(default_factory=list)
     #: Every line the server received, raw.
     received: list[bytes] = field(default_factory=list)
+    #: Answer tools/* with an error until initialize + notifications/initialized
+    #: (an initialize-era server, for testing handshake replay after a restart).
+    require_initialize: bool = False
+    #: Set by kill(): the process is gone and processes nothing more.
+    dead: bool = False
+    _initialized: bool = False
+    _writer: Any = None
     _calls: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def kill(self) -> None:
+        """The process dies: stop processing, close stdout (the relay sees EOF)."""
+        self.dead = True
+        if self._writer is not None:
+            with contextlib.suppress(OSError):
+                self._writer.close()
 
     def set_tools(self, tools: list[ServerTool]) -> None:
         """Swap the listing (schema drift mid-run). No notification is sent."""
@@ -180,8 +194,11 @@ class ScriptedServer:
             self.tools = list(tools)
 
     def serve(self, reader: IO[bytes], writer: IO[bytes]) -> None:
+        self._writer = writer
         try:
             for line in reader:
+                if self.dead:
+                    break  # a dead process reads nothing
                 self.received.append(line)
                 if not self._handle(line, writer):
                     break
@@ -204,10 +221,24 @@ class ScriptedServer:
             message = json.loads(line)
         except ValueError:
             return True
+        if isinstance(message, dict) and message.get("method") == "notifications/initialized":
+            self._initialized = True
         if not isinstance(message, dict) or "method" not in message or "id" not in message:
             return True  # notifications, responses: nothing to answer
         method, identifier = message["method"], message["id"]
         params = message.get("params") or {}
+        if self.require_initialize and method.startswith("tools/") and not self._initialized:
+            self._write(
+                writer,
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": identifier,
+                        "error": {"code": -32002, "message": "Server not initialized"},
+                    }
+                ).encode(),
+            )
+            return True
         if method == "initialize":
             self._reply(
                 writer,
@@ -353,6 +384,9 @@ class Rig:
         call_deadline: float | None = None,
         effects: Any = None,
         retry: str = "shadow",
+        server_factory: Callable[[], ScriptedServer] | None = None,
+        max_restarts: int = 0,
+        restart_policy: str = "idle-only",
     ) -> None:
         from stateguard import ContractGuard, GuardConfig
         from stateguard.core.models.config import RepairMode
@@ -360,7 +394,10 @@ class Rig:
         relay_module = load_relay_module()
         if listing_wait is not None:
             relay_module.LISTING_WAIT_SECONDS = listing_wait
-        self.server = server
+        #: Every server process the relay has talked to, oldest first.
+        self.servers: list[ScriptedServer] = [server]
+        self._server_factory = server_factory
+        self._server_threads: list[threading.Thread] = []
         self.audit: list[dict[str, Any]] = []
         self._responses: queue.Queue[dict[str, Any] | bytes] = queue.Queue()
         self._next_id = 0
@@ -368,6 +405,8 @@ class Rig:
         self.client_received: list[dict[str, Any] | bytes] = []
         #: Ids of the requests sent through ``request()``.
         self.sent_ids: list[Any] = []
+        #: Set when the relay closed the client's stdin (the "server" exited).
+        self.client_eof = threading.Event()
 
         c2r_r, c2r_w = os.pipe()
         r2c_r, r2c_w = os.pipe()
@@ -391,6 +430,10 @@ class Rig:
             call_deadline=call_deadline,
             effects=effects,
             retry=retry,
+            restart=self._restart if server_factory is not None else None,
+            max_restarts=max_restarts,
+            restart_policy=restart_policy,
+            restart_backoff=0.0,
         )
         server_in, server_out = os.fdopen(r2s_r, "rb"), os.fdopen(s2r_w, "wb")
         self._threads = [
@@ -402,6 +445,39 @@ class Rig:
         ]
         for thread in self._threads:
             thread.start()
+
+    @property
+    def server(self) -> ScriptedServer:
+        """The current server process."""
+        return self.servers[-1]
+
+    @property
+    def all_executed(self) -> list[ServerCall]:
+        """Everything executed, by every server process: the side-effect ledger."""
+        return [call for server in self.servers for call in server.executed]
+
+    @property
+    def all_received(self) -> list[bytes]:
+        return [line for server in self.servers for line in server.received]
+
+    def kill_server(self) -> None:
+        self.server.kill()
+
+    def _restart(self) -> tuple[IO[bytes], IO[bytes]]:
+        """The relay's restart factory: a new server process on fresh pipes."""
+        assert self._server_factory is not None
+        server = self._server_factory()  # may raise: a failed restart
+        r2s_r, r2s_w = os.pipe()
+        s2r_r, s2r_w = os.pipe()
+        thread = threading.Thread(
+            target=server.serve,
+            args=(os.fdopen(r2s_r, "rb"), os.fdopen(s2r_w, "wb")),
+            daemon=True,
+        )
+        self.servers.append(server)
+        thread.start()
+        self._server_threads.append(thread)
+        return os.fdopen(r2s_w, "wb"), os.fdopen(s2r_r, "rb")
 
     def _pump_server_side(self) -> None:
         # As the real relay's process does when its server exits: stop, which
@@ -424,13 +500,17 @@ class Rig:
         return False
 
     def _pump_client_side(self) -> None:
-        for line in self._client_r:
-            try:
-                message: dict[str, Any] | bytes = json.loads(line)
-            except ValueError:
-                message = line  # bytes the client could not parse
-            self.client_received.append(message)
-            self._responses.put(message)
+        try:
+            for line in self._client_r:
+                try:
+                    message: dict[str, Any] | bytes = json.loads(line)
+                except ValueError:
+                    message = line  # bytes the client could not parse
+                self.client_received.append(message)
+                self._responses.put(message)
+        finally:
+            # EOF on the client's stdin: the client sees its server process end.
+            self.client_eof.set()
 
     def send(self, message: dict[str, Any]) -> None:
         self._client_w.write((json.dumps(message) + "\n").encode())

@@ -191,3 +191,47 @@ def test_shadow_never_blocks_even_an_unreadable_schema(tmp_path: Path) -> None:
         assert "shadow" in s.decisions()[-1]["reason"]
     finally:
         s.close()
+
+
+def _notify(session: Session, method: str) -> None:
+    assert session.proc.stdin
+    session.proc.stdin.write((json.dumps({"jsonrpc": "2.0", "method": method}) + "\n").encode())
+    session.proc.stdin.flush()
+
+
+def test_restart_spawns_a_real_new_process_after_an_idle_exit(tmp_path: Path) -> None:
+    """main()'s restart factory, end to end: a real subprocess exits; a new one is spawned."""
+    s = Session(tmp_path, "--restart", "1")
+    try:
+        s.request("server/discover", {})
+        _, result = s.call("search", {"query": "a"})
+        assert _echoed(result) == {"query": "a"}
+        _notify(s, "test/exit")  # the server process exits, nothing in flight
+        # An idle death: the next call comes after the relay has seen it. (A call
+        # racing the exit would be in flight -- UNKNOWN, and no idle-only restart.)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and '"server_lost"' not in s.audit.read_text():
+            time.sleep(0.02)
+        _, result = s.call("search", {"query": "b"})
+        assert _echoed(result) == {"query": "b"}
+        events = [json.loads(e) for e in s.audit.read_text().splitlines()]
+        restarted = [e for e in events if e["event"] == "server_restarted"]
+        assert len(restarted) == 1 and restarted[0]["generation"] == 1
+        lost = [e for e in events if e["event"] == "server_lost"]
+        assert lost[0]["in_flight_unknown"] == 0
+        # the new process listed its tools again before the second call
+        lists = [m for m in s.received() if m.get("method") == "tools/list"]
+        assert len([m for m in lists if m["params"].get("cursor") is None]) >= 2
+    finally:
+        s.close()
+
+
+def test_without_restart_the_relay_exits_with_its_server(tmp_path: Path) -> None:
+    s = Session(tmp_path)
+    try:
+        s.request("server/discover", {})
+        _notify(s, "test/exit")
+        assert s.proc.wait(timeout=10) == 0
+    finally:
+        if s.proc.poll() is None:
+            s.close()

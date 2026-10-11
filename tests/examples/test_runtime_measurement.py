@@ -94,3 +94,17 @@ def test_result_findings_are_exactly_the_injected_violations(summary: dict[str, 
     findings = summary["totals"]["result_findings"]
     assert findings["raw"] == 0
     assert findings["shadow"] == findings["auto"] == injected
+
+
+def test_nothing_is_ever_replayed_and_restarts_recover_only_idle_deaths(
+    summary: dict[str, Any],
+) -> None:
+    for cat, row in summary["categories"].items():
+        if not row["exercised"]:
+            continue
+        for arm, transport in row["transport"].items():
+            assert transport["replayed"] == 0, (cat, arm)
+            assert transport["duplicate_execution"] == 0 or arm == "naive", (cat, arm)
+    e = summary["categories"]["E"]["transport"]
+    assert e["auto_ops"]["recovered_by_restart"] >= 1
+    assert e["raw"]["restarts"] == e["auto"]["restarts"] == 0  # restart is opt-in

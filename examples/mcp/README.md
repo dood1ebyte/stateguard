@@ -264,6 +264,24 @@ rely on being told that a schema changed. Calls that pass unchanged cost no
 extra round trip. If no fresh listing arrives, the call is forwarded
 unchanged. `--no-listing-refresh` turns this off.
 
+`--restart N` (off by default) restarts a server process that exits, at most
+N times.
+
+- **When the relay restarts.** Only when the server dies idle, with nothing
+  in flight. The relay re-runs the `initialize` handshake if the session used
+  one, refusing a server that changed protocol version. It also lists the
+  tools again, since the old listing describes a process that no longer
+  exists.
+- **Requests in flight are never re-sent.** Each one is answered "outcome
+  unknown". By default the relay then does *not* restart, because the dead
+  process may have left work running. `--restart-policy after-unknown`
+  restarts anyway, after answering them.
+- **Requests that arrive mid-restart** wait for it. If they still cannot be
+  sent, they are answered "not sent", because they certainly did not
+  execute.
+- **When restarts run out,** the relay stops, as it would without
+  StateGuard.
+
 It speaks both protocol generations: the `initialize` handshake, and the
 stateless revision (`2026-07-28`) in which every request carries its
 protocol version in `params._meta` — which the relay preserves on forwarded

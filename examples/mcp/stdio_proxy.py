@@ -69,7 +69,34 @@ tool is escalated as "outcome unknown". Tool annotations
 (``readOnlyHint`` ...) are recorded as hints and never decide anything. The
 default, ``--retry shadow``, logs every decision and retries nothing.
 
-Shadow mode logs what it would have done and changes nothing.
+Server restart (opt-in)
+-----------------------
+With ``--restart N`` the relay restarts a server process that exits, at most
+N times in its lifetime, and only when it is safe:
+
+* **Idle death** (nothing in flight): the server is restarted, the
+  ``initialize`` handshake is replayed on the client's behalf if the session
+  used one (the relay checks the new server agrees on the protocol version),
+  and the tool list is fetched again -- the old listing is not trusted for the
+  new process.
+* **Requests in flight** may have executed. Each is answered "outcome
+  unknown" and **never re-sent** to the new server. By default
+  (``--restart-policy idle-only``) the relay then does *not* restart: an
+  exited stdio server may leave work running, and starting a second one
+  beside it is not something the relay can prove safe.
+  ``--restart-policy after-unknown`` restarts anyway, after every in-flight
+  request has been answered "outcome unknown".
+* A request that arrives while the server is being restarted waits for it
+  (bounded); one that cannot be sent is answered "not sent" -- it certainly
+  did not execute. When the restart budget is spent, every later request is
+  answered that way, and the audit log says why.
+
+When the server is gone for good (restart off, refused, or the budget spent)
+the relay stops, as a relay without StateGuard would: the client sees its
+server process end. Requests waiting for a restart are answered "not sent"
+first.
+
+Shadow mode never restarts anything; it logs what it would have done.
 
 Results are never touched, except that the answer to a retried call carries
 the client's request id. They are *checked* (``check_tool_result``): a
@@ -118,9 +145,11 @@ import argparse
 import contextlib
 import itertools
 import json
+import os
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from typing import IO, Any
 
 from stateguard import ContractGuard
@@ -163,6 +192,14 @@ from stateguard.core.models.config import GuardConfig, RepairMode
 OWN_ID_PREFIX = "stateguard-relay:"
 #: Ids of retried tools/call attempts; their answers go to the client under its own id.
 RETRY_ID_PREFIX = "stateguard-retry:"
+#: Id prefix of the ``initialize`` the relay replays to a restarted server.
+REINIT_ID_PREFIX = f"{OWN_ID_PREFIX}init-"
+#: How long a client request waits for a restarting server before it is
+#: answered "not sent".
+RECONNECT_WAIT_SECONDS = 10.0
+
+#: Link to the server process: up, being restarted, or gone for good.
+LINK_UP, LINK_RESTARTING, LINK_DOWN = "up", "restarting", "down"
 
 #: How long a tools/call waits for a listing in flight before it is
 #: validated against what the relay has (and the audit log says so).
@@ -185,6 +222,10 @@ class StdioRelay:
         call_deadline: float | None = None,
         effects: EffectPolicy | None = None,
         retry: str = "shadow",
+        restart: Callable[[], tuple[IO[bytes], IO[bytes]]] | None = None,
+        max_restarts: int = 0,
+        restart_policy: str = "idle-only",
+        restart_backoff: float = 0.1,
     ) -> None:
         self.registry = ToolRegistry(guard)
         self._client_in, self._client_out = client_in, client_out
@@ -207,6 +248,27 @@ class StdioRelay:
         self._client_of: dict[Any, Any] = {}  # retry id -> client id
         self._retry_lock = threading.Lock()
         self._stopped = threading.Event()
+        if restart_policy not in ("idle-only", "after-unknown"):
+            raise ValueError(
+                f"restart_policy must be idle-only or after-unknown, got {restart_policy!r}"
+            )
+        # Restart: a factory for a fresh (server stdin, server stdout) pair.
+        self._restart = restart if max_restarts > 0 else None
+        self._max_restarts = max_restarts
+        self._restart_policy = restart_policy
+        self._restart_backoff = restart_backoff
+        self._restarts = 0
+        self.generation = 0
+        self._link = LINK_UP
+        self._link_cond = threading.Condition()
+        self._link_waiters = 0  # client requests waiting for a restart to finish
+        self._client_gone = False  # the client closed its side: nothing to restart for
+        # The client's initialize, replayed to a restarted server.
+        self._client_init: dict[str, Any] | None = None
+        self._client_init_id: Any = None
+        self._client_initialized = False
+        self._negotiated_version: str | None = None
+        self._reinit_id: str | None = None
         # Freshness: every relay-initiated listing gets an epoch. A call may
         # only be intervened on after a listing whose epoch began after the
         # call arrived has completed -- an older listing in flight cannot
@@ -240,8 +302,21 @@ class StdioRelay:
 
     def _send(self, stream: IO[bytes], lock: threading.Lock, line: bytes) -> None:
         with lock:
-            stream.write(line if line.endswith(b"\n") else line + b"\n")
-            stream.flush()
+            try:
+                stream.write(line if line.endswith(b"\n") else line + b"\n")
+                stream.flush()
+            except ValueError as exc:  # closed by the other side's shutdown
+                raise BrokenPipeError(str(exc)) from exc
+
+    def _send_server(self, line: bytes) -> None:
+        """Write to the *current* server process (the stream is swapped on restart)."""
+        with self._to_server:
+            stream = self._server_in
+            try:
+                stream.write(line if line.endswith(b"\n") else line + b"\n")
+                stream.flush()
+            except ValueError as exc:  # closed: the client left, or a restart replaced it
+                raise BrokenPipeError(str(exc)) from exc
 
     def _send_json(self, stream: IO[bytes], lock: threading.Lock, message: Any) -> None:
         self._send(stream, lock, json.dumps(message, separators=(",", ":")).encode("utf-8"))
@@ -270,7 +345,11 @@ class StdioRelay:
             "params": params,
         }
         self._own_lists.observe_request(message)
-        self._send_json(self._server_in, self._to_server, message)
+        try:
+            self._send_server(self._encode(message))
+        except OSError as exc:
+            self._log("tools_list_unsent", category="E", error=str(exc))
+            self._finish_epoch(epoch, ok=False)
         return epoch
 
     def _finish_epoch(self, epoch: int, *, ok: bool) -> None:
@@ -325,16 +404,21 @@ class StdioRelay:
         except OSError as exc:  # the server's stdin is gone: the server exited
             self._log("transport_closed", category="E", direction="client->server", error=str(exc))
         finally:
+            with self._link_cond:
+                self._client_gone = True
+                self._link = LINK_DOWN  # the client is gone: nothing more to restart for
+                self._link_cond.notify_all()
             with self._to_server, contextlib.suppress(OSError):
                 self._server_in.close()
 
     def _pump_client(self) -> None:
         for line in self._client_in:
             if self._passthrough:
-                self._send(self._server_in, self._to_server, line)
+                self._send_server(line)
                 continue
             message = _parse(line)
             identifier = self._track(message)
+            self._remember_session(message)
             if is_request(message, TOOLS_CALL):
                 self._on_call(line, message, identifier)
                 continue
@@ -373,19 +457,59 @@ class StdioRelay:
         return identifier
 
     def _send_tracked(self, identifier: Any, line: bytes) -> None:
-        """Write a client request to the server, recording it as sent first."""
+        """
+        Write a client message to the server, recording a request as sent first.
+
+        Never writes to a server known to be gone: it waits (bounded) while a
+        restart is in progress, and a request that still cannot go out is
+        answered "not sent" -- it was never written, so it certainly did not
+        execute. A write that *fails* may have delivered part of the request,
+        so that one is UNKNOWN, never "not sent".
+        """
+        if not self._await_link():
+            if identifier is None:
+                self._log("notification_dropped", category="E", reason="server unavailable")
+                return
+            self.ledger.answered_locally(identifier)
+            self._forget(identifier)
+            self._log("not_sent", category="E", id=identifier, reason="server unavailable")
+            with contextlib.suppress(OSError, ValueError):  # the client may be gone too
+                self._send_json(self._client_out, self._to_client, not_sent_response(identifier))
+            return
         if identifier is not None:
             self.ledger.sent(identifier)
         try:
-            self._send(self._server_in, self._to_server, line)
-        except OSError:
+            self._send_server(line)
+        except OSError as exc:
+            self._log("send_failed", category="E", id=identifier, error=str(exc))
             if identifier is not None:
                 self._resolve_unknown(
                     [self.ledger.send_failed(identifier)],
                     Observed.UNKNOWN_TRANSPORT,
                     connection_available=False,
                 )
-            raise
+
+    def _await_link(self) -> bool:
+        """True once the server link is up; False if it is (or stays) down."""
+        with self._link_cond:
+            self._link_waiters += 1
+            try:
+                self._link_cond.wait_for(
+                    lambda: self._link != LINK_RESTARTING, timeout=RECONNECT_WAIT_SECONDS
+                )
+                return self._link == LINK_UP
+            finally:
+                self._link_waiters -= 1
+                self._link_cond.notify_all()
+
+    def _remember_session(self, message: Any) -> None:
+        """What a restarted server needs replayed: the client's initialize."""
+        if is_request(message, "initialize"):
+            params = message.get("params")
+            self._client_init = dict(params) if isinstance(params, dict) else {}
+            self._client_init_id = message.get("id")
+        elif is_notification(message, "notifications/initialized"):
+            self._client_initialized = True
 
     def _surface_unknown(self, *invocations: Any) -> None:
         """Tell each client its request's outcome is unknown (auto); log it (both)."""
@@ -462,7 +586,7 @@ class StdioRelay:
             observed,
             declaration,
             attempts_made=attempts,
-            connection_available=connection_available,
+            connection_available=connection_available and self._link == LINK_UP,
         )
         acted = verdict.retry and self._retry_mode == "auto"
         self._log(
@@ -685,18 +809,153 @@ class StdioRelay:
 
     def pump_server(self) -> None:
         try:
-            self._pump_server()
-            if not self._passthrough:
-                # The server's stdout closed: nothing in flight will be answered.
-                self._resolve_unknown(
-                    self.ledger.transport_closed(),
-                    Observed.UNKNOWN_TRANSPORT,
-                    connection_available=False,
-                )
+            while True:
+                self._pump_server()
+                if self._passthrough or not self._on_server_lost():
+                    break
         except OSError as exc:  # the client's stdout is gone
             self._log("transport_closed", category="E", direction="server->client", error=str(exc))
         finally:
+            with self._link_cond:
+                self._link = LINK_DOWN
+                self._link_cond.notify_all()
+                # Requests that were waiting for a restart are answered "not
+                # sent" before the relay stops -- never left without an answer.
+                self._link_cond.wait_for(lambda: self._link_waiters == 0, timeout=2.0)
             self._stopped.set()
+
+    def _set_link(self, state: str) -> None:
+        with self._link_cond:
+            self._link = state
+            self._link_cond.notify_all()
+
+    def _on_server_lost(self) -> bool:
+        """
+        The server's stdout closed. Settle what was in flight; restart if safe.
+        True when a new server is connected and pumping should go on.
+        """
+        will_try = self._restart is not None and not self._shadow and not self._client_gone
+        # From here no request is written to the dead process.
+        self._set_link(LINK_RESTARTING if will_try else LINK_DOWN)
+        # Nothing in flight will be answered: each is UNKNOWN, told so, and
+        # never re-sent -- not even to a restarted server.
+        unknown = [inv for inv in self.ledger.transport_closed() if inv is not None]
+        self._resolve_unknown(unknown, Observed.UNKNOWN_TRANSPORT, connection_available=False)
+        self._abandon_own_listings()
+        self._log(
+            "server_lost",
+            category="E",
+            generation=self.generation,
+            in_flight_unknown=len(unknown),
+            restarts_used=self._restarts,
+        )
+        if self._restart is None or self._client_gone:
+            return False
+        if self._shadow:
+            self._log("restart_would_attempt", category="E", in_flight_unknown=len(unknown))
+            return False
+        if unknown and self._restart_policy == "idle-only":
+            self._log(
+                "restart_refused",
+                category="E",
+                in_flight_unknown=len(unknown),
+                reason="requests in flight may have executed; a new server beside work the "
+                "old one may still be doing is not provably safe (restart policy idle-only)",
+            )
+            self._set_link(LINK_DOWN)
+            return False
+        while self._restarts < self._max_restarts:
+            self._restarts += 1
+            if self._stopped.wait(self._restart_backoff * (self._restarts - 1)):
+                break
+            try:
+                server_in, server_out = self._restart()
+            except Exception as exc:  # noqa: BLE001 -- a failed restart is counted, not fatal
+                self._log("restart_failed", category="E", attempt=self._restarts, error=str(exc))
+                continue
+            self._connect(server_in, server_out)
+            return True
+        self._log("restart_exhausted", category="E", restarts_used=self._restarts)
+        self._set_link(LINK_DOWN)
+        return False
+
+    def _connect(self, server_in: IO[bytes], server_out: IO[bytes]) -> None:
+        """Swap in a restarted server; re-initialize and re-list before trusting it."""
+        with self._to_server:
+            old = self._server_in
+            self._server_in = server_in
+        with contextlib.suppress(OSError):
+            old.close()
+        self._server_out = server_out
+        self.generation += 1
+        # The old listing describes a process that no longer exists.
+        self._listing_stale = True
+        self._listing_ready.clear()
+        self._listed = False
+        self._log(
+            "server_restarted", category="E", generation=self.generation, attempt=self._restarts
+        )
+        if self._client_init is not None:
+            # initialize-era session: replay the handshake before anything else.
+            self._reinit_id = f"{REINIT_ID_PREFIX}{self.generation}"
+            message = {
+                "jsonrpc": JSONRPC_VERSION,
+                "id": self._reinit_id,
+                "method": "initialize",
+                "params": self._client_init,
+            }
+            try:
+                self._send_server(self._encode(message))
+            except OSError as exc:
+                self._log("reinit_unsent", category="E", error=str(exc))
+            return  # the link comes up when the server answers
+        self._set_link(LINK_UP)
+        self._request_listing()
+
+    def _on_reinit(self, message: dict[str, Any]) -> None:
+        """The restarted server answered the replayed initialize."""
+        self._reinit_id = None
+        result = message.get("result")
+        version = result.get("protocolVersion") if isinstance(result, dict) else None
+        if version is None or (
+            self._negotiated_version is not None and version != self._negotiated_version
+        ):
+            self._log(
+                "reinit_failed",
+                category="D",
+                expected=self._negotiated_version,
+                got=version,
+                error=message.get("error"),
+            )
+            # Not a server this session can use: close it. Its exit is seen as
+            # one more lost server, so the attempt counts against the budget.
+            with self._to_server, contextlib.suppress(OSError):
+                self._server_in.close()
+            return
+        if self._client_initialized:
+            try:
+                self._send_server(
+                    self._encode(
+                        {"jsonrpc": JSONRPC_VERSION, "method": "notifications/initialized"}
+                    )
+                )
+            except OSError as exc:
+                self._log("reinit_unsent", category="E", error=str(exc))
+                return
+        self._log("reinitialized", category="D", generation=self.generation, version=version)
+        self._set_link(LINK_UP)
+        self._request_listing()
+
+    def _abandon_own_listings(self) -> None:
+        """Listings requested from a dead server will never complete."""
+        with self._listing_done:
+            epochs = set(self._epoch_of.values())
+            self._epoch_of.clear()
+            self._first_page_ids.clear()
+        for epoch in epochs:
+            self._finish_epoch(epoch, ok=False)
+        self._own_lists = ToolListAccumulator()
+        self._listing_ready.set()  # calls are not held for a listing that cannot come
 
     def _pump_server(self) -> None:
         for line in self._server_out:
@@ -705,6 +964,21 @@ class StdioRelay:
                 continue
             message = _parse(line)
             identifier = request_id(message)
+            if (
+                is_response(message)
+                and self._reinit_id is not None
+                and identifier == self._reinit_id
+            ):
+                self._on_reinit(message)
+                continue
+            if (
+                is_response(message)
+                and self._client_init_id is not None
+                and identifier == self._client_init_id
+                and isinstance(message.get("result"), dict)
+            ):
+                version = message["result"].get("protocolVersion")
+                self._negotiated_version = version if isinstance(version, str) else None
             if (
                 is_response(message)
                 and isinstance(identifier, str)
@@ -832,6 +1106,22 @@ def unknown_outcome_response(identifier: Any, reason: str) -> dict[str, Any]:
     }
 
 
+def not_sent_response(identifier: Any) -> dict[str, Any]:
+    """The relay's answer for a request it never wrote: it certainly did not execute."""
+    return {
+        "jsonrpc": JSONRPC_VERSION,
+        "id": identifier,
+        "error": {
+            "code": UNKNOWN_OUTCOME_CODE,
+            "message": (
+                "MCP server unavailable: the request was not sent and did not execute. "
+                "It is safe to send again once the server is back."
+            ),
+            "data": {UNKNOWN_OUTCOME_KEY: "not_sent"},
+        },
+    }
+
+
 def _intervenes(request: ToolCallRequest, outcome: ToolCallOutcome) -> bool:
     """
     Whether auto mode would do anything but forward the call as received.
@@ -889,6 +1179,19 @@ def main(argv: list[str] | None = None) -> int:
         help="Retry tools declared read_only/idempotent (default: shadow, log only).",
     )
     parser.add_argument(
+        "--restart",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Restart the server process if it exits, at most N times (default: 0, never).",
+    )
+    parser.add_argument(
+        "--restart-policy",
+        choices=["idle-only", "after-unknown"],
+        default="idle-only",
+        help="idle-only: never restart while a request's outcome is unknown (default).",
+    )
+    parser.add_argument(
         "--passthrough",
         action="store_true",
         help="Kill switch: relay bytes only, StateGuard off. The measurement baseline.",
@@ -901,8 +1204,24 @@ def main(argv: list[str] | None = None) -> int:
 
     mode = RepairMode.SHADOW if args.shadow else RepairMode.AUTO
     audit = open(args.audit, "a", encoding="utf-8") if args.audit else sys.stderr  # noqa: SIM115
-    server = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    processes = [subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE)]
+    server = processes[0]
     assert server.stdin is not None and server.stdout is not None
+
+    def restart() -> tuple[IO[bytes], IO[bytes]]:
+        old = processes[-1]
+        if old.poll() is None:  # stdout closed but still running: stop it first
+            old.terminate()
+            try:
+                old.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                old.kill()
+                old.wait()
+        new = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        assert new.stdin is not None and new.stdout is not None
+        processes.append(new)
+        return new.stdin, new.stdout
+
     relay = StdioRelay(
         ContractGuard.with_mcp(config=GuardConfig(mode=mode)),
         sys.stdin.buffer,
@@ -916,6 +1235,9 @@ def main(argv: list[str] | None = None) -> int:
         call_deadline=args.call_deadline,
         effects=EffectPolicy.from_file(args.effects) if args.effects else None,
         retry=args.retry,
+        restart=restart,
+        max_restarts=args.restart,
+        restart_policy=args.restart_policy,
     )
     relay._log(
         "relay_started",
@@ -925,9 +1247,16 @@ def main(argv: list[str] | None = None) -> int:
     to_server = threading.Thread(target=relay.pump_client, daemon=True)
     to_server.start()
     threading.Thread(target=relay.run_deadlines, daemon=True).start()
-    relay.pump_server()  # until the server closes its stdout
-    return server.wait()
+    relay.pump_server()  # until the server closes its stdout for good
+    return processes[-1].wait()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    # The client-side pump is a daemon thread that may still be blocked reading
+    # stdin. Interpreter shutdown with a thread holding stdin's lock aborts the
+    # process (SIGABRT), so flush what was written and exit directly.
+    with contextlib.suppress(Exception):
+        sys.stdout.flush()
+        sys.stderr.flush()
+    os._exit(code)

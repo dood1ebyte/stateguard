@@ -12,6 +12,8 @@ Tools (paginated two per page):
                                             announces tools/list_changed
   broken(...)                           -- uses allOf: StateGuard cannot read it
   flip()                                -- triggers the change above
+
+The notification ``test/exit`` makes the process exit while idle.
 """
 
 import json
@@ -55,6 +57,8 @@ for line in sys.stdin:
     LOG.flush()
     message = json.loads(line)
     method, ident = message.get("method"), message.get("id")
+    if method == "test/exit":  # die while idle (a notification: nothing is in flight)
+        sys.exit(0)
     if ident is None:
         continue
     if method == "tools/list":
