@@ -57,7 +57,7 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Contract diff (sound COMPATIBLE) | COMPLETE | `jsonschema/diff.py`; mutation properties | n/a | |
 | Stale-schema prevention (library) | COMPLETE | registry replaces unconditionally; cache keys on content | n/a | Correct *given* a fresh listing. |
 | Stale-listing detection (relay, protocol 2026-07-28) | **UNSAFE** | SDK 2.3.0 `mcp/server/mcpserver/context.py:136`, `mcp/shared/subscriptions.py:84`; relay never opens `subscriptions/listen` | auto | **VERIFIED from spec source**: list-changed rides only on listen streams. If the client does not subscribe, the relay validates against a stale listing indefinitely. |
-| A: opposite-meaning rename guard | **UNSAFE** | probe: 102/132 single-word opposite renames FORWARDED (`unlock`→`lock`, `invisible`→`visible`, `maximum`→`minimum`, `no_cache`→`cache`) | auto | VERIFIED. Multi-word `max_price`/`min_price` was already caught; single tokens, negator tokens and one-edit opposites (`unable`/`enable`) were not. |
+| A: opposite-meaning rename guard | COMPLETE (T1, `dc67d52`) | was: 102/132 single-word opposite renames FORWARDED. Now 0/152 (probe), 0/118 (calibration family) | both | VERIFIED. `fuzzy.opposed_names` → contradiction → TrustPolicy AMBIGUOUS. |
 | JSON Schema 2020-12 coverage | PARTIAL | probe: refused `allOf` (even single `$ref`), `uniqueItems`, `multipleOf`, `min/maxProperties`, `dependentRequired`, `contains`, `contentMediaType`, `$id`/`$anchor`, `true` subschema, unknown keywords | n/a | VERIFIED. Refusal makes the tool unvalidated, not broken, *if the host fails open*. |
 | Relay fail-open on unreadable schema | **UNSAFE** | `stdio_proxy.py` default `--unreadable refuse` | auto | VERIFIED. Valid calls to valid tools are blocked. |
 | Relay fail-open on internal error | **UNSAFE** | `stdio_proxy.py:_on_call`: `ForwardingInvariantError` in auto → `-32603`; any other exception escapes the pump thread | auto | INFERRED (read). A StateGuard bug becomes an outage. |
@@ -98,7 +98,7 @@ list-changed delivery at 2026-07-28.
 
 | # | Task | Priority class | Status | Depends on |
 |---|---|---|---|---|
-| T1 | Opposite-meaning rename guard (extend contradiction evidence) + calibration family | 1 unsafe defect | IN PROGRESS | — |
+| T1 | Opposite-meaning rename guard (extend contradiction evidence) + calibration family | 1 unsafe defect | DONE `dc67d52` | — |
 | T2 | Relay call path fails open: unexpected error / gate failure → raw passthrough + Z record; `--unreadable` default `forward` | 1 unsafe defect | TODO | — |
 | T3 | Stale-listing safety at 2026-07-28: never act (repair/refuse/escalate) on a listing not known fresh — re-list then re-decide | 2 spec compat | TODO | T2 |
 | T4 | Measurement vertical slice: seeded workload × fault injectors × arms (raw, naive retry, shadow, auto) → per-category report incl. Z | 3 measurement | TODO | T1–T3 |
@@ -130,12 +130,30 @@ safety boundary / Z modes / Shadow-first / Auto conditions / evidence).
   existing must-apply calibration family.
 - **Shadow-first:** not needed — it only removes Auto actions.
 - **Auto:** active in both modes (it gates APPLY).
-- **Evidence:** see measured results below.
+- **Evidence:** M1 below. No Auto *promotion* is involved: the rule only
+  withholds.
 
 ## Measured results
 
 (Populated as tasks land. Synthetic corpora are labelled as such; nothing here
 is a production failure rate.)
+
+**M1 — opposite-name false repairs (Category A / Z), T1. All corpora
+synthetic; VERIFIED by running them.**
+
+| Measure | Before (`41e7c5c`) | After (`dc67d52`) |
+|---|---|---|
+| Calibration family `must_abstain_opposites.json` (118 cases, generated from 60 pairs; only pairs similar enough to be proposed) | 103 wrong renames applied | 0 |
+| Calibration applied precision, whole corpus (200 cases) | 28.7% (143 applied) | 100% (41 applied) |
+| Calibration must-apply repairs | 41 | 41 (unchanged) |
+| MCP probe, 152 directions (pairs I designed against) | 102 of 132 forwarded (first 132) | 0 forwarded |
+| Hold-out probe, 118 directions (*not* designed against) | — | 4 forwarded by the first rule (`online`/`offline`, `uppercase`/`lowercase`), then covered. The hold-out is no longer independent. |
+| Rule misfires on legitimate drift: 1,161 variants (deletion, transposition, case, separator, abbreviation) of 62 real parameter names | — | 0 |
+
+Residual risk (INFERRED): opposite pairs outside the lexicon and affix rules
+that are also similar enough to be proposed. The hold-out suggests a residual
+in the low single-digit percent of such pairs. This has not been measured on
+real traffic.
 
 ## Known risks / unresolved categories
 
@@ -147,4 +165,4 @@ is a production failure rate.)
 
 ## Next task
 
-T1 (in progress), then T2.
+T2: the relay call path fails open.
