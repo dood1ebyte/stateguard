@@ -139,22 +139,36 @@ def test_a_schema_change_mid_session_is_picked_up(session: Session) -> None:
     assert any(c["tool"] == "search" and c["breaking"] for c in change["changes"])
 
 
-def test_an_unreadable_schema_is_refused_and_never_reaches_the_server(session: Session) -> None:
+def test_an_unreadable_schema_is_forwarded_unvalidated_by_default(session: Session) -> None:
+    """The relay is in the call path, so it fails open: no relay, same result."""
     session.request("server/discover", {})
     _, result = session.call("broken", {"a": 1})
-    assert (
-        result["isError"] is True and "cannot read the input schema" in result["content"][0]["text"]
-    )
-    assert not [m for m in session.received() if m.get("params", {}).get("name") == "broken"]
+    assert _echoed(result) == {"a": 1}
+    assert session.decisions()[-1]["action"] == "unvalidated"
+    assert "policy" in session.decisions()[-1]["reason"]
 
 
-def test_unreadable_forward_policy(tmp_path: Path) -> None:
-    s = Session(tmp_path, "--unreadable", "forward")
+def test_unreadable_refuse_policy_is_an_explicit_opt_in(tmp_path: Path) -> None:
+    s = Session(tmp_path, "--unreadable", "refuse")
     try:
         s.request("server/discover", {})
         _, result = s.call("broken", {"a": 1})
-        assert _echoed(result) == {"a": 1}
-        assert s.decisions()[-1]["action"] == "unvalidated"
+        assert result["isError"] is True
+        assert "cannot read the input schema" in result["content"][0]["text"]
+        assert not [m for m in s.received() if m.get("params", {}).get("name") == "broken"]
+    finally:
+        s.close()
+
+
+def test_passthrough_is_a_byte_relay(tmp_path: Path) -> None:
+    """The kill switch: nothing is repaired, listed or logged per call."""
+    s = Session(tmp_path, "--passthrough")
+    try:
+        s.request("server/discover", {})
+        _, result = s.call("search", {"qury": "cats", "limit": "3"})
+        assert _echoed(result) == {"qury": "cats", "limit": "3"}
+        assert not [m for m in s.received() if str(m.get("id", "")).startswith("stateguard-relay:")]
+        assert s.decisions() == []
     finally:
         s.close()
 

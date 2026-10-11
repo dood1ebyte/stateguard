@@ -246,10 +246,15 @@ change (added, removed, breaking, description changed) and every call
 (action, what auto mode would do, field decisions with trust) — with field
 names, never argument values.
 
-Two policies are explicit: a call to a tool the relay has no definition for
-is forwarded for the server to answer; a call to a tool whose schema
-StateGuard cannot read is refused (`--unreadable forward` lets it through
-unvalidated). `--shadow` observes without changing anything.
+The relay is in the call path, so it **fails open**: when StateGuard cannot
+decide, the call goes to the server exactly as the client sent it. A call to
+a tool the relay has no definition for is forwarded for the server to
+answer. A call to a tool whose schema StateGuard cannot read is forwarded
+unvalidated (`--unreadable refuse` blocks it instead). An internal
+StateGuard error forwards the original call and is logged as category `Z`;
+it never reaches the client as an error and never stops the relay.
+`--shadow` observes without changing anything; `--passthrough` turns
+StateGuard off entirely, which is the baseline for measurement.
 
 It speaks both protocol generations: the `initialize` handshake, and the
 stateless revision (`2026-07-28`) in which every request carries its

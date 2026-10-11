@@ -184,9 +184,10 @@ returning the outcome. The check enforces four things:
 These invariants hold by construction, and the check exists so that a
 future bug fails loudly instead of forwarding something wrong. Because the
 error signals a StateGuard bug, never a property of the input, it is not
-mapped to an action. The relay example handles it differently by mode. In
-shadow mode it forwards the call unvalidated. In auto mode it answers with
-a JSON-RPC internal error (`-32603`).
+mapped to an action. The relay example fails open on it in both modes: it
+forwards the client's original call, unrepaired, and logs the failure as
+category Z (StateGuard-induced). The client's arguments are not what
+failed; StateGuard's payload is.
 
 ---
 
@@ -273,9 +274,12 @@ outcome:
 
 **What to do with such a tool is your policy**, decided once per tool:
 
-- **Block its calls.** This is the relay example's default
-  (`--unreadable refuse`).
-- **Pass them through unvalidated** (`--unreadable forward`).
+- **Pass them through unvalidated.** This is the relay example's default
+  (`--unreadable forward`). A host in the call path should fail open: the
+  server still validates, and StateGuard not being able to read a schema is
+  not evidence that the call is wrong.
+- **Block its calls** (`--unreadable refuse`). This is a deliberate
+  fail-closed choice that blocks calls the server may accept.
 
 StateGuard will not claim to have checked a call it could not check, and it
 will not validate against a looser schema it invented.
@@ -649,7 +653,7 @@ complete MCP stdio relay in 400 lines, with no MCP SDK. An MCP client
 launches it in place of the server:
 
 ```bash
-python examples/mcp/stdio_proxy.py [--shadow] [--audit FILE] [--unreadable refuse|forward] -- python my_server.py
+python examples/mcp/stdio_proxy.py [--shadow | --passthrough] [--audit FILE] [--unreadable forward|refuse] -- python my_server.py
 ```
 
 What the relay does:

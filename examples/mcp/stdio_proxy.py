@@ -29,12 +29,22 @@ client as the exact bytes the server produced.
 
 Policy, stated rather than buried
 ---------------------------------
+The relay sits in the call path, so it **fails open**: whenever StateGuard
+cannot decide, the call goes to the server exactly as the client sent it --
+the behaviour the client would have had with no relay at all.
+
 * A call to a tool the relay has no definition for is forwarded unvalidated
   -- whether the tool exists is the server's question, and it will answer it.
-* A call to a tool whose schema StateGuard cannot read is refused by
-  default (``--unreadable refuse``): StateGuard cannot vouch for it. Pass
-  ``--unreadable forward`` to let such calls through unvalidated instead.
-  Either way the audit log says so.
+* A call to a tool whose schema StateGuard cannot read is forwarded
+  unvalidated by default (``--unreadable forward``). ``--unreadable refuse``
+  blocks such calls instead; that is a deliberate fail-closed choice, and it
+  blocks calls the server may well accept.
+* An internal StateGuard error -- an exception, or the forwarding gate
+  rejecting StateGuard's own payload -- forwards the original call and is
+  logged as ``category: "Z"`` (StateGuard-induced). It never turns into an
+  error the client sees, and never stops the relay.
+* ``--passthrough`` turns StateGuard off entirely: a byte relay, the
+  baseline every measurement is compared against.
 
 Audit log
 ---------
@@ -79,7 +89,6 @@ from stateguard.adapters.mcp.jsonrpc import (
     TOOLS_CALL,
     TOOLS_LIST,
     TOOLS_LIST_CHANGED,
-    error_response,
     is_notification,
     is_request,
     is_response,
@@ -108,13 +117,16 @@ class StdioRelay:
         server_out: IO[bytes],
         audit: IO[str],
         *,
-        unreadable: str = "refuse",
+        unreadable: str = "forward",
+        passthrough: bool = False,
     ) -> None:
         self.registry = ToolRegistry(guard)
         self._client_in, self._client_out = client_in, client_out
         self._server_in, self._server_out = server_in, server_out
         self._audit = audit
         self._unreadable = unreadable
+        # The kill switch: relay bytes, decide nothing, learn nothing.
+        self._passthrough = passthrough
         self._client_lists = ToolListAccumulator()
         self._own_lists = ToolListAccumulator()
         self._own_ids = (f"{OWN_ID_PREFIX}{n}" for n in itertools.count(1))
@@ -187,13 +199,20 @@ class StdioRelay:
 
     def pump_client(self) -> None:
         for line in self._client_in:
+            if self._passthrough:
+                self._send(self._server_in, self._to_server, line)
+                continue
             message = _parse(line)
-            first_versioned = self._remember_protocol(message)
             if is_request(message, TOOLS_CALL):
                 self._on_call(line, message)
                 continue
-            if is_request(message, TOOLS_LIST):
-                self._client_lists.observe_request(message)
+            try:
+                first_versioned = self._remember_protocol(message)
+                if is_request(message, TOOLS_LIST):
+                    self._client_lists.observe_request(message)
+            except Exception as exc:  # noqa: BLE001 -- fail open; see the module docstring
+                self._internal_error("client message", exc)
+                first_versioned = False
             self._send(self._server_in, self._to_server, line)
             # Learn the tools before the first call: after the handshake under
             # the initialize-based protocol, at the first versioned request
@@ -204,6 +223,16 @@ class StdioRelay:
                 self._request_listing()
         with self._to_server:
             self._server_in.close()
+
+    def _internal_error(self, where: str, exc: BaseException, **fields: Any) -> None:
+        """Record a StateGuard failure (category Z). The caller fails open."""
+        self._log(
+            "internal_error",
+            category="Z",
+            where=where,
+            error=f"{type(exc).__name__}: {exc}",
+            **fields,
+        )
 
     def _remember_protocol(self, message: Any) -> bool:
         """Record the request's protocol _meta; True the first time one is seen."""
@@ -218,11 +247,35 @@ class StdioRelay:
         return first
 
     def _on_call(self, line: bytes, message: Any) -> None:
+        """
+        Decide, then send exactly once.
+
+        ``_decide`` only computes where the call goes and with which bytes;
+        this method does the one write. So an exception during the decision
+        fails open (the original line goes to the server) and an exception
+        during the write cannot cause a second send -- a relay that retried
+        a write it could not confirm would risk executing the call twice.
+        """
+        try:
+            to_server, payload = self._decide(line, message)
+        except Exception as exc:  # noqa: BLE001 -- fail open; see the module docstring
+            self._internal_error("tools/call", exc, id=request_id(message), action="unvalidated")
+            to_server, payload = True, line
+        if to_server:
+            self._send(self._server_in, self._to_server, payload)
+        else:
+            self._send(self._client_out, self._to_client, payload)
+
+    @staticmethod
+    def _encode(message: Any) -> bytes:
+        return json.dumps(message, separators=(",", ":")).encode("utf-8")
+
+    def _decide(self, line: bytes, message: Any) -> tuple[bool, bytes]:
+        """``(to_server, bytes)`` for one ``tools/call``. Never writes to a stream."""
         try:
             request = ToolCallRequest.parse(message)
         except MalformedMessageError:
-            self._send(self._server_in, self._to_server, line)  # the server's to reject
-            return
+            return True, line  # the server's to reject
 
         stale = not self._listing_ready.wait(LISTING_WAIT_SECONDS) or self._listing_stale
         try:
@@ -235,31 +288,14 @@ class StdioRelay:
                 action="unvalidated",
                 reason="no definition for this tool; forwarded for the server to answer",
             )
-            self._send(self._server_in, self._to_server, line)
-            return
+            return True, line
         except ToolSchemaUnusableError as exc:
-            self._on_unreadable(line, request, exc)
-            return
+            return self._on_unreadable(line, request, exc)
         except ForwardingInvariantError as exc:
-            if self._shadow:
-                self._log(
-                    "call",
-                    id=request.id,
-                    tool=request.name,
-                    action="unvalidated",
-                    reason=f"StateGuard internal error; forwarded (shadow): {exc}",
-                )
-                self._send(self._server_in, self._to_server, line)
-                return
-            self._log(
-                "call", id=request.id, tool=request.name, action="internal_error", reason=str(exc)
-            )
-            self._send_json(
-                self._client_out,
-                self._to_client,
-                error_response(request.id, -32603, f"StateGuard internal error: {exc}"),
-            )
-            return
+            # The gate rejected StateGuard's *own* payload. The client's
+            # arguments are not suspect -- forward those, as if no relay.
+            self._internal_error("forwarding gate", exc, id=request.id, action="unvalidated")
+            return True, line
 
         self._log(
             "call",
@@ -281,15 +317,14 @@ class StdioRelay:
         )
         forwarded = forward_message(request, outcome)
         if forwarded is None:
-            self._send_json(self._client_out, self._to_client, refusal_response(request, outcome))
-        elif forwarded == request.message:
-            self._send(self._server_in, self._to_server, line)  # byte-for-byte
-        else:
-            self._send_json(self._server_in, self._to_server, forwarded)
+            return False, self._encode(refusal_response(request, outcome))
+        if forwarded == request.message:
+            return True, line  # byte-for-byte
+        return True, self._encode(forwarded)
 
     def _on_unreadable(
         self, line: bytes, request: ToolCallRequest, exc: ToolSchemaUnusableError
-    ) -> None:
+    ) -> tuple[bool, bytes]:
         if self._unreadable == "forward" or self._shadow:
             self._log(
                 "call",
@@ -299,8 +334,7 @@ class StdioRelay:
                 reason=f"schema unreadable; forwarded ({'shadow' if self._shadow else 'policy'}): "
                 f"{exc.cause}",
             )
-            self._send(self._server_in, self._to_server, line)
-            return
+            return True, line
         self._log(
             "call",
             id=request.id,
@@ -312,12 +346,15 @@ class StdioRelay:
             f"Not sent: StateGuard cannot read the input schema of {request.name!r}, "
             f"so it cannot check calls to it. {exc.cause}"
         )
-        self._send_json(self._client_out, self._to_client, tool_error_response(request, text))
+        return False, self._encode(tool_error_response(request, text))
 
     # -- server -> client ----------------------------------------------------
 
     def pump_server(self) -> None:
         for line in self._server_out:
+            if self._passthrough:
+                self._send(self._client_out, self._to_client, line)
+                continue
             message = _parse(line)
             identifier = request_id(message)
             if (
@@ -325,16 +362,24 @@ class StdioRelay:
                 and isinstance(identifier, str)
                 and identifier.startswith(OWN_ID_PREFIX)
             ):
-                self._on_own_listing(message)
+                try:
+                    self._on_own_listing(message)
+                except Exception as exc:  # noqa: BLE001 -- fail open
+                    self._internal_error("relay tools/list", exc)
+                    self._listing_ready.set()  # never hold calls on a listing that failed
                 continue  # the client never asked for this one
-            if is_response(message):
-                listing = self._client_lists.observe_response(message)
-                if listing is not None:
-                    self._sync(listing, source="client tools/list")
-            elif is_notification(message, TOOLS_LIST_CHANGED):
-                self._listing_stale = True
-                self._listing_ready.clear()
-                self._request_listing()
+            try:
+                if is_response(message):
+                    listing = self._client_lists.observe_response(message)
+                    if listing is not None:
+                        self._sync(listing, source="client tools/list")
+                elif is_notification(message, TOOLS_LIST_CHANGED):
+                    self._listing_stale = True
+                    self._listing_ready.clear()
+                    self._request_listing()
+            except Exception as exc:  # noqa: BLE001 -- fail open
+                self._internal_error("server message", exc)
+                self._listing_ready.set()
             self._send(self._client_out, self._to_client, line)  # untouched
 
     def _on_own_listing(self, message: Any) -> None:
@@ -367,8 +412,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--unreadable",
         choices=["refuse", "forward"],
-        default="refuse",
-        help="Calls to a tool whose schema StateGuard cannot read.",
+        default="forward",
+        help="Calls to a tool whose schema StateGuard cannot read (default: forward, unvalidated).",
+    )
+    parser.add_argument(
+        "--passthrough",
+        action="store_true",
+        help="Kill switch: relay bytes only, StateGuard off. The measurement baseline.",
     )
     parser.add_argument("server", nargs=argparse.REMAINDER, help="-- then the server command")
     args = parser.parse_args(argv)
@@ -388,8 +438,13 @@ def main(argv: list[str] | None = None) -> int:
         server.stdout,
         audit,
         unreadable=args.unreadable,
+        passthrough=args.passthrough,
     )
-    relay._log("relay_started", mode=mode.value, server=command)
+    relay._log(
+        "relay_started",
+        mode="passthrough" if args.passthrough else mode.value,
+        server=command,
+    )
     to_server = threading.Thread(target=relay.pump_client, daemon=True)
     to_server.start()
     relay.pump_server()  # until the server closes its stdout

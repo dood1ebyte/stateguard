@@ -141,6 +141,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limitations.
 
 ### Fixed
+- **The stdio relay failed closed.** By default it refused every call to a
+  tool whose schema StateGuard cannot read (valid JSON Schema such as
+  `allOf` or `uniqueItems`), so valid calls to valid tools were blocked. An
+  internal StateGuard error in auto mode reached the client as `-32603`, and
+  any other exception escaped the relay thread and stopped all relaying.
+  The relay now fails open: it forwards the original call exactly once and
+  logs the failure as category `Z`. `--unreadable` defaults to `forward`,
+  and `--passthrough` is a kill switch that turns StateGuard off.
 - **Opposite-meaning parameter names were renamed onto each other.**
   `unlock` became `lock`, `invisible` became `visible`, `maximum` became
   `minimum`, `no_cache` became `cache`, and the call was forwarded meaning the
