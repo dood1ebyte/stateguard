@@ -65,9 +65,19 @@ from stateguard.adapters.mcp.registry import (
     ToolRegistry,
     ToolState,
 )
+from stateguard.adapters.mcp.results import (
+    ResultCheck,
+    ResultIssue,
+    ResultIssueKind,
+    check_tool_result,
+)
 
 __all__ = [
     "DEFAULT_CACHE_SIZE",
+    "ResultCheck",
+    "ResultIssue",
+    "ResultIssueKind",
+    "check_tool_result",
     "Effect",
     "EffectDeclaration",
     "EffectPolicy",

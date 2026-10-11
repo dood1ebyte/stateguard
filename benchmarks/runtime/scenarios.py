@@ -243,6 +243,36 @@ def build(seed: int = 0, *, corpus: Corpus | None = None, per_fault: int = 8) ->
     fault("I", "response_lost_after_execute", {0: act.DROP_RESPONSE}, timeout=0.6)
     fault("I", "stdio_kill_after_execute", {0: act.CLOSE_AFTER_EXECUTE}, timeout=0.6)
     fault("J", "duplicate_response", {0: act.DUPLICATE_RESPONSE})
+    # A result that breaks the tool's own outputSchema, delivered as a success.
+    weather = {
+        "name": "get_weather",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+        "outputSchema": {
+            "type": "object",
+            "properties": {"temp_c": {"type": "number"}, "summary": {"type": "string"}},
+            "required": ["temp_c"],
+        },
+        "x-structured": {"temp_c": 21.5, "summary": "clear"},
+        "x-bad-structured": {"temp_c": "warm", "summary": 3},
+    }
+    for i in range(per_fault):
+        scenarios.append(
+            Scenario(
+                id=f"H:output_schema_violation:{i}",
+                category="H",
+                injector="output_schema_violation",
+                tools=[*tools, weather],
+                tool="get_weather",
+                arguments={"city": f"city-{i}"},
+                intended={"city": f"city-{i}"},
+                plan={0: act.BAD_STRUCTURED},
+            )
+        )
+
     # An expired credential stays expired: a retry sees the same answer.
     fault("K", "auth_expired", {0: act.AUTH_EXPIRED, 1: act.AUTH_EXPIRED})
     return scenarios

@@ -78,6 +78,9 @@ class ServerAction(StrEnum):
     TRANSIENT_ERROR = "transient_error"  # do not execute, answer isError (temporary)
     AUTH_EXPIRED = "auth_expired"  # do not execute, answer a JSON-RPC auth error
     DELAYED_RESPONSE = "delayed_response"  # execute, answer correctly after DELAY_SECONDS
+    # execute, answer success with structuredContent breaking the tool's
+    # outputSchema (the definition's "x-bad-structured")
+    BAD_STRUCTURED = "bad_structured"
 
 
 #: How late a DELAYED_RESPONSE answer is.
@@ -294,13 +297,16 @@ class ScriptedServer:
         if action is ServerAction.TOOL_ERROR:
             self._reply(writer, identifier, _error_result(f"{name} failed while executing"))
             return True
-        result = {
+        result: dict[str, Any] = {
             "resultType": "complete",
             "content": [
                 {"type": "text", "text": json.dumps({"tool": name, "arguments": arguments})}
             ],
             "isError": False,
         }
+        if "outputSchema" in tool.definition:
+            key = "x-bad-structured" if action is ServerAction.BAD_STRUCTURED else "x-structured"
+            result["structuredContent"] = tool.definition.get(key, {})
         if action is ServerAction.DELAYED_RESPONSE:
             import time
 

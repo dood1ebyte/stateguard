@@ -72,7 +72,10 @@ default, ``--retry shadow``, logs every decision and retries nothing.
 Shadow mode logs what it would have done and changes nothing.
 
 Results are never touched, except that the answer to a retried call carries
-the client's request id. A response from the server is written to the
+the client's request id. They are *checked* (``check_tool_result``): a
+result that is not a ``CallToolResult``, or whose ``structuredContent``
+breaks the tool's ``outputSchema``, is logged as category H -- and delivered
+exactly as the server sent it. A response from the server is written to the
 client as the exact bytes the server produced.
 
 Policy, stated rather than buried
@@ -135,6 +138,7 @@ from stateguard.adapters.mcp import (
     ToolNotFoundError,
     ToolRegistry,
     ToolSchemaUnusableError,
+    check_tool_result,
     decide_retry,
     forward_message,
     refusal_response,
@@ -491,9 +495,30 @@ class StdioRelay:
             self._calls.pop(client_id, None)
             self._attempts.pop(client_id, None)
 
+    def _check_result(self, client_id: Any, message: dict[str, Any]) -> None:
+        """Log a tools/call result that breaks its tool's contract. Never alters it."""
+        if "result" not in message:
+            return
+        invocation = self.ledger.get(client_id)
+        if invocation is None or invocation.method != TOOLS_CALL:
+            return
+        entry = self.registry.find(invocation.tool) if invocation.tool else None
+        check = check_tool_result(
+            entry.definition if entry is not None else None, message["result"]
+        )
+        if check.issues:
+            self._log(
+                "result_check",
+                category="H" if not check.ok else None,
+                id=client_id,
+                tool=invocation.tool,
+                **check.to_dict(),
+            )
+
     def _deliver_as(self, client_id: Any, message: dict[str, Any]) -> None:
         """Write a retried call's answer to the client, under the client's id."""
         self._forget(client_id)
+        self._check_result(client_id, message)
         self._send_json(self._client_out, self._to_client, {**message, "id": client_id})
 
     def _internal_error(self, where: str, exc: BaseException, **fields: Any) -> None:
@@ -736,6 +761,7 @@ class StdioRelay:
                 if is_error and self._consider_retry(identifier, observed):
                     return False
                 self._forget(identifier)
+                self._check_result(identifier, message)
         except Exception as exc:  # noqa: BLE001 -- fail open: deliver
             self._internal_error("ledger", exc)
             return True

@@ -86,3 +86,11 @@ def test_naive_retry_duplicates_side_effects(summary: dict[str, Any]) -> None:
 def test_untested_categories_are_reported_not_hidden(summary: dict[str, Any]) -> None:
     assert summary["untested"] == ["D"]
     assert summary["synthetic"] is True
+
+
+def test_result_findings_are_exactly_the_injected_violations(summary: dict[str, Any]) -> None:
+    """Detection only: every injected outputSchema violation, and nothing else."""
+    injected = summary["categories"]["H"]["injectors"].get("output_schema_violation", 0)
+    findings = summary["totals"]["result_findings"]
+    assert findings["raw"] == 0
+    assert findings["shadow"] == findings["auto"] == injected

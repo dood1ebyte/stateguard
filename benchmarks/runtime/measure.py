@@ -46,6 +46,11 @@ Anything else is a failure, recorded with its kinds:
   told it failed: the client's view and the server's state now disagree;
 * ``duplicate_response`` -- the client received more than one response for
   one request id;
+* ``result_contract_violation`` -- the client was told the call succeeded and
+  its ``structuredContent`` breaks the tool's ``outputSchema`` (ground truth
+  from the injection, not from StateGuard's checker). StateGuard only
+  *detects* this (Shadow-only by design), so it stays a failure in every
+  arm; the report counts detections separately;
 * ``surfaced_unknown`` -- the client was told, truthfully, that the outcome is
   unknown (it may or may not have executed). Still a failure -- the call
   did not complete -- but not a *hidden* one.
@@ -104,7 +109,9 @@ from .scenarios import (  # noqa: E402
 
 ARMS = ("raw", "naive", "shadow", "auto", "auto_ops")
 DEADLINE_ARM_SECONDS = 0.3
-HIDDEN_KINDS = frozenset({"no_response", "phantom_success", "duplicate_response"})
+HIDDEN_KINDS = frozenset(
+    {"no_response", "phantom_success", "duplicate_response", "result_contract_violation"}
+)
 FAILURE_KINDS = (
     "not_executed",
     "wrong_execution",
@@ -115,6 +122,7 @@ FAILURE_KINDS = (
     "duplicate_response",
     "surfaced_unknown",
     "repeated_declared",
+    "result_contract_violation",
 )
 
 
@@ -139,6 +147,8 @@ class Result:
     retried: bool = False
     #: Retries the relay actually sent (acted retry decisions).
     relay_retries: int = 0
+    #: Result-integrity findings the relay logged (category H).
+    result_findings: int = 0
 
 
 @dataclass
@@ -232,6 +242,9 @@ def _judge(
     client_ok = _client_ok(response)
     unknown = _surfaced_unknown(response)
     kinds: list[str] = ["surfaced_unknown"] if unknown else []
+    if client_ok and ServerAction.BAD_STRUCTURED in scenario.plan.values():
+        kinds.append("result_contract_violation")
+        client_ok = False  # told "success" with a result that breaks the contract
     if scenario.intended is not None:
         matching = [c for c in executed if equivalent(tool, c.arguments, scenario.intended)]
         if not matching:
@@ -244,7 +257,9 @@ def _judge(
             kinds.append("phantom_success")
         if response is None:
             kinds.append("no_response")
-        elif not client_ok and matching and not unknown:
+        elif (
+            not client_ok and matching and not unknown and "result_contract_violation" not in kinds
+        ):
             kinds.append("executed_reported_failed")
         success = (
             bool(matching)
@@ -296,6 +311,9 @@ def _judge(
         retried=retried,
         relay_retries=sum(
             1 for e in rig.audit if e.get("event") == "retry_decision" and e.get("acted")
+        ),
+        result_findings=sum(
+            1 for e in rig.audit if e.get("event") == "result_check" and e.get("category") == "H"
         ),
     )
 
@@ -415,6 +433,9 @@ def summarise(report: Report) -> dict[str, Any]:
             "repeated_declared": sum(1 for r in ops.values() if "repeated_declared" in r.kinds),
             "duplicate_execution": sum(1 for r in ops.values() if "duplicate_execution" in r.kinds),
         }
+        row["result_findings"] = {
+            arm: sum(by[(s, arm)].result_findings for s in ids) for arm in ARMS
+        }
         row["shadow_matches_raw"] = all(
             by[(s, "shadow")].success == by[(s, "raw")].success
             and by[(s, "shadow")].executions == by[(s, "raw")].executions
@@ -458,6 +479,10 @@ def summarise(report: Report) -> dict[str, Any]:
         ),
         "hidden": {
             arm: sum(c[arm]["hidden"] for c in categories.values() if c.get("exercised"))
+            for arm in ARMS
+        },
+        "result_findings": {
+            arm: sum(c["result_findings"][arm] for c in categories.values() if c.get("exercised"))
             for arm in ARMS
         },
     }
@@ -527,6 +552,8 @@ def render(summary: dict[str, Any]) -> str:
         f"StateGuard-induced {t['stateguard_induced']} "
         f"(auto_ops: {t['stateguard_induced_auto_ops']})",
         "hidden failures: " + ", ".join(f"{arm} {n}" for arm, n in t["hidden"].items()),
+        "result-integrity findings logged (detection only, results never altered): "
+        + ", ".join(f"{arm} {n}" for arm, n in t["result_findings"].items()),
         "auto_ops totals: "
         + ", ".join(
             f"{key} "

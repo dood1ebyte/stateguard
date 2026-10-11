@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Result integrity, detection only** (`check_tool_result`, `ResultCheck`,
+  `ResultIssueKind`):
+  - A `tools/call` result is checked for `CallToolResult` shape, and for
+    `structuredContent` against the tool's `outputSchema`. Findings name
+    paths and violation types, never values.
+  - A missing `structuredContent`, or an `outputSchema` StateGuard cannot
+    read, is an advisory, not a failure.
+  - The relay logs findings as category H and delivers every result
+    unchanged. StateGuard never repairs a result.
 - **More of JSON Schema 2020-12 is read instead of refused.**
   - Supported now: the annotations `$anchor`, `contentEncoding`,
     `contentMediaType`, `contentSchema` and OpenAPI `example`; the boolean
