@@ -12,11 +12,18 @@ fresh in-process rig (client <-> stdio relay <-> scripted server):
                timeout. Not a safe strategy; it shows what blind retry does.
 ``shadow``     StateGuard observing. Must match raw exactly.
 ``auto``       StateGuard acting, default configuration.
-``auto_dl``    StateGuard acting with ``--call-deadline 0.3`` (the relay
-               answers "outcome unknown" to a request unanswered after
-               0.3 s; clients here wait 0.6 s). A configuration, not a
-               default: a deadline cuts legitimately slow tools short.
+``auto_ops``   StateGuard acting with an operator configuration: a 0.3 s
+               call deadline (clients here wait 0.6 s), effects declared
+               for the corpus tools (``SIMULATED_EFFECTS`` -- *simulated*
+               declarations), and ``--retry auto``. A configuration, not a
+               default: the deadline cuts legitimately slow calls short,
+               and retry is only as safe as the declarations.
 =============  =============================================================
+
+Repeated execution of a tool the configuration declares READ_ONLY or
+IDEMPOTENT is recorded as ``repeated_declared``, not as a failure: that is
+what the declaration says is harmless. It is reported, so an operator can
+see what their declarations allowed.
 
 An invocation **succeeds** when it ends as its ground truth says:
 
@@ -75,6 +82,8 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
     __package__ = "runtime"
 
+from stateguard.adapters.mcp import EffectPolicy  # noqa: E402
+
 from .harness import (  # noqa: E402
     RelayMode,
     Rig,
@@ -86,13 +95,14 @@ from .harness import (  # noqa: E402
 from .scenarios import (  # noqa: E402
     CATEGORIES,
     RAW_LINE_ID,
+    SIMULATED_EFFECTS,
     Scenario,
     build,
     drift_corpus,
     equivalent,
 )
 
-ARMS = ("raw", "naive", "shadow", "auto", "auto_dl")
+ARMS = ("raw", "naive", "shadow", "auto", "auto_ops")
 DEADLINE_ARM_SECONDS = 0.3
 HIDDEN_KINDS = frozenset({"no_response", "phantom_success", "duplicate_response"})
 FAILURE_KINDS = (
@@ -104,6 +114,7 @@ FAILURE_KINDS = (
     "executed_reported_failed",
     "duplicate_response",
     "surfaced_unknown",
+    "repeated_declared",
 )
 
 
@@ -126,6 +137,8 @@ class Result:
     own_listings: int
     latency_ms: float | None
     retried: bool = False
+    #: Retries the relay actually sent (acted retry decisions).
+    relay_retries: int = 0
 
 
 @dataclass
@@ -153,13 +166,16 @@ def run_one(scenario: Scenario, arm: str, *, listing_wait: float = 1.0) -> Resul
         "naive": RelayMode.PASSTHROUGH,
         "shadow": RelayMode.SHADOW,
         "auto": RelayMode.AUTO,
-        "auto_dl": RelayMode.AUTO,
+        "auto_ops": RelayMode.AUTO,
     }[arm]
+    ops = arm == "auto_ops"
     rig = Rig(
         server,
         mode,
         listing_wait=listing_wait,
-        call_deadline=DEADLINE_ARM_SECONDS if arm == "auto_dl" else None,
+        call_deadline=DEADLINE_ARM_SECONDS if ops else None,
+        effects=EffectPolicy(SIMULATED_EFFECTS) if ops else None,
+        retry="auto" if ops else "shadow",
     )
     try:
         rig.request("server/discover")
@@ -185,7 +201,10 @@ def run_one(scenario: Scenario, arm: str, *, listing_wait: float = 1.0) -> Resul
 
         tool = next((t for t in scenario.tools if t["name"] == scenario.tool), {})
         call_ids = rig.sent_ids[first_call_id:] if scenario.raw_line is None else [RAW_LINE_ID]
-        return _judge(scenario, arm, server, rig, response, tool, latency, retried, call_ids)
+        repeatable = ops and SIMULATED_EFFECTS.get(scenario.tool) in ("read_only", "idempotent")
+        return _judge(
+            scenario, arm, server, rig, response, tool, latency, retried, call_ids, repeatable
+        )
     finally:
         rig.close()
 
@@ -207,6 +226,7 @@ def _judge(
     latency: float | None,
     retried: bool,
     call_ids: list[Any],
+    repeatable: bool = False,
 ) -> Result:
     executed = list(server.executed)
     client_ok = _client_ok(response)
@@ -217,7 +237,7 @@ def _judge(
         if not matching:
             kinds.append("not_executed")
         if len(matching) > 1:
-            kinds.append("duplicate_execution")
+            kinds.append("repeated_declared" if repeatable else "duplicate_execution")
         if len(executed) > len(matching):
             kinds.append("wrong_execution")
         if client_ok and not matching:
@@ -226,7 +246,12 @@ def _judge(
             kinds.append("no_response")
         elif not client_ok and matching and not unknown:
             kinds.append("executed_reported_failed")
-        success = len(matching) == 1 and len(executed) == 1 and client_ok
+        success = (
+            bool(matching)
+            and (len(matching) == 1 or repeatable)
+            and len(executed) == len(matching)
+            and client_ok
+        )
     else:
         if executed:
             kinds.append("wrong_execution")
@@ -269,6 +294,9 @@ def _judge(
         own_listings=own,
         latency_ms=latency,
         retried=retried,
+        relay_retries=sum(
+            1 for e in rig.audit if e.get("event") == "retry_decision" and e.get("acted")
+        ),
     )
 
 
@@ -348,8 +376,8 @@ def summarise(report: Report) -> dict[str, Any]:
             "stateguard_induced": sum(
                 1 for s in ids if by[(s, "raw")].success and not auto[s].success
             ),
-            "stateguard_induced_auto_dl": sum(
-                1 for s in ids if by[(s, "raw")].success and not by[(s, "auto_dl")].success
+            "stateguard_induced_auto_ops": sum(
+                1 for s in ids if by[(s, "raw")].success and not by[(s, "auto_ops")].success
             ),
             "incorrect_repair": sum(
                 1 for r in auto.values() if r.rewrote and "wrong_execution" in r.kinds
@@ -374,6 +402,18 @@ def summarise(report: Report) -> dict[str, Any]:
             # refresh before an intervention).
             "round_trips_added": sum(max(0, r.own_listings - 1) for r in auto.values()),
             "session_listings": sum(min(1, r.own_listings) for r in auto.values()),
+        }
+        ops = {s: by[(s, "auto_ops")] for s in ids}
+        row["auto_ops_vs_raw"] = {
+            "failures_after": sum(1 for r in ops.values() if not r.success),
+            "prevented": sum(1 for s in raw_fail if ops[s].success and ops[s].relay_retries == 0),
+            "recovered": sum(1 for s in raw_fail if ops[s].success and ops[s].relay_retries > 0),
+            "retries_sent": sum(r.relay_retries for r in ops.values()),
+            "stateguard_induced": sum(
+                1 for s in ids if by[(s, "raw")].success and not ops[s].success
+            ),
+            "repeated_declared": sum(1 for r in ops.values() if "repeated_declared" in r.kinds),
+            "duplicate_execution": sum(1 for r in ops.values() if "duplicate_execution" in r.kinds),
         }
         row["shadow_matches_raw"] = all(
             by[(s, "shadow")].success == by[(s, "raw")].success
@@ -412,8 +452,8 @@ def summarise(report: Report) -> dict[str, Any]:
         "stateguard_induced": sum(
             c.get("auto_vs_raw", {}).get("stateguard_induced", 0) for c in categories.values()
         ),
-        "stateguard_induced_auto_dl": sum(
-            c.get("auto_vs_raw", {}).get("stateguard_induced_auto_dl", 0)
+        "stateguard_induced_auto_ops": sum(
+            c.get("auto_vs_raw", {}).get("stateguard_induced_auto_ops", 0)
             for c in categories.values()
         ),
         "hidden": {
@@ -461,9 +501,9 @@ def render(summary: dict[str, Any]) -> str:
         f"{summary['totals']['invocations']} invocations per arm",
         "",
         f"{'cat':<4}{'name':<30}{'N':>4} {'raw':>4} {'naive':>5} {'shadow':>6} {'auto':>5}"
-        f" {'a+dl':>5} {'prev':>5} {'esc':>4} {'unres':>5} {'Z':>3} {'hid raw':>7}"
-        f" {'hid auto':>8} {'hid a+dl':>8} {'dup(naive)':>10} {'dup(auto)':>9}",
-        "-" * 132,
+        f" {'ops':>5} {'prev':>5} {'esc':>4} {'unres':>5} {'Z':>3} {'hid raw':>7}"
+        f" {'hid auto':>8} {'hid ops':>8} {'rec ops':>7} {'dup(naive)':>10} {'dup(auto)':>9}",
+        "-" * 140,
     ]
     for cat, row in summary["categories"].items():
         if not row["exercised"]:
@@ -473,24 +513,38 @@ def render(summary: dict[str, Any]) -> str:
         lines.append(
             f"{cat:<4}{row['name']:<30}{row['n']:>4} {row['raw']['failures']:>4}"
             f" {row['naive']['failures']:>5} {row['shadow']['failures']:>6}"
-            f" {row['auto']['failures']:>5} {row['auto_dl']['failures']:>5}"
+            f" {row['auto']['failures']:>5} {row['auto_ops']['failures']:>5}"
             f" {avr['prevented']:>5} {avr['escalated']:>4}"
             f" {avr['unresolved']:>5} {avr['stateguard_induced']:>3}"
-            f" {row['raw']['hidden']:>7} {row['auto']['hidden']:>8} {row['auto_dl']['hidden']:>8}"
+            f" {row['raw']['hidden']:>7} {row['auto']['hidden']:>8} {row['auto_ops']['hidden']:>8}"
+            f" {row['auto_ops_vs_raw']['recovered']:>7}"
             f" {row['naive_retry']['duplicate_execution']:>10} {avr['duplicate_execution']:>9}"
         )
     t = summary["totals"]
     lines += [
-        "-" * 132,
+        "-" * 140,
         f"failures before (raw) {t['failures_before']}, after (auto) {t['failures_after']}, "
         f"StateGuard-induced {t['stateguard_induced']} "
-        f"(with the {DEADLINE_ARM_SECONDS}s deadline: {t['stateguard_induced_auto_dl']})",
+        f"(auto_ops: {t['stateguard_induced_auto_ops']})",
         "hidden failures: " + ", ".join(f"{arm} {n}" for arm, n in t["hidden"].items()),
-        "columns: raw/naive/shadow/auto/a+dl = failing invocations per arm (a+dl: auto with "
-        f"a {DEADLINE_ARM_SECONDS}s call deadline); prev = prevented by auto; esc = escalated; "
+        "auto_ops totals: "
+        + ", ".join(
+            f"{key} "
+            + str(
+                sum(
+                    c["auto_ops_vs_raw"][key]
+                    for c in summary["categories"].values()
+                    if c["exercised"]
+                )
+            )
+            for key in ("recovered", "retries_sent", "repeated_declared", "duplicate_execution")
+        ),
+        "columns: raw/naive/shadow/auto/ops = failing invocations per arm (ops: auto with an "
+        f"operator configuration -- {DEADLINE_ARM_SECONDS}s deadline, simulated effect "
+        "declarations, retry on); prev = prevented by auto; esc = escalated; "
         "unres = still failing under auto; Z = succeeded raw, failed auto; hid = failures "
         "hidden from the client (no answer, phantom success, duplicate answer); dup = "
-        "duplicate executions",
+        "duplicate executions; rec ops = failures recovered by a relay retry in auto_ops",
         "latency (category A, in-process): "
         + ", ".join(
             f"{arm} p50 {v['p50_ms']:.1f} ms / p99 {v['p99_ms']:.1f} ms"

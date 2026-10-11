@@ -58,9 +58,21 @@ coming. The relay uses it, in auto mode, for two things only:
   not a failure). The relay never retries and never claims a call failed or
   succeeded when it does not know.
 
+Retry
+-----
+A call that failed or went unanswered is sent again only when the operator
+has declared the tool READ_ONLY or IDEMPOTENT (``--effects FILE``), and only
+with ``--retry auto``. The rule is ``decide_retry``: never after an
+authorization or protocol error, never past the attempt budget (one retry),
+never for a tool not declared safe to repeat -- an unknown outcome on such a
+tool is escalated as "outcome unknown". Tool annotations
+(``readOnlyHint`` ...) are recorded as hints and never decide anything. The
+default, ``--retry shadow``, logs every decision and retries nothing.
+
 Shadow mode logs what it would have done and changes nothing.
 
-Results are never touched. A response from the server is written to the
+Results are never touched, except that the answer to a retried call carries
+the client's request id. A response from the server is written to the
 client as the exact bytes the server produced.
 
 Policy, stated rather than buried
@@ -110,10 +122,12 @@ from typing import IO, Any
 
 from stateguard import ContractGuard
 from stateguard.adapters.mcp import (
+    EffectPolicy,
     ForwardingInvariantError,
     InvocationLedger,
     MalformedMessageError,
     MCPAction,
+    Observed,
     ResponseDisposition,
     ToolCallOutcome,
     ToolCallRequest,
@@ -121,6 +135,7 @@ from stateguard.adapters.mcp import (
     ToolNotFoundError,
     ToolRegistry,
     ToolSchemaUnusableError,
+    decide_retry,
     forward_message,
     refusal_response,
 )
@@ -142,6 +157,8 @@ from stateguard.core.models.config import GuardConfig, RepairMode
 #: told apart from the client's. A client is free to choose any id; one that
 #: chose this prefix would have its tools/list responses consumed here.
 OWN_ID_PREFIX = "stateguard-relay:"
+#: Ids of retried tools/call attempts; their answers go to the client under its own id.
+RETRY_ID_PREFIX = "stateguard-retry:"
 
 #: How long a tools/call waits for a listing in flight before it is
 #: validated against what the relay has (and the audit log says so).
@@ -162,6 +179,8 @@ class StdioRelay:
         passthrough: bool = False,
         refresh_before_intervening: bool = True,
         call_deadline: float | None = None,
+        effects: EffectPolicy | None = None,
+        retry: str = "shadow",
     ) -> None:
         self.registry = ToolRegistry(guard)
         self._client_in, self._client_out = client_in, client_out
@@ -173,6 +192,16 @@ class StdioRelay:
         self._refresh_before_intervening = refresh_before_intervening
         self.ledger = InvocationLedger()
         self._call_deadline = call_deadline
+        self._effects = effects if effects is not None else EffectPolicy()
+        if retry not in ("off", "shadow", "auto"):
+            raise ValueError(f"retry must be off, shadow or auto, got {retry!r}")
+        # Shadow mode never acts, whatever the retry setting.
+        self._retry_mode = "shadow" if guard.config.mode is RepairMode.SHADOW else retry
+        self._retry_ids = (f"{RETRY_ID_PREFIX}{n}" for n in itertools.count(1))
+        self._calls: dict[Any, tuple[bytes, str | None]] = {}  # client id -> (payload, tool)
+        self._attempts: dict[Any, int] = {}  # client id -> attempts sent
+        self._client_of: dict[Any, Any] = {}  # retry id -> client id
+        self._retry_lock = threading.Lock()
         self._stopped = threading.Event()
         # Freshness: every relay-initiated listing gets an epoch. A call may
         # only be intervened on after a listing whose epoch began after the
@@ -347,7 +376,11 @@ class StdioRelay:
             self._send(self._server_in, self._to_server, line)
         except OSError:
             if identifier is not None:
-                self._surface_unknown(self.ledger.send_failed(identifier))
+                self._resolve_unknown(
+                    [self.ledger.send_failed(identifier)],
+                    Observed.UNKNOWN_TRANSPORT,
+                    connection_available=False,
+                )
             raise
 
     def _surface_unknown(self, *invocations: Any) -> None:
@@ -356,10 +389,12 @@ class StdioRelay:
             if invocation is None:
                 continue
             reason = invocation.unknown_reason or "unknown"
+            client_id = self._client_of.get(invocation.request_id, invocation.request_id)
+            self._forget(client_id)
             self._log(
                 "outcome_unknown",
                 category="I",
-                id=invocation.request_id,
+                id=client_id,
                 method=invocation.method,
                 tool=invocation.tool,
                 reason=reason,
@@ -371,7 +406,7 @@ class StdioRelay:
                 self._send_json(
                     self._client_out,
                     self._to_client,
-                    unknown_outcome_response(invocation.request_id, reason),
+                    unknown_outcome_response(client_id, reason),
                 )
 
     def run_deadlines(self) -> None:
@@ -380,7 +415,86 @@ class StdioRelay:
             return
         tick = min(0.05, self._call_deadline / 4)
         while not self._stopped.wait(tick):
-            self._surface_unknown(*self.ledger.expire(self._call_deadline))
+            try:
+                self._resolve_unknown(
+                    self.ledger.expire(self._call_deadline), Observed.UNKNOWN_DEADLINE
+                )
+            except Exception as exc:  # noqa: BLE001 -- never let the deadline thread die
+                self._internal_error("deadline", exc)
+
+    # -- retry ---------------------------------------------------------------
+
+    def _resolve_unknown(
+        self,
+        invocations: list[Any],
+        observed: Observed,
+        *,
+        connection_available: bool = True,
+    ) -> None:
+        """Requests whose outcome is unknown: retry the ones that may be, surface the rest."""
+        for invocation in invocations:
+            if invocation is None:
+                continue
+            client_id = self._client_of.get(invocation.request_id, invocation.request_id)
+            if self._consider_retry(client_id, observed, connection_available=connection_available):
+                continue
+            self._surface_unknown(invocation)
+
+    def _consider_retry(
+        self, client_id: Any, observed: Observed, *, connection_available: bool = True
+    ) -> bool:
+        """Log the retry decision for a tools/call; send the retry if auto says so."""
+        with self._retry_lock:
+            call = self._calls.get(client_id)
+            attempts = self._attempts.get(client_id, 1)
+        if call is None or self._retry_mode == "off":
+            return False
+        payload, tool = call
+        entry = self.registry.find(tool) if tool else None
+        declaration = self._effects.of(
+            tool or "", annotations=entry.annotations if entry is not None else None
+        )
+        verdict = decide_retry(
+            observed,
+            declaration,
+            attempts_made=attempts,
+            connection_available=connection_available,
+        )
+        acted = verdict.retry and self._retry_mode == "auto"
+        self._log(
+            "retry_decision",
+            category="F" if observed is Observed.TOOL_ERROR else "I",
+            id=client_id,
+            tool=tool,
+            observed=observed.value,
+            attempts=attempts,
+            effect=declaration.to_dict(),
+            decision=verdict.decision.value,
+            reason=verdict.reason,
+            acted=acted,
+        )
+        if not acted:
+            return False
+        retry_id = next(self._retry_ids)
+        message = json.loads(payload)
+        message["id"] = retry_id
+        with self._retry_lock:
+            self._client_of[retry_id] = client_id
+            self._attempts[client_id] = attempts + 1
+        self.ledger.received(retry_id, TOOLS_CALL, tool)
+        with contextlib.suppress(OSError):  # resolved as unknown inside _send_tracked
+            self._send_tracked(retry_id, self._encode(message))
+        return True
+
+    def _forget(self, client_id: Any) -> None:
+        with self._retry_lock:
+            self._calls.pop(client_id, None)
+            self._attempts.pop(client_id, None)
+
+    def _deliver_as(self, client_id: Any, message: dict[str, Any]) -> None:
+        """Write a retried call's answer to the client, under the client's id."""
+        self._forget(client_id)
+        self._send_json(self._client_out, self._to_client, {**message, "id": client_id})
 
     def _internal_error(self, where: str, exc: BaseException, **fields: Any) -> None:
         """Record a StateGuard failure (category Z). The caller fails open."""
@@ -420,6 +534,11 @@ class StdioRelay:
             self._internal_error("tools/call", exc, id=request_id(message), action="unvalidated")
             to_server, payload = True, line
         if to_server:
+            if identifier is not None and self._retry_mode != "off":
+                tool = message.get("params", {}).get("name") if isinstance(message, dict) else None
+                with self._retry_lock:
+                    self._calls[identifier] = (payload, tool if isinstance(tool, str) else None)
+                    self._attempts[identifier] = 1
             self._send_tracked(identifier, payload)
         else:
             if identifier is not None:
@@ -544,7 +663,11 @@ class StdioRelay:
             self._pump_server()
             if not self._passthrough:
                 # The server's stdout closed: nothing in flight will be answered.
-                self._surface_unknown(*self.ledger.transport_closed())
+                self._resolve_unknown(
+                    self.ledger.transport_closed(),
+                    Observed.UNKNOWN_TRANSPORT,
+                    connection_available=False,
+                )
         except OSError as exc:  # the client's stdout is gone
             self._log("transport_closed", category="E", direction="server->client", error=str(exc))
         finally:
@@ -587,12 +710,32 @@ class StdioRelay:
 
     def _deliverable(self, message: dict[str, Any]) -> bool:
         """Whether a server response goes to the client: not if it already has its answer."""
+        identifier = message["id"]
         try:
             result = message.get("result")
             is_error = "error" in message or (
                 isinstance(result, dict) and result.get("isError") is True
             )
-            disposition = self.ledger.response(message["id"], is_error=is_error)
+            observed = Observed.PROTOCOL_ERROR if "error" in message else Observed.TOOL_ERROR
+            disposition = self.ledger.response(identifier, is_error=is_error)
+            if isinstance(identifier, str) and identifier.startswith(RETRY_ID_PREFIX):
+                # Never delivered raw: the client knows its own id, not ours.
+                client_id = self._client_of.get(identifier)
+                if disposition is ResponseDisposition.DELIVER and client_id is not None:
+                    if not (is_error and self._consider_retry(client_id, observed)):
+                        self._deliver_as(client_id, message)
+                else:
+                    self._log(
+                        "response_dropped",
+                        category="J",
+                        id=identifier,
+                        disposition=disposition.value,
+                    )
+                return False
+            if disposition is ResponseDisposition.DELIVER:
+                if is_error and self._consider_retry(identifier, observed):
+                    return False
+                self._forget(identifier)
         except Exception as exc:  # noqa: BLE001 -- fail open: deliver
             self._internal_error("ledger", exc)
             return True
@@ -709,6 +852,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Answer 'outcome unknown' to a request unanswered after SECONDS (default: off).",
     )
     parser.add_argument(
+        "--effects",
+        metavar="FILE",
+        help='Operator effect declarations: {"tools": [{"name", "server"?, "effect"}]}.',
+    )
+    parser.add_argument(
+        "--retry",
+        choices=["off", "shadow", "auto"],
+        default="shadow",
+        help="Retry tools declared read_only/idempotent (default: shadow, log only).",
+    )
+    parser.add_argument(
         "--passthrough",
         action="store_true",
         help="Kill switch: relay bytes only, StateGuard off. The measurement baseline.",
@@ -734,6 +888,8 @@ def main(argv: list[str] | None = None) -> int:
         passthrough=args.passthrough,
         refresh_before_intervening=not args.no_listing_refresh,
         call_deadline=args.call_deadline,
+        effects=EffectPolicy.from_file(args.effects) if args.effects else None,
+        retry=args.retry,
     )
     relay._log(
         "relay_started",

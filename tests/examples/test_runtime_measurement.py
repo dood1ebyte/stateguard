@@ -54,14 +54,16 @@ def test_auto_induces_no_failure_and_no_duplicate(summary: dict[str, Any]) -> No
             assert row["auto_vs_raw"]["stateguard_induced"] == 0, cat
             assert row["auto_vs_raw"]["duplicate_execution"] == 0, cat
             assert row["auto_vs_raw"]["crashes"] == 0, cat
-            assert "duplicate_execution" not in row["auto_dl"]["kinds"], cat
+            assert "duplicate_execution" not in row["auto_ops"]["kinds"], cat
+            # anything run twice was declared safe to repeat
+            assert row["auto_ops_vs_raw"]["duplicate_execution"] == 0, cat
 
 
 def test_auto_hides_fewer_failures_than_raw(summary: dict[str, Any]) -> None:
     hidden = summary["totals"]["hidden"]
     assert hidden["shadow"] == hidden["raw"]
     assert hidden["auto"] < hidden["raw"]
-    assert hidden["auto_dl"] <= hidden["auto"]
+    assert hidden["auto_ops"] <= hidden["auto"]
 
 
 def test_auto_prevents_contract_failures(summary: dict[str, Any]) -> None:

@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Effect model and retry decision** (`EffectPolicy`, `Effect`,
+  `decide_retry`, `Observed`, `RetryVerdict`):
+  - Effects are declared by the operator per `(tool, server)`: read-only,
+    idempotent, non-idempotent, or unknown (the default). MCP tool
+    annotations are recorded as untrusted hints and never change a
+    declaration.
+  - `decide_retry` is a rule, not a score. It never retries after an auth or
+    protocol error, never beyond one retry, and never a tool not declared
+    safe to repeat. An unknown outcome on such a tool is escalated.
+- **The stdio relay can retry**, with `--effects FILE` and `--retry auto`.
+  The default `--retry shadow` logs every decision and retries nothing.
 - **`InvocationLedger`** (`stateguard.adapters.mcp`): per-request execution
   state for a proxy. The states are `PENDING`, `ANSWERED_LOCALLY` (never sent,
   certainly not executed), `SENT`, `COMPLETED`, and `UNKNOWN` (sent, no answer

@@ -53,6 +53,26 @@ CATEGORIES = {
 }
 
 
+#: A *simulated* operator effect declaration for the drift-corpus tools, used
+#: only by the ``auto_ops`` arm. Plain reads are READ_ONLY; tools that create,
+#: send or move something are NON_IDEMPOTENT; tools whose effect depends on
+#: arguments or implementation (write_file, set_role, query_db) are left
+#: UNKNOWN, as an operator who had not checked would leave them.
+SIMULATED_EFFECTS: dict[str, str] = {
+    "read_file": "read_only",
+    "list_issues": "read_only",
+    "search_users": "read_only",
+    "get_issue": "read_only",
+    "web_search": "read_only",
+    "create_issue": "non_idempotent",
+    "post_message": "non_idempotent",
+    "create_event": "non_idempotent",
+    "transfer_funds": "non_idempotent",
+    "push_files": "non_idempotent",
+    "notify": "non_idempotent",
+}
+
+
 @dataclass(frozen=True)
 class Scenario:
     id: str
