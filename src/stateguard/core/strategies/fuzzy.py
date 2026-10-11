@@ -80,7 +80,13 @@ from stateguard.core.errors.violations import ContractViolation, ViolationType
 from stateguard.core.interfaces.strategy import IRepairStrategy
 from stateguard.core.models.contract import ContractSpec
 
-__all__ = ["FuzzyFieldMatchStrategy", "jaro_winkler", "score_assignments", "word_substitution"]
+__all__ = [
+    "FuzzyFieldMatchStrategy",
+    "jaro_winkler",
+    "opposed_names",
+    "score_assignments",
+    "word_substitution",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +418,201 @@ def word_substitution(target: str, candidate: str) -> tuple[str, str] | None:
 
 
 # ---------------------------------------------------------------------------
+# Opposites
+# ---------------------------------------------------------------------------
+#
+# Similarity measures spelling, and opposites are often spelled almost alike:
+# ``unlock``/``lock`` (0.89), ``invisible``/``visible`` (0.83),
+# ``maximum``/``minimum`` (0.83), ``no_cache``/``cache``. Renaming one onto
+# the other forwards a call that means the reverse of what the model wrote.
+# ``word_substitution`` only sees multi-word names that share a word, so
+# single words, negator words and one-edit opposites (``unable``/``enable``)
+# went through it -- measured at 102 of 132 opposite pairs forwarded.
+#
+# The check is lexical and closed: a fixed list of opposite words, prefixes
+# that negate a word, prefix pairs that oppose one another, and words that
+# negate the next. No scoring, no model. Its only effect is to record a
+# contradiction, which ``TrustPolicy`` never applies -- so a false positive
+# costs a missed repair (an escalation), never a wrong one.
+
+#: Words that name opposite things. Unordered pairs.
+_OPPOSITE_WORDS: frozenset[frozenset[str]] = frozenset(
+    frozenset(pair)
+    for pair in (
+        ("min", "max"),
+        ("first", "last"),
+        ("start", "end"),
+        ("begin", "end"),
+        ("start", "stop"),
+        ("before", "after"),
+        ("open", "close"),
+        ("open", "closed"),
+        ("opened", "closed"),
+        ("show", "hide"),
+        ("shown", "hidden"),
+        ("allow", "deny"),
+        ("allowed", "denied"),
+        ("add", "remove"),
+        ("true", "false"),
+        ("yes", "no"),
+        ("on", "off"),
+        ("push", "pull"),
+        ("public", "private"),
+        ("accept", "reject"),
+        ("left", "right"),
+        ("top", "bottom"),
+        ("head", "tail"),
+        ("high", "low"),
+        ("higher", "lower"),
+        ("upper", "lower"),
+        ("old", "new"),
+        ("older", "newer"),
+        ("oldest", "newest"),
+        ("src", "dst"),
+        ("source", "target"),
+        ("source", "destination"),
+        ("from", "to"),
+        ("sender", "recipient"),
+        ("send", "receive"),
+        ("request", "response"),
+        ("read", "write"),
+        ("input", "output"),
+        ("get", "set"),
+        ("success", "failure"),
+        ("asc", "desc"),
+        ("sync", "async"),
+        ("buy", "sell"),
+        ("credit", "debit"),
+        ("give", "take"),
+        ("whitelist", "blacklist"),
+        ("allowlist", "denylist"),
+        ("more", "less"),
+        ("most", "least"),
+        ("increase", "reduce"),
+        ("early", "late"),
+        ("earliest", "latest"),
+        ("next", "previous"),
+        ("next", "prev"),
+        ("parent", "child"),
+        ("parents", "children"),
+        ("ancestor", "descendant"),
+        ("ancestors", "descendants"),
+    )
+)
+
+#: Prefixes that negate the word they are attached to (``un``-``lock``).
+_NEGATING_PREFIXES = ("un", "in", "im", "il", "ir", "dis", "non", "de", "mis", "anti", "no", "not")
+
+#: Prefixes that oppose one another on the same stem (``in``/``ex``-``clude``).
+_OPPOSED_PREFIXES = (
+    ("in", "ex"),
+    ("im", "ex"),
+    ("in", "out"),
+    ("in", "de"),
+    ("inc", "dec"),
+    ("en", "de"),
+    ("en", "dis"),
+    ("en", "un"),
+    ("a", "de"),
+    ("as", "des"),
+    ("at", "de"),
+    ("up", "down"),
+    ("on", "off"),
+    ("upper", "lower"),
+    ("pre", "post"),
+    ("ap", "pre"),
+    ("over", "under"),
+    ("max", "min"),
+    ("maj", "min"),
+    ("in", "e"),
+    ("inter", "intra"),
+    ("sub", "super"),
+    ("micro", "macro"),
+)
+
+#: Suffixes that oppose one another on the same stem (``care``-``ful``/``less``).
+_OPPOSED_SUFFIXES = (("ful", "less"),)
+
+#: Whole words that negate the words after them (``no_cache``, ``skip_tests``).
+_NEGATOR_WORDS = frozenset(
+    {"no", "not", "non", "never", "without", "dont", "skip", "disable", "ignore", "exclude"}
+)
+
+#: Shortest stem an affix rule accepts, so ``in``/``de``-``x`` matches nothing.
+_MIN_STEM = 3
+
+
+def _opposed_words(a: str, b: str) -> bool:
+    """Whether two lower-case words name opposite things. See the comment above."""
+    if a == b:
+        return False
+    if frozenset((a, b)) in _OPPOSITE_WORDS:
+        return True
+    for x, y in ((a, b), (b, a)):
+        for prefix in _NEGATING_PREFIXES:
+            if len(y) >= _MIN_STEM and x == prefix + y:
+                return True
+        for p, q in _OPPOSED_PREFIXES:
+            if (
+                x.startswith(p)
+                and y.startswith(q)
+                and len(x) - len(p) >= _MIN_STEM
+                and x[len(p) :] == y[len(q) :]
+            ):
+                return True
+        for p, q in _OPPOSED_SUFFIXES:
+            if (
+                x.endswith(p)
+                and y.endswith(q)
+                and len(x) - len(p) >= _MIN_STEM
+                and x[: -len(p)] == y[: -len(q)]
+            ):
+                return True
+    return False
+
+
+def opposed_names(target: str, candidate: str) -> tuple[str, str] | None:
+    """
+    The ``(candidate word, target word)`` pair that makes two names opposites,
+    or ``None``.
+
+    Checked three ways, all lexical:
+
+    * the names are single words, or split into the same number of words, and
+      an aligned pair is opposite (``lock``/``unlock``, ``sort_asc``/
+      ``sort_desc``, ``enable_x``/``unable_x``);
+    * one name is the other with a negator word added (``no_cache``/``cache``,
+      ``skip_validation``/``validation``) -- reported as the negator against
+      an empty word;
+    * the joined names are opposite words (``nocache``/``cache``,
+      ``nonblocking``/``non_blocking`` is *not* -- same words).
+
+    Runs before the typo rule on purpose: ``enable``/``unable`` is one edit
+    apart and is still not a spelling of the same word.
+    """
+    target_words, candidate_words = _tokens(target), _tokens(candidate)
+    if not target_words or not candidate_words:
+        return None
+    if len(target_words) == len(candidate_words):
+        for c, t in zip(candidate_words, target_words, strict=True):
+            if _opposed_words(c, t):
+                return c, t
+    for longer, shorter, longer_is_candidate in (
+        (candidate_words, target_words, True),
+        (target_words, candidate_words, False),
+    ):
+        if len(longer) != len(shorter) + 1:
+            continue
+        for i, word in enumerate(longer):
+            if word in _NEGATOR_WORDS and longer[:i] + longer[i + 1 :] == shorter:
+                return (word, "") if longer_is_candidate else ("", word)
+    joined_c, joined_t = "".join(candidate_words), "".join(target_words)
+    if _opposed_words(joined_c, joined_t):
+        return joined_c, joined_t
+    return None
+
+
+# ---------------------------------------------------------------------------
 # FuzzyFieldMatchStrategy
 # ---------------------------------------------------------------------------
 
@@ -514,8 +715,17 @@ class FuzzyFieldMatchStrategy(IRepairStrategy):
                 notes.append(f"closest alternative '{assignment.runner_up}' ({where})")
 
             contradiction: str | None = None
+            opposed = opposed_names(assignment.target, assignment.candidate)
             substituted = word_substitution(assignment.target, assignment.candidate)
-            if substituted is not None:
+            if opposed is not None:
+                # Spelled alike, meaning the reverse. Recorded, not re-scored --
+                # TrustPolicy will surface this rather than apply it.
+                said, meant = (repr(w) if w else "nothing" for w in opposed)
+                contradiction = (
+                    f"'{assignment.candidate}' -> '{assignment.target}' turns {said} into "
+                    f"{meant}: opposite meanings, not a spelling of one name"
+                )
+            elif substituted is not None:
                 # The shared words carry the similarity; the one that differs
                 # says these are different things. Recorded, not re-scored --
                 # TrustPolicy will surface this rather than apply it.

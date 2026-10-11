@@ -1005,7 +1005,7 @@ class TestWordSubstitution:
         )
         (op,) = ops
         assert op.evidence.contradiction is not None
-        assert "'max' for 'min'" in op.evidence.contradiction
+        assert "'max' into 'min'" in op.evidence.contradiction
         # The score is left as measured -- the finding is recorded, not folded in.
         assert op.evidence.name_match is not None and op.evidence.name_match > 0.85
 
@@ -1025,3 +1025,122 @@ class TestWordSubstitution:
         result = guard.repair(schema, payload)
         assert result.repaired_output is None
         assert not any(a.applied_operations for a in result.attempts)
+
+
+class TestOppositeNames:
+    """
+    Opposites are often spelled almost alike -- ``unlock``/``lock`` scores
+    0.89 -- and ``word_substitution`` only sees multi-word names sharing a
+    word. Measured before this rule: 102 of 132 single-word opposite renames
+    were forwarded. The rule is lexical and closed, and it can only turn an
+    APPLY into an escalation.
+    """
+
+    @pytest.mark.parametrize(
+        ("candidate", "target"),
+        [
+            # negating prefix
+            ("unlock", "lock"),
+            ("invisible", "visible"),
+            ("uninstall", "install"),
+            ("disallow", "allow"),
+            ("nonblocking", "blocking"),
+            ("illegal", "legal"),
+            ("irregular", "regular"),
+            ("impossible", "possible"),
+            ("deactivate", "activate"),
+            ("mismatch", "match"),
+            ("nocache", "cache"),
+            # opposed prefixes
+            ("exclude", "include"),
+            ("export", "import"),
+            ("decrement", "increment"),
+            ("decrypt", "encrypt"),
+            ("disable", "enable"),
+            ("descending", "ascending"),
+            ("detach", "attach"),
+            ("downstream", "upstream"),
+            ("postfix", "prefix"),
+            ("prepend", "append"),
+            ("underwrite", "overwrite"),
+            ("minimum", "maximum"),
+            ("minority", "majority"),
+            ("egress", "ingress"),
+            ("outbound", "inbound"),
+            ("explicit", "implicit"),
+            # found by a hold-out probe after the first version of the rule
+            ("offline", "online"),
+            ("lowercase", "uppercase"),
+            # one edit apart, still opposite
+            ("unable", "enable"),
+            # lexicon
+            ("max", "min"),
+            ("end", "start"),
+            ("after", "before"),
+            ("private", "public"),
+            ("desc", "asc"),
+            ("async", "sync"),
+            ("pull", "push"),
+            ("careless", "careful"),
+            # inside multi-word names, either spelling
+            ("is_invisible", "is_visible"),
+            ("sortDescending", "sort_ascending"),
+            ("unable_cache", "enable_cache"),
+            ("include_tags", "exclude_tags"),
+            # negator words
+            ("no_cache", "cache"),
+            ("non_blocking", "blocking"),
+            ("skip_validation", "validation"),
+            ("not_dry_run", "dry_run"),
+            ("cache", "no_cache"),
+        ],
+    )
+    def test_opposites_are_named(self, candidate: str, target: str) -> None:
+        from stateguard.core.strategies.fuzzy import opposed_names
+
+        assert opposed_names(target, candidate) is not None
+
+    @pytest.mark.parametrize(
+        ("candidate", "target"),
+        [
+            # every repair the calibration and drift corpora require
+            ("usr_id", "user_id"),
+            ("recieve_date", "receive_date"),
+            ("zipcode", "zip_code"),
+            ("temp_celsius", "temperature"),
+            ("loc", "location"),
+            ("qeury", "query"),
+            ("src_tz", "source_timezone"),
+            ("cty", "city"),
+            ("lmit", "limit"),
+            ("max_results", "max_result"),
+            ("timeZone", "timezone"),
+            ("repo_name", "repository_name"),
+            ("descr", "description"),
+            ("index", "idx"),
+            ("info", "information"),
+            ("inclde", "include"),
+            ("inlcude_hidden", "include_hidden"),
+            ("export_path", "export_dir"),
+            ("unit", "units"),
+            ("notes", "note"),
+        ],
+    )
+    def test_spellings_of_one_name_are_not(self, candidate: str, target: str) -> None:
+        from stateguard.core.strategies.fuzzy import opposed_names
+
+        assert opposed_names(target, candidate) is None
+
+    def test_the_proposal_records_it_as_a_contradiction(self) -> None:
+        ops = FuzzyFieldMatchStrategy().propose(
+            [
+                make_violation("lock", ViolationType.MISSING_REQUIRED_FIELD),
+                make_violation("unlock", ViolationType.UNEXPECTED_FIELD),
+            ],
+            ContractSpec(fields=[FieldSpec("lock", FieldType.BOOLEAN)]),
+            {"unlock": True},
+        )
+        (op,) = ops
+        assert op.evidence.contradiction is not None
+        assert "opposite meanings" in op.evidence.contradiction
+        assert op.evidence.name_match is not None and op.evidence.name_match > 0.85

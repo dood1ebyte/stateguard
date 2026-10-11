@@ -295,8 +295,10 @@ class TestShippedCorpus:
 
     def test_the_corpus_is_large_enough_to_mean_something(self) -> None:
         cases = calibrate.load_corpus(_CORPUS_DIR)
-        # The plan calls for 60-100 labelled cases.
-        assert 60 <= len(cases) <= 100
+        # The plan called for 60-100 labelled cases. The floor is what makes
+        # the numbers mean something; the ceiling was a budget, and the
+        # opposite-names family (118 cases) deliberately went past it.
+        assert len(cases) >= 60
 
     def test_every_verdict_family_is_represented(self) -> None:
         verdicts = {c["verdict"] for c in calibrate.load_corpus(_CORPUS_DIR)}

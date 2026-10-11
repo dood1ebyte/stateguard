@@ -436,4 +436,4 @@ class TestOppositeNamesAreNeverApplied:
         }
         outcome = _call(tool, {"max_price": 10})
         assert outcome.action is MCPAction.ESCALATE
-        assert "swaps the word 'max' for 'min'" in outcome.explain()
+        assert "turns 'max' into 'min': opposite meanings" in outcome.explain()

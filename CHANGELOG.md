@@ -141,6 +141,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limitations.
 
 ### Fixed
+- **Opposite-meaning parameter names were renamed onto each other.**
+  `unlock` became `lock`, `invisible` became `visible`, `maximum` became
+  `minimum`, `no_cache` became `cache`, and the call was forwarded meaning the
+  reverse of what the model wrote. The earlier word-substitution guard only
+  saw multi-word names that shared a word. A lexical, closed opposition rule
+  (`opposed_names`: an opposite-word list, negating prefixes, opposed prefix
+  pairs, negator words) now records a contradiction, which `TrustPolicy`
+  never applies. Measured on a new 118-case calibration family: 103 wrong
+  renames applied before, 0 after; applied precision on the expanded corpus
+  28.7% → 100%; all 41 must-apply repairs unchanged; 0 of 1,161 legitimate
+  drift variants of real parameter names misflagged.
 - **Exponential `$ref` expansion.** A schema of nested `$ref`s that each
   reference the previous level twice took 3.4 s to read at 16 levels and
   grew ×2 per level. Expansion is now capped at 10,000 resolutions
