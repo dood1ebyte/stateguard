@@ -460,3 +460,30 @@ def test_property_damaged_recordings_derive_or_refuse(
         return
     with contextlib.suppress(RecordingError):
         derive(recording)
+
+
+# ---------------------------------------------------------------------------
+# T14: the mid-restart race, replayed the way T13 found it
+# ---------------------------------------------------------------------------
+
+
+def test_unsafe_bypass_counter_counts_the_t13_path_only() -> None:
+    lost = [{"event": "server_lost"}, {"event": "tools_list_unsent"}]
+    unvalidated = {"event": "call", "action": "unvalidated", "listing": "unconfirmed"}
+    assert replay.unsafe_bypasses([*lost, unvalidated]) == 1
+    # A refresh that failed on a live server is the documented fail-open, not this bug.
+    assert replay.unsafe_bypasses([unvalidated]) == 0
+    assert replay.unsafe_bypasses([*lost, {"event": "call", "action": "forward"}]) == 0
+
+
+def test_race_provoking_replay_never_bypasses_stateguard() -> None:
+    from runtime import race
+
+    summary = race.measure(runs=5)
+    totals = summary["totals"]
+    assert totals["unsafe_bypasses"] == 0 and summary["runs_with_a_bypass"] == 0
+    assert totals["unvalidated"] == 0
+    assert totals["repaired"] == 3 * summary["runs"]  # every repairable call repaired
+    assert totals["duplicate_executions"] == 0
+    assert totals["unknown"] == 2 * summary["runs"]  # the two calls the server died on
+    assert totals["restarts"] == 2 * summary["runs"]

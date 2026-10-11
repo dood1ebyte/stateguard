@@ -489,7 +489,12 @@ def test_a_removed_tool_is_not_validated_against_its_old_schema() -> None:
 
 
 def test_if_the_new_listing_never_comes_nothing_is_checked_against_the_old_one() -> None:
-    """F: a restarted server that fails tools/list leaves an empty registry, not a stale one."""
+    """
+    F: a restarted server that fails tools/list leaves an empty registry, not a
+    stale one -- and (T14) a call is then never forwarded at all: without the
+    new server's listing there is nothing valid to decide it against, so it is
+    answered "not sent" (it certainly did not execute).
+    """
 
     class NoListing(ScriptedServer):
         def _handle(self, line: bytes, writer: Any) -> bool:
@@ -515,9 +520,11 @@ def test_if_the_new_listing_never_comes_nothing_is_checked_against_the_old_one()
         _wait_event(rig, "server_restarted")
         _wait_event(rig, "tools_list_failed")
         assert rig.relay.registry.tools() == []
-        rig.call("search", {"qq": "x"})
-        forwarded = [json.loads(x) for x in rig.servers[1].received if b'"tools/call"' in x][-1]
-        assert forwarded["params"]["arguments"] == {"qq": "x"}
+        answer = rig.call("search", {"qq": "x"})
+        assert answer is not None
+        assert answer["error"]["data"]["io.stateguard/executionState"] == "not_sent"
+        assert not [x for x in rig.all_received if b'"tools/call"' in x]
+        assert not [e for e in rig.audit if e.get("event") == "call"]  # never decided
     finally:
         rig.close()
 

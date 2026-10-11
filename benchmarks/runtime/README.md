@@ -131,3 +131,25 @@ infrastructure enables real-traffic measurement but does not itself
 constitute real-traffic evidence. To measure real traffic, record with
 `--record-provenance real_capture` against a real deployment and point
 `--tapes` at those files. Replay never contacts the original server.
+
+## Mid-restart race regression
+
+```bash
+python benchmarks/runtime/race.py --runs 20
+```
+
+T13's replay found the race behind T14. A `tools/call` that arrived while
+the relay restarted its server could be forwarded unvalidated.
+
+`race.py` records a session that provokes it: repairable calls right after
+two after-unknown restarts. It replays that session `--runs` times with the
+client sending as soon as it has its previous answer
+(`run_arm(race_provoking=True)`), then counts:
+
+- restart-gated calls;
+- repaired, forwarded and refused/escalated calls;
+- UNKNOWN and not-sent answers;
+- duplicate executions;
+- **unsafe bypasses**, i.e. the T13 path (`replay.unsafe_bypasses`).
+
+This is fault injection on a synthetic workload.

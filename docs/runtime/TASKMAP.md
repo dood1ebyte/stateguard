@@ -64,7 +64,7 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Kill switch | COMPLETE (T2) | `--passthrough`; `test_passthrough_is_a_byte_relay` | — | Also the raw-baseline arm. |
 | Protocol-aware refusal (`resultType`) | COMPLETE | `jsonrpc.tool_error_response`; SDK e2e test | auto | |
 | Stdio relay | PARTIAL | `examples/mcp/stdio_proxy.py`; SDK e2e + scripted + in-process rig tests | both | Example, not a gateway: one server per relay. |
-| Safe server restart (E) | COMPLETE (T12, `9d1f401`, `24011f5`) | `test_relay_restart.py` (19, incl. 40-example property), real-subprocess e2e, `recovery.py` (M10) | **opt-in** (`--restart N`), Auto only; shadow never restarts | Default policy idle-only. Registry cleared on restart. 0 replays / 0 duplicate executions in every measurement. |
+| Safe server restart (E) | COMPLETE (T12, `9d1f401`, `24011f5`; T14 race fix) | `test_relay_restart.py` (19, incl. 40-example property), real-subprocess e2e, `recovery.py` (M10) | **opt-in** (`--restart N`), Auto only; shadow never restarts | Default policy idle-only. Registry cleared on restart. 0 replays / 0 duplicate executions in every measurement. |
 | Audit log | PARTIAL | relay JSON lines, value-free; `category` on Z / E / I / J events | both | Not exported as structured telemetry. |
 | Telemetry hooks | PARTIAL | `telemetry/hooks.py` `ITelemetryHook` (repair events only) | n/a | No runtime-event hooks. |
 | Effect classification | COMPLETE (T7, `ad6f041`) | `adapters/mcp/effects.py`; `test_effects.py` exhaustive (1,344 cases) | n/a | Operator-declared only; default UNKNOWN; annotations = recorded hints, never decide (VERIFIED incl. contradicting hints). |
@@ -117,7 +117,7 @@ list-changed delivery at 2026-07-28.
 | T11 | Auth-signal classification + operator callback | 4 | TODO | T6 |
 | T12 | Safe server restart: idle death only by default; in-flight → UNKNOWN, never replayed; re-initialize + re-list + registry reset; bounded; session recovery workload | 5 | DONE (`9d1f401`, `24011f5`, + measurement commit) | T6, T8 |
 | T13 | Record/replay with redaction: versioned format, deterministic redaction, fail-open relay taps, replay engine + A–H fault-injection corpus, provenance-labelled report | 6 | DONE (`bbb660b` + replay commit) | T4, T12 |
-| T14 | Relay: wait for the link before a listing refresh (mid-restart race, found by T13 replay) | 1 | TODO | T12 |
+| T14 | Mid-restart race: gate `tools/call` on a live, listed server; bind every decision to its server generation | 1 | DONE (see T14 section) | T12, T13 |
 
 ## Primitive records
 
@@ -567,6 +567,10 @@ header. The server command line is never written.
   relay's reserved prefixes, and reused request ids.
 - **Isolation.** Replay never starts a process or opens a socket (tested by
   forbidding both).
+- **Race-provoking mode** (T14): `run_arm(race_provoking=True)` sends each
+  line as soon as the previous answer arrived, even mid-restart, which is
+  the ordering a real client produces. `unsafe_bypasses(audit)` counts the
+  T13 path.
 
 **Provenance classes:** `synthetic`, `fault_injection`, `local_development`,
 `real_capture`.
@@ -629,7 +633,8 @@ header. The server command line is never written.
 
 **Findings outside the recorder** (surfaced by replay; not fixed in T13):
 
-- **Mid-restart refresh race (relay, T12 path).**
+- **Mid-restart refresh race (relay, T12 path).** RESOLVED in T14; kept
+  here as found.
   - **What happens:** a call that arrives while an after-unknown restart is
     in progress gets its relay `tools/list` refresh written to the dead
     server's pipe (`tools_list_unsent`). The call is then forwarded
@@ -655,6 +660,163 @@ header. The server command line is never written.
   reports outcome distributions only.
 - Concurrent-traffic replay (replay is sequential today) and timing replay
   (deadline effects are not reproduced).
+
+### T14 Mid-restart race: gate calls on a live, listed server
+
+**Objective.** A `tools/call` that arrives while the relay restarts its
+server must never bypass StateGuard's decision (repair, validation,
+refusal) because the server is temporarily unavailable.
+
+**Root cause** (VERIFIED from the audit trail of a failing run, 11/20 in
+the isolated repro; 16/20 in T13's replay of the E tape):
+
+1. The server dies with a call in flight. `_on_server_lost` sets the link to
+   `restarting` and answers that call "unknown".
+2. In the same step, `_abandon_own_listings` **sets `_listing_ready`** ("calls
+   are not held for a listing that cannot come").
+3. The client, told "unknown", sends its next call at once. `_decide`
+   passes the listing wait immediately and evaluates against the **dead
+   generation's registry**. The registry is cleared only later, in
+   `_connect`.
+4. The call needs repair, so the relay re-lists first. The `tools/list`
+   is written to the dead pipe (`tools_list_unsent`), the refresh fails, and
+   the call is decided "unvalidated, listing unconfirmed".
+5. `_send_tracked` then *waits for the link* and writes that unvalidated,
+   unrepaired call to the **new** server.
+
+The structural defect: a decision was never bound to the server generation
+it was made against. Waiting happened *after* deciding, so a decision made
+against generation N was sent to generation N+1.
+
+**Invariant.** No `tools/call` is written to a server until:
+
+- that server's link is up; and,
+- after a restart, its own tool listing has been synced into the registry.
+
+The decision must be made against that registry and written only to that
+generation. Otherwise the call waits (bounded), or is answered "not sent".
+
+**Fix** (`examples/mcp/stdio_proxy.py`; no new threads, and no concurrency
+redesign):
+
+- **`_gate_call` runs before deciding.**
+  - It waits for the link (`_await_link`, bounded as before).
+  - After a restart it also waits for `_synced_generation == generation`
+    (`_await_discovery`, on the existing `_listing_done` condition, bounded
+    by `LISTING_WAIT_SECONDS`).
+  - If that server is lost first, it waits for the next one (bounded by the
+    restart budget).
+  - If the restart fails, the budget is spent, or the new server cannot
+    list its tools, the call gets `_answer_not_sent`. That is the existing
+    certain-non-execution answer, and the call is never forwarded.
+  - A call that had to wait is logged `call_gated`.
+- **A lost refresh means decide again.** `_refresh_listing` now returns
+  `fresh` / `failed` / `lost`. `lost` covers unsent, or abandoned because
+  the server died. On `lost`, or a generation or link change during the
+  decision, `_decide` raises `_ServerChangedError` and `_on_call` gates and
+  decides again (`call_regated`). "Unvalidated, unconfirmed" remains only
+  for a *live* server's failed refresh: the documented T3 fail-open.
+- **`_send_decided` writes once, to one generation.** It checks the link is
+  up and the generation unchanged, records the ledger's `SENT`, and writes,
+  all under `_to_server`.
+  - `_on_server_lost` takes `_to_server` to move the link off `up`, and
+    `_connect` swaps the stream and increments the generation under it. A
+    call is therefore written to the generation it was decided for, or not
+    at all: `False`, nothing written, nothing recorded, decide again.
+  - A call that won the race is `SENT` before the loss is settled, so it is
+    UNKNOWN, as before.
+- **Discovery is requested before the link comes up.** `_connect` and
+  `_on_reinit` request the listing (`_discovery_epoch`) before setting
+  `up`, so a gated call waits for exactly that listing.
+- **Retries keep their generation.** `_calls` stores the generation; a retry
+  is never decided for, or sent to, another generation (`retry_not_sent` if
+  the server changed before the write).
+
+**Behaviour change (deliberate, fail-closed).** If a *restarted* server
+cannot list its tools:
+
+- **T12:** calls were forwarded unvalidated.
+- **T14:** they are answered "not sent".
+
+The initial generation keeps T2's fail-open policy: no listing at all means
+forward unvalidated, logged. The T12 test that pinned the old behaviour now
+pins the new one. In shadow mode, with the server gone, a call is no longer
+*decided* before it is answered "not sent". The client sees the same answer,
+and one fewer meaningless decision appears in the audit.
+
+**Tests** (VERIFIED):
+
+- `tests/examples/test_relay_restart_race.py`, 12 tests. The restart is made
+  a fact with a factory that blocks until released, and each test checks
+  the call is held at the gate first: a link waiter, PENDING, not decided,
+  not forwarded.
+  - **A:** waits, then decided after the new `tools_synced`, sent exactly
+    once to the new server.
+  - **B:** restart fails, so the call is "not sent", never decided or
+    forwarded.
+  - **C:** repaired after the restart, including a schema that changed
+    across the restart (decided on the new schema).
+  - **D:** ambiguous, so escalated or refused locally, never forwarded.
+  - **E:** an UNKNOWN in-flight call is never re-sent; the gated call goes
+    once.
+  - **F:** three gated calls, each sent once, in arrival order.
+  - **G:** the new server dies before listing, so the call goes to the
+    next server; with no budget left it is "not sent".
+  - The generation binding at unit level, for calls and for retries.
+  - The exact T13 ordering, unsynchronised, ×15: zero unrepaired calls
+    reach a server.
+  - All 12 fail against the pre-fix relay. The race test fails because an
+    unrepaired call reached the server ("Invalid arguments"); C because the
+    call was decided "unvalidated".
+- **H:** `test_relay_restart.py` (19), `test_relay_ledger.py`,
+  `test_relay_retry.py`, `test_recovery_workload.py` and the real-subprocess
+  restart tests all pass.
+- `tests/examples/test_replay.py` adds the bypass counter and a
+  race-provoking replay with zero bypasses.
+
+**Replay evidence** (fault injection on a synthetic workload; VERIFIED by
+running):
+
+| Measurement | Pre-fix relay | T14 relay |
+|---|---|---|
+| T13 corpus, E tape, as-recorded, race-provoking order, 20 runs: unsafe bypasses | **16/20 runs** (T13's 16/20 reproduced); decisions diverged in 16/20 | **0/20**; decisions match the recording 20/20 |
+| T13 corpus, D tape, same conditions | 0/20 | 0/20 |
+| `race.py`, 3 × 20 runs (5 calls each, 2 after-unknown restarts): unsafe bypasses | 25, 32, 26 (17, 20, 18 of 20 runs affected) | **0, 0, 0** |
+| `race.py`, repairable calls repaired | 35, 28, 34 of 60 | **60, 60, 60 of 60** |
+| `race.py`, calls forwarded "unvalidated" | 25, 32, 26 | **0** |
+| `race.py`, restart-gated calls | 0 (no gate) | 38, 38, 39 of 40 (the rest arrived after the restart completed) |
+| `race.py`: UNKNOWN / duplicate executions / not sent | 40 / 0 / 0 | 40 / 0 / 0 (the 40 are the calls the server died on: executed once, never re-sent) |
+
+"Unsafe bypass" (`replay.unsafe_bypasses`) is a call decided "unvalidated,
+listing unconfirmed" after a server loss or an unsent listing since the
+previous decision: the T13 path. The T14 relay can no longer produce it.
+The structural guarantee is the generation binding; the counter is the
+evidence.
+
+**Unchanged by the fix** (re-run):
+
+- **M9:** raw 117 → auto 89, Z 0 (auto_ops 6, deadline cuts as before).
+- **M10:** identical table; 0 replays, 0 duplicate executions, Z 0.
+- **M11:** identical, except decisions 58/58. C's call is no longer decided
+  against a dead server.
+- **Non-restart path:** the gate is one uncontended condition check. Auto
+  p50 is 1.92 ms vs 2.02 ms before, in-process; no regression visible.
+
+**Remaining limits:**
+
+- **The client pump is one thread.** A gated call holds every later client
+  message, notifications included, until it is decided or answered "not
+  sent". This is the same blocking as T12's link wait, now also covering
+  the discovery wait (≤ `LISTING_WAIT_SECONDS`).
+- **Late death detection is unchanged.** A call written in the window
+  between a server's death and the relay reading its EOF is SENT, then
+  UNKNOWN (never replayed). The fix closes the decision/generation gap, not
+  that physical window.
+- **Generation 0 keeps fail-open.** No listing ever means forward
+  unvalidated, logged (T2 policy). Only post-restart discovery is
+  fail-closed.
+- **Session state beyond tools** (resources, subscriptions) is still not
+  re-established after a restart (T12 limit).
 
 ## Measured results
 
@@ -1006,17 +1168,14 @@ How to read it:
 - **The relay's own audit log is not redacted** (`internal_error` exception
   text, `relay_started` server command). Pre-existing; only the recording
   path is redacted.
-- **Mid-restart refresh race** (found by T13 replay; T14): a call arriving
-  during a restart can be forwarded unvalidated. It fails open, so it is
-  not unsafe, but the repair is lost; reproduced in 16 of 20 runs.
+- **Mid-restart refresh race:** RESOLVED in T14 (0 unsafe bypasses across 60
+  race-provoking replays; 83 across the same 60 before the fix). See the T14 section for the
+  residual limits.
 
 ## Next task
 
 Recommended next:
 
-- **T14:** wait for the link before a listing refresh. This is the
-  mid-restart race found by T13. It is small, it is a defect, and replay
-  can verify it (as-recorded fidelity under a race-provoking ordering).
 - **Real capture:** run the relay with
   `--record --record-provenance real_capture` in shadow mode against real
   MCP servers, then `replay.py --tapes`. This needs a deployment, not code.

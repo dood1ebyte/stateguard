@@ -605,6 +605,10 @@ class ArmRun:
     decisions: list[tuple[str, Any, Any]]
     wall_ms: float
     recording_bytes: int = 0
+    #: The relay's audit events for the run (for the T14 race measurement).
+    audit: list[dict[str, Any]] = field(default_factory=list)
+    #: tools/call messages that reached any server process.
+    tools_call_sent: int = 0
 
 
 def _arm_settings(arm: str, env: TapeEnvironment) -> dict[str, Any]:
@@ -654,7 +658,15 @@ def run_arm(
     *,
     recorder: Recorder | None = None,
     step_timeout: float = STEP_TIMEOUT,
+    race_provoking: bool = False,
 ) -> ArmRun:
+    """
+    Replay *env* under *arm*. ``race_provoking`` sends each client line as
+    soon as the previous answer arrived -- even while the relay is still
+    restarting a server, as a real client would -- instead of waiting for the
+    restart to settle. That is the ordering under which T13 found the
+    mid-restart race (TASKMAP, T14).
+    """
     settings = _arm_settings(arm, env)
     mode: RelayMode = settings["mode"]
     state = ReplayState()
@@ -700,7 +712,8 @@ def run_arm(
             if step.index in env.deaths_before and not rig.server.dead:
                 rig.kill_server()
                 _await_loss(rig, mode)
-            _await_restart_settled(rig)
+            if not race_provoking:
+                _await_restart_settled(rig)
             rig.server.set_tools([ServerTool(t) for t in env.listing_for_step(step.index)])
             eof_before = rig.client_eof.is_set()
             began = time.perf_counter()
@@ -782,7 +795,30 @@ def run_arm(
             if e.get("event") == "call"
         ],
         wall_ms=wall,
+        audit=list(audit),
+        tools_call_sent=sum(1 for line in rig.all_received if b'"tools/call"' in line),
     )
+
+
+def unsafe_bypasses(audit: list[dict[str, Any]]) -> int:
+    """
+    T14's bypass, counted from a relay audit log: a ``tools/call`` decision
+    taken as "forward unvalidated, listing unconfirmed" after the server was
+    lost or a listing request could not be written since the previous
+    decision. That is the path on which a call skipped StateGuard's repair
+    because a restart was under way.
+    """
+    count = 0
+    lost_since_last_call = False
+    for event in audit:
+        name = event.get("event")
+        if name in ("server_lost", "tools_list_unsent"):
+            lost_since_last_call = True
+        elif name == "call":
+            if event.get("action") == "unvalidated" and event.get("listing") == "unconfirmed":
+                count += 1 if lost_since_last_call else 0
+            lost_since_last_call = False
+    return count
 
 
 def _await_restart_settled(rig: Rig, timeout: float = 3.0) -> None:

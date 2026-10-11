@@ -296,6 +296,14 @@ N times.
 - **Requests that arrive mid-restart** wait for it. If they still cannot be
   sent, they are answered "not sent", because they certainly did not
   execute.
+- **A tool call is decided only against a live, listed server.** After a
+  restart, a `tools/call` waits until the new server's tools have been
+  listed, so it is repaired or refused against the new schemas. It is never
+  decided against the dead server's schemas, and never forwarded
+  unvalidated because a restart was under way.
+  - If the new server cannot list its tools, the call is answered "not
+    sent".
+  - A decision is only ever written to the server process it was made for.
 - **When restarts run out,** the relay stops, as it would without
   StateGuard.
 

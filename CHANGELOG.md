@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Mid-restart race in the stdio relay** (found by T13 replay: 16 of 20
+  replays of the recorded session).
+  - **What went wrong.** A `tools/call` that arrived while the relay was
+    restarting its server was decided against the dead server's registry.
+    Its listing refresh failed on the dead pipe, and the call was then
+    forwarded *unvalidated* to the new server, skipping StateGuard's repair.
+  - **The fix: a gate.** Calls now wait until the new server's link is up
+    and its own tool listing is synced before they are decided.
+  - **The fix: generation binding.** Every decision is bound to the server
+    generation it was made for, and is written only to that generation
+    (the check and the write are atomic with the link going down).
+  - **Behaviour change.** If a restarted server cannot list its tools, a
+    call is answered "not sent" instead of being forwarded unvalidated.
+  - **Retries** never cross a restart.
+- `multipleOf`: a non-zero value whose quotient underflows to `0.0` (e.g.
+  `5e-324` against `2`) is no longer accepted as a multiple.
+
 ### Added
+- `benchmarks/runtime/race.py`: a regression measurement that replays the
+  race session in the T13 race-provoking order and counts restart-gated,
+  repaired, forwarded, refused, UNKNOWN, duplicate-execution and
+  unsafe-bypass outcomes. `replay.run_arm(race_provoking=True)` drives it.
 - **MCP traffic recording with redaction** (`stateguard.adapters.mcp.recording`:
   `Recorder`, `Redactor`, `RedactionPolicy`, `Provenance`, `read_recording`).
   - **Format.** Versioned JSON lines (`stateguard.mcp.recording` v1). It

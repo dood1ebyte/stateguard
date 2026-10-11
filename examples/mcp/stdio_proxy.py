@@ -90,6 +90,13 @@ N times in its lifetime, and only when it is safe:
   (bounded); one that cannot be sent is answered "not sent" -- it certainly
   did not execute. When the restart budget is spent, every later request is
   answered that way, and the audit log says why.
+* A ``tools/call`` is decided only against a server whose link is up and --
+  after a restart -- whose own tool listing has been synced; until then it
+  waits (``call_gated``). If the restarted server cannot list its tools, the
+  call is answered "not sent", never forwarded unvalidated. Every decision
+  is bound to the server generation it was made against and written only to
+  that generation: if the server is lost in between, the call is gated and
+  decided again (``call_regated``). Retries likewise never cross a restart.
 
 When the server is gone for good (restart off, refused, or the budget spent)
 the relay stops, as a relay without StateGuard would: the client sees its
@@ -216,6 +223,11 @@ RECONNECT_WAIT_SECONDS = 10.0
 #: Link to the server process: up, being restarted, or gone for good.
 LINK_UP, LINK_RESTARTING, LINK_DOWN = "up", "restarting", "down"
 
+
+class _ServerChangedError(Exception):
+    """The server was lost while a call was being decided: decide again."""
+
+
 #: How long a tools/call waits for a listing in flight before it is
 #: validated against what the relay has (and the audit log says so).
 LISTING_WAIT_SECONDS = 10.0
@@ -262,7 +274,8 @@ class StdioRelay:
         # Shadow mode never acts, whatever the retry setting.
         self._retry_mode = "shadow" if guard.config.mode is RepairMode.SHADOW else retry
         self._retry_ids = (f"{RETRY_ID_PREFIX}{n}" for n in itertools.count(1))
-        self._calls: dict[Any, tuple[bytes, str | None]] = {}  # client id -> (payload, tool)
+        # client id -> (payload, tool, server generation it was decided against)
+        self._calls: dict[Any, tuple[bytes, str | None, int]] = {}
         self._attempts: dict[Any, int] = {}  # client id -> attempts sent
         self._client_of: dict[Any, Any] = {}  # retry id -> client id
         self._retry_lock = threading.Lock()
@@ -298,6 +311,14 @@ class StdioRelay:
         self._chain_epoch = 0  # epoch of the listing being accumulated
         self._fresh_epoch = 0  # newest epoch whose listing completed
         self._failed_epochs: set[int] = set()
+        # Epochs whose listing could never be answered: unsent, or requested
+        # from a server that died. Distinct from a live server's error answer.
+        self._lost_epochs: set[int] = set()
+        # The generation whose tools the registry holds, and the epoch of the
+        # listing a restarted server was asked for. A call is decided against
+        # a restarted server only once its own listing has been synced.
+        self._synced_generation = -1
+        self._discovery_epoch: int | None = None
         self._listing_done = threading.Condition()
         self._client_lists = ToolListAccumulator()
         self._own_lists = ToolListAccumulator()
@@ -332,13 +353,17 @@ class StdioRelay:
     def _send_server(self, line: bytes) -> None:
         """Write to the *current* server process (the stream is swapped on restart)."""
         with self._to_server:
-            stream = self._server_in
-            try:
-                stream.write(line if line.endswith(b"\n") else line + b"\n")
-                stream.flush()
-            except ValueError as exc:  # closed: the client left, or a restart replaced it
-                raise BrokenPipeError(str(exc)) from exc
-            self._tap(Direction.RELAY_TO_SERVER, line)
+            self._write_server(line)
+
+    def _write_server(self, line: bytes) -> None:
+        """The write itself. Caller holds ``_to_server``."""
+        stream = self._server_in
+        try:
+            stream.write(line if line.endswith(b"\n") else line + b"\n")
+            stream.flush()
+        except ValueError as exc:  # closed: the client left, or a restart replaced it
+            raise BrokenPipeError(str(exc)) from exc
+        self._tap(Direction.RELAY_TO_SERVER, line)
 
     def _send_json(self, stream: IO[bytes], lock: threading.Lock, message: Any) -> None:
         self._send(stream, lock, json.dumps(message, separators=(",", ":")).encode("utf-8"))
@@ -408,6 +433,8 @@ class StdioRelay:
             self._send_server(self._encode(message))
         except OSError as exc:
             self._log("tools_list_unsent", category="E", error=str(exc))
+            with self._listing_done:
+                self._lost_epochs.add(epoch)
             self._finish_epoch(epoch, ok=False)
         return epoch
 
@@ -419,12 +446,15 @@ class StdioRelay:
                 self._failed_epochs.add(epoch)
             self._listing_done.notify_all()
 
-    def _refresh_listing(self) -> bool:
+    def _refresh_listing(self) -> str:
         """
-        Re-list and wait for a listing requested *now*. True if one completed.
+        Re-list and wait for a listing requested *now*.
 
-        A later epoch completing also counts -- it was requested later still.
-        False on an error response, or after ``LISTING_WAIT_SECONDS``.
+        ``"fresh"`` if one completed (a later epoch completing also counts --
+        it was requested later still); ``"lost"`` if the server could not
+        answer it -- the request was unsent, or the server died first;
+        ``"failed"`` on a live server's error answer or after
+        ``LISTING_WAIT_SECONDS``.
         """
         epoch = self._request_listing()
         with self._listing_done:
@@ -432,11 +462,18 @@ class StdioRelay:
                 lambda: self._fresh_epoch >= epoch or epoch in self._failed_epochs,
                 timeout=LISTING_WAIT_SECONDS,
             )
-            return self._fresh_epoch >= epoch
+            if self._fresh_epoch >= epoch:
+                return "fresh"
+            return "lost" if epoch in self._lost_epochs else "failed"
 
     def _sync(self, tools: list[Any], source: str) -> None:
         report = self.registry.sync(tools)
         self._listing_stale = False
+        with self._listing_done:
+            # Only the current server's stream is read, so this listing is the
+            # current generation's.
+            self._synced_generation = self.generation
+            self._listing_done.notify_all()
         self._log(
             "tools_synced",
             source=source,
@@ -527,14 +564,7 @@ class StdioRelay:
         so that one is UNKNOWN, never "not sent".
         """
         if not self._await_link():
-            if identifier is None:
-                self._log("notification_dropped", category="E", reason="server unavailable")
-                return
-            self.ledger.answered_locally(identifier)
-            self._forget(identifier)
-            self._log("not_sent", category="E", id=identifier, reason="server unavailable")
-            with contextlib.suppress(OSError, ValueError):  # the client may be gone too
-                self._send_json(self._client_out, self._to_client, not_sent_response(identifier))
+            self._answer_not_sent(identifier, "server unavailable")
             return
         if identifier is not None:
             self.ledger.sent(identifier)
@@ -548,6 +578,117 @@ class StdioRelay:
                     Observed.UNKNOWN_TRANSPORT,
                     connection_available=False,
                 )
+
+    def _answer_not_sent(self, identifier: Any, reason: str) -> None:
+        """A request that was never written: it certainly did not execute. Say so."""
+        if identifier is None:
+            self._log("notification_dropped", category="E", reason=reason)
+            return
+        self.ledger.answered_locally(identifier)
+        self._forget(identifier)
+        self._log("not_sent", category="E", id=identifier, reason=reason)
+        with contextlib.suppress(OSError, ValueError):  # the client may be gone too
+            self._send_json(self._client_out, self._to_client, not_sent_response(identifier))
+
+    def _send_decided(self, identifier: Any, payload: bytes, generation: int) -> bool:
+        """
+        Write a request decided against server *generation*, exactly once.
+
+        The check that the link is up and still that generation, the ledger's
+        ``SENT`` and the write happen under ``_to_server``, which the link
+        also takes to leave ``up`` (``_on_server_lost``) or to swap servers
+        (``_connect``). So a request decided against one server process is
+        never written to another. False -- nothing written, nothing recorded
+        -- when the server changed: the caller decides again.
+        """
+        failure: OSError | None = None
+        with self._to_server:
+            if self.generation != generation or self._link != LINK_UP:
+                return False
+            if identifier is not None:
+                self.ledger.sent(identifier)
+            try:
+                self._write_server(payload)
+            except OSError as exc:
+                failure = exc
+        if failure is not None:
+            self._log("send_failed", category="E", id=identifier, error=str(failure))
+            if identifier is not None:
+                self._resolve_unknown(
+                    [self.ledger.send_failed(identifier)],
+                    Observed.UNKNOWN_TRANSPORT,
+                    connection_available=False,
+                )
+        return True
+
+    def _gate_call(self, identifier: Any) -> int | None:
+        """
+        The server generation a ``tools/call`` may be decided against: one
+        whose link is up and -- after a restart -- whose own tool listing has
+        been synced. Waits for a restart in progress (bounded). If no such
+        server comes, the call is answered "not sent" and ``None`` returned:
+        it is never decided against a dead server's schemas, never forwarded
+        unvalidated because a restart was under way.
+        """
+        reason = "server unavailable"
+        waited = self._link != LINK_UP or self._synced_generation != self.generation
+        for _ in range(self._max_restarts + 2):
+            if not self._await_link():
+                break
+            generation = self.generation
+            if generation == 0:
+                return generation  # never restarted: nothing to re-discover
+            with self._link_cond:  # the relay answers waiting calls before it stops
+                self._link_waiters += 1
+            try:
+                state = self._await_discovery(generation)
+            finally:
+                with self._link_cond:
+                    self._link_waiters -= 1
+                    self._link_cond.notify_all()
+            if state == "valid":
+                if waited:
+                    self._log("call_gated", category="E", id=identifier, generation=generation)
+                return generation
+            if state == "failed":
+                reason = "the restarted server's tools could not be listed"
+                break
+            # "changed": that server was lost too; wait for the next one.
+        if waited:
+            self._log("call_gated", category="E", id=identifier, generation=None)
+        self._answer_not_sent(identifier, reason)
+        return None
+
+    def _await_discovery(self, generation: int) -> str:
+        """
+        ``"valid"`` once *generation*'s listing is synced; ``"changed"`` if
+        that server is lost first; ``"failed"`` if its listing failed (or did
+        not come in ``LISTING_WAIT_SECONDS``) while it stayed up.
+        """
+
+        def lost() -> bool:
+            return self.generation != generation or self._link != LINK_UP
+
+        def settled() -> bool:
+            epoch = self._discovery_epoch
+            return (
+                self._synced_generation == generation
+                or lost()
+                or (epoch is not None and epoch in self._failed_epochs)
+            )
+
+        with self._listing_done:
+            self._listing_done.wait_for(settled, timeout=LISTING_WAIT_SECONDS)
+            if self._synced_generation == generation:
+                return "valid"
+            if lost():
+                return "changed"
+            if self._discovery_epoch in self._lost_epochs:
+                # The listing could not be written: that server is dying. Its
+                # loss (or the timeout) decides, never a decision without it.
+                self._listing_done.wait_for(lost, timeout=RECONNECT_WAIT_SECONDS)
+                return "changed" if lost() else "failed"
+            return "failed"
 
     def _await_link(self) -> bool:
         """True once the server link is up; False if it is (or stays) down."""
@@ -637,7 +778,9 @@ class StdioRelay:
             attempts = self._attempts.get(client_id, 1)
         if call is None or self._retry_mode == "off":
             return False
-        payload, tool = call
+        payload, tool, generation = call
+        if generation != self.generation:
+            return False  # decided against a server that is gone: never re-sent to another
         entry = self.registry.find(tool) if tool else None
         declaration = self._effects.of(
             tool or "", annotations=entry.annotations if entry is not None else None
@@ -670,9 +813,16 @@ class StdioRelay:
             self._client_of[retry_id] = client_id
             self._attempts[client_id] = attempts + 1
         self.ledger.received(retry_id, TOOLS_CALL, tool)
-        with contextlib.suppress(OSError):  # resolved as unknown inside _send_tracked
-            self._send_tracked(retry_id, self._encode(message))
-        return True
+        # Only to the server it was decided for (send failures resolve as unknown inside).
+        if self._send_decided(retry_id, self._encode(message), generation):
+            return True
+        # The server changed before the retry went out: it was never written.
+        self.ledger.answered_locally(retry_id)
+        with self._retry_lock:
+            self._client_of.pop(retry_id, None)
+            self._attempts[client_id] = attempts
+        self._log("retry_not_sent", category="E", id=client_id, reason="server changed")
+        return False
 
     def _forget(self, client_id: Any) -> None:
         with self._retry_lock:
@@ -737,28 +887,49 @@ class StdioRelay:
         during the write cannot cause a second send -- a relay that retried
         a write it could not confirm would risk executing the call twice.
         """
-        try:
-            to_server, payload = self._decide(line, message)
-        except Exception as exc:  # noqa: BLE001 -- fail open; see the module docstring
-            self._internal_error("tools/call", exc, id=request_id(message), action="unvalidated")
-            to_server, payload = True, line
-        if to_server:
+        # Every decision is bound to the server generation it was made
+        # against, and is written only to that generation (``_send_decided``).
+        # If the server changes in between -- it dies, it is restarted -- the
+        # call is gated again and decided again against the new server.
+        # Bounded: each round needs a lost server, and restarts are bounded.
+        for _ in range(self._max_restarts + 2):
+            generation = self._gate_call(identifier)
+            if generation is None:
+                return  # answered "not sent"
+            try:
+                to_server, payload = self._decide(line, message, generation)
+            except _ServerChangedError:
+                self._log("call_regated", category="E", id=identifier, reason="server lost")
+                continue
+            except Exception as exc:  # noqa: BLE001 -- fail open; see the module docstring
+                self._internal_error(
+                    "tools/call", exc, id=request_id(message), action="unvalidated"
+                )
+                to_server, payload = True, line
+            if not to_server:
+                if identifier is not None:
+                    self.ledger.answered_locally(identifier)
+                self._send(self._client_out, self._to_client, payload)
+                return
             if identifier is not None and self._retry_mode != "off":
                 tool = message.get("params", {}).get("name") if isinstance(message, dict) else None
                 with self._retry_lock:
-                    self._calls[identifier] = (payload, tool if isinstance(tool, str) else None)
+                    self._calls[identifier] = (
+                        payload,
+                        tool if isinstance(tool, str) else None,
+                        generation,
+                    )
                     self._attempts[identifier] = 1
-            self._send_tracked(identifier, payload)
-        else:
-            if identifier is not None:
-                self.ledger.answered_locally(identifier)
-            self._send(self._client_out, self._to_client, payload)
+            if self._send_decided(identifier, payload, generation):
+                return
+            self._log("call_regated", category="E", id=identifier, reason="server changed")
+        self._answer_not_sent(identifier, "the server kept changing")
 
     @staticmethod
     def _encode(message: Any) -> bytes:
         return json.dumps(message, separators=(",", ":")).encode("utf-8")
 
-    def _decide(self, line: bytes, message: Any) -> tuple[bool, bytes]:
+    def _decide(self, line: bytes, message: Any, generation: int = 0) -> tuple[bool, bytes]:
         """``(to_server, bytes)`` for one ``tools/call``. Never writes to a stream."""
         try:
             request = ToolCallRequest.parse(message)
@@ -774,7 +945,13 @@ class StdioRelay:
         if self._refresh_before_intervening and _intervenes(request, outcome):
             # About to change or block the call: only on a listing that is
             # known to be the server's current one. See the module docstring.
-            if not self._refresh_listing():
+            refreshed = self._refresh_listing()
+            if refreshed == "lost" or self.generation != generation or self._link != LINK_UP:
+                # The server went away while this call was being decided. Its
+                # listing says nothing about the next server: decide again
+                # there, never forward on the strength of a dead one.
+                raise _ServerChangedError
+            if refreshed != "fresh":
                 self._log(
                     "call",
                     id=request.id,
@@ -879,6 +1056,9 @@ class StdioRelay:
             with self._link_cond:
                 self._link = LINK_DOWN
                 self._link_cond.notify_all()
+            with self._listing_done:  # wake calls gated on a listing too
+                self._listing_done.notify_all()
+            with self._link_cond:
                 # Requests that were waiting for a restart are answered "not
                 # sent" before the relay stops -- never left without an answer.
                 self._link_cond.wait_for(lambda: self._link_waiters == 0, timeout=2.0)
@@ -888,6 +1068,8 @@ class StdioRelay:
         with self._link_cond:
             self._link = state
             self._link_cond.notify_all()
+        with self._listing_done:  # calls gated on discovery watch the link too
+            self._listing_done.notify_all()
 
     def _on_server_lost(self) -> bool:
         """
@@ -895,8 +1077,11 @@ class StdioRelay:
         True when a new server is connected and pumping should go on.
         """
         will_try = self._restart is not None and not self._shadow and not self._client_gone
-        # From here no request is written to the dead process.
-        self._set_link(LINK_RESTARTING if will_try else LINK_DOWN)
+        # From here no request is written to the dead process. Taken under
+        # _to_server: a call between its link check and its write finishes
+        # first (and is then SENT, so settled below), or sees the link down.
+        with self._to_server:
+            self._set_link(LINK_RESTARTING if will_try else LINK_DOWN)
         # Nothing in flight will be answered: each is UNKNOWN, told so, and
         # never re-sent -- not even to a restarted server.
         unknown = [inv for inv in self.ledger.transport_closed() if inv is not None]
@@ -944,10 +1129,13 @@ class StdioRelay:
         with self._to_server:
             old = self._server_in
             self._server_in = server_in
+            # With the stream, under the same lock: a call decided against the
+            # old generation can never be written to the new stream.
+            self.generation += 1
+            self._discovery_epoch = None
         with contextlib.suppress(OSError):
             old.close()
         self._server_out = server_out
-        self.generation += 1
         # The old listing describes a process that no longer exists: forget it,
         # so nothing is validated -- let alone repaired -- against it. Until
         # the new process lists its tools, calls wait for that listing, and if
@@ -977,8 +1165,10 @@ class StdioRelay:
             except OSError as exc:
                 self._log("reinit_unsent", category="E", error=str(exc))
             return  # the link comes up when the server answers
+        # Ask for the tools before the link comes up: calls gated on this
+        # generation wait for exactly this listing.
+        self._discovery_epoch = self._request_listing()
         self._set_link(LINK_UP)
-        self._request_listing()
 
     def _on_reinit(self, message: dict[str, Any]) -> None:
         """The restarted server answered the replayed initialize."""
@@ -1011,8 +1201,8 @@ class StdioRelay:
                 self._log("reinit_unsent", category="E", error=str(exc))
                 return
         self._log("reinitialized", category="D", generation=self.generation, version=version)
+        self._discovery_epoch = self._request_listing()
         self._set_link(LINK_UP)
-        self._request_listing()
 
     def _abandon_own_listings(self) -> None:
         """Listings requested from a dead server will never complete."""
@@ -1020,6 +1210,7 @@ class StdioRelay:
             epochs = set(self._epoch_of.values())
             self._epoch_of.clear()
             self._first_page_ids.clear()
+            self._lost_epochs |= epochs
         for epoch in epochs:
             self._finish_epoch(epoch, ok=False)
         self._own_lists = ToolListAccumulator()
