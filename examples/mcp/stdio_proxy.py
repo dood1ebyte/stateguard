@@ -41,6 +41,25 @@ needs no refresh -- the server decides it either way. If no fresh listing
 arrives in time, the call is forwarded unchanged. ``--no-listing-refresh``
 turns this off (one fewer round trip per intervention, at the risk above).
 
+Execution state
+---------------
+Every client request is recorded in an ``InvocationLedger``: pending, sent,
+completed, answered by the relay, or **unknown** -- sent, and no answer is
+coming. The relay uses it, in auto mode, for two things only:
+
+* **Never two answers for one request.** A second response for a request
+  that was already answered (or already resolved as unknown) is dropped and
+  logged; the first is the client's.
+* **Never silence instead of an answer.** If the server's pipe closes, every
+  request in flight gets an explicit JSON-RPC error saying the outcome is
+  unknown -- it **may or may not have executed** -- instead of no answer at
+  all. With ``--call-deadline SECONDS`` the same happens to a request the
+  server has not answered in time (off by default: a long-running tool is
+  not a failure). The relay never retries and never claims a call failed or
+  succeeded when it does not know.
+
+Shadow mode logs what it would have done and changes nothing.
+
 Results are never touched. A response from the server is written to the
 client as the exact bytes the server produced.
 
@@ -92,8 +111,10 @@ from typing import IO, Any
 from stateguard import ContractGuard
 from stateguard.adapters.mcp import (
     ForwardingInvariantError,
+    InvocationLedger,
     MalformedMessageError,
     MCPAction,
+    ResponseDisposition,
     ToolCallOutcome,
     ToolCallRequest,
     ToolListAccumulator,
@@ -140,6 +161,7 @@ class StdioRelay:
         unreadable: str = "forward",
         passthrough: bool = False,
         refresh_before_intervening: bool = True,
+        call_deadline: float | None = None,
     ) -> None:
         self.registry = ToolRegistry(guard)
         self._client_in, self._client_out = client_in, client_out
@@ -149,6 +171,9 @@ class StdioRelay:
         # The kill switch: relay bytes, decide nothing, learn nothing.
         self._passthrough = passthrough
         self._refresh_before_intervening = refresh_before_intervening
+        self.ledger = InvocationLedger()
+        self._call_deadline = call_deadline
+        self._stopped = threading.Event()
         # Freshness: every relay-initiated listing gets an epoch. A call may
         # only be intervened on after a listing whose epoch began after the
         # call arrived has completed -- an older listing in flight cannot
@@ -276,8 +301,9 @@ class StdioRelay:
                 self._send(self._server_in, self._to_server, line)
                 continue
             message = _parse(line)
+            identifier = self._track(message)
             if is_request(message, TOOLS_CALL):
-                self._on_call(line, message)
+                self._on_call(line, message, identifier)
                 continue
             try:
                 first_versioned = self._remember_protocol(message)
@@ -286,7 +312,7 @@ class StdioRelay:
             except Exception as exc:  # noqa: BLE001 -- fail open; see the module docstring
                 self._internal_error("client message", exc)
                 first_versioned = False
-            self._send(self._server_in, self._to_server, line)
+            self._send_tracked(identifier, line)
             # Learn the tools before the first call: after the handshake under
             # the initialize-based protocol, at the first versioned request
             # under the stateless one.
@@ -294,6 +320,67 @@ class StdioRelay:
                 is_notification(message, "notifications/initialized") or first_versioned
             ):
                 self._request_listing()
+
+    def _track(self, message: Any) -> Any:
+        """Record a client request in the ledger; its id, or None if not a request."""
+        if not isinstance(message, dict) or "method" not in message or "id" not in message:
+            return None
+        identifier = message["id"]
+        if identifier is None:
+            return None
+        params = message.get("params")
+        tool = params.get("name") if isinstance(params, dict) else None
+        try:
+            self.ledger.received(
+                identifier, str(message["method"]), tool if isinstance(tool, str) else None
+            )
+        except Exception as exc:  # noqa: BLE001 -- fail open
+            self._internal_error("ledger", exc)
+            return None
+        return identifier
+
+    def _send_tracked(self, identifier: Any, line: bytes) -> None:
+        """Write a client request to the server, recording it as sent first."""
+        if identifier is not None:
+            self.ledger.sent(identifier)
+        try:
+            self._send(self._server_in, self._to_server, line)
+        except OSError:
+            if identifier is not None:
+                self._surface_unknown(self.ledger.send_failed(identifier))
+            raise
+
+    def _surface_unknown(self, *invocations: Any) -> None:
+        """Tell each client its request's outcome is unknown (auto); log it (both)."""
+        for invocation in invocations:
+            if invocation is None:
+                continue
+            reason = invocation.unknown_reason or "unknown"
+            self._log(
+                "outcome_unknown",
+                category="I",
+                id=invocation.request_id,
+                method=invocation.method,
+                tool=invocation.tool,
+                reason=reason,
+                surfaced=not self._shadow,
+            )
+            if self._shadow:
+                continue
+            with contextlib.suppress(OSError):
+                self._send_json(
+                    self._client_out,
+                    self._to_client,
+                    unknown_outcome_response(invocation.request_id, reason),
+                )
+
+    def run_deadlines(self) -> None:
+        """With ``call_deadline`` set: resolve unanswered requests as unknown. Runs until stop."""
+        if self._call_deadline is None:
+            return
+        tick = min(0.05, self._call_deadline / 4)
+        while not self._stopped.wait(tick):
+            self._surface_unknown(*self.ledger.expire(self._call_deadline))
 
     def _internal_error(self, where: str, exc: BaseException, **fields: Any) -> None:
         """Record a StateGuard failure (category Z). The caller fails open."""
@@ -317,7 +404,7 @@ class StdioRelay:
         }
         return first
 
-    def _on_call(self, line: bytes, message: Any) -> None:
+    def _on_call(self, line: bytes, message: Any, identifier: Any = None) -> None:
         """
         Decide, then send exactly once.
 
@@ -333,8 +420,10 @@ class StdioRelay:
             self._internal_error("tools/call", exc, id=request_id(message), action="unvalidated")
             to_server, payload = True, line
         if to_server:
-            self._send(self._server_in, self._to_server, payload)
+            self._send_tracked(identifier, payload)
         else:
+            if identifier is not None:
+                self.ledger.answered_locally(identifier)
             self._send(self._client_out, self._to_client, payload)
 
     @staticmethod
@@ -453,8 +542,13 @@ class StdioRelay:
     def pump_server(self) -> None:
         try:
             self._pump_server()
+            if not self._passthrough:
+                # The server's stdout closed: nothing in flight will be answered.
+                self._surface_unknown(*self.ledger.transport_closed())
         except OSError as exc:  # the client's stdout is gone
             self._log("transport_closed", category="E", direction="server->client", error=str(exc))
+        finally:
+            self._stopped.set()
 
     def _pump_server(self) -> None:
         for line in self._server_out:
@@ -475,6 +569,8 @@ class StdioRelay:
                     self._finish_epoch(self._epoch_of.get(identifier, self._chain_epoch), ok=False)
                     self._listing_ready.set()  # never hold calls on a listing that failed
                 continue  # the client never asked for this one
+            if is_response(message) and identifier is not None and not self._deliverable(message):
+                continue
             try:
                 if is_response(message):
                     listing = self._client_lists.observe_response(message)
@@ -488,6 +584,28 @@ class StdioRelay:
                 self._internal_error("server message", exc)
                 self._listing_ready.set()
             self._send(self._client_out, self._to_client, line)  # untouched
+
+    def _deliverable(self, message: dict[str, Any]) -> bool:
+        """Whether a server response goes to the client: not if it already has its answer."""
+        try:
+            result = message.get("result")
+            is_error = "error" in message or (
+                isinstance(result, dict) and result.get("isError") is True
+            )
+            disposition = self.ledger.response(message["id"], is_error=is_error)
+        except Exception as exc:  # noqa: BLE001 -- fail open: deliver
+            self._internal_error("ledger", exc)
+            return True
+        if disposition in (ResponseDisposition.DELIVER, ResponseDisposition.UNSOLICITED):
+            return True
+        self._log(
+            "response_dropped" if not self._shadow else "response_would_drop",
+            category="J",
+            id=message["id"],
+            disposition=disposition.value,
+            is_error=is_error,
+        )
+        return self._shadow  # shadow never changes traffic
 
     def _on_own_listing(self, message: Any) -> None:
         identifier = request_id(message)
@@ -510,6 +628,39 @@ class StdioRelay:
             self._log("tools_list_failed", error=message["error"])
             self._finish_epoch(epoch, ok=False)
             self._listing_ready.set()  # do not hold calls forever
+
+
+#: JSON-RPC implementation-defined server error: the outcome is unknown.
+UNKNOWN_OUTCOME_CODE = -32000
+UNKNOWN_OUTCOME_KEY = "io.stateguard/executionState"
+
+
+def unknown_outcome_response(identifier: Any, reason: str) -> dict[str, Any]:
+    """
+    The relay's answer for a request whose outcome it cannot know.
+
+    A JSON-RPC error, not a tool result: no tool produced it, and a client
+    must not read it as the tool's verdict. The message says plainly that
+    the request may have executed, so nobody retries a non-idempotent call
+    on the strength of it.
+    """
+    why = {
+        "transport_closed": "the MCP server's connection closed before it answered",
+        "deadline": "the MCP server did not answer within the relay's deadline",
+        "send_failed": "the request could not be fully written to the MCP server",
+    }.get(reason, "the relay cannot determine the outcome")
+    return {
+        "jsonrpc": JSONRPC_VERSION,
+        "id": identifier,
+        "error": {
+            "code": UNKNOWN_OUTCOME_CODE,
+            "message": (
+                f"Outcome unknown: {why}. The request may or may not have been executed; "
+                "do not retry it unless it is safe to run twice."
+            ),
+            "data": {UNKNOWN_OUTCOME_KEY: "unknown", "io.stateguard/reason": reason},
+        },
+    }
 
 
 def _intervenes(request: ToolCallRequest, outcome: ToolCallOutcome) -> bool:
@@ -552,6 +703,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Do not re-list tools before repairing or blocking a call (see the module docs).",
     )
     parser.add_argument(
+        "--call-deadline",
+        type=float,
+        metavar="SECONDS",
+        help="Answer 'outcome unknown' to a request unanswered after SECONDS (default: off).",
+    )
+    parser.add_argument(
         "--passthrough",
         action="store_true",
         help="Kill switch: relay bytes only, StateGuard off. The measurement baseline.",
@@ -576,6 +733,7 @@ def main(argv: list[str] | None = None) -> int:
         unreadable=args.unreadable,
         passthrough=args.passthrough,
         refresh_before_intervening=not args.no_listing_refresh,
+        call_deadline=args.call_deadline,
     )
     relay._log(
         "relay_started",
@@ -584,6 +742,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     to_server = threading.Thread(target=relay.pump_client, daemon=True)
     to_server.start()
+    threading.Thread(target=relay.run_deadlines, daemon=True).start()
     relay.pump_server()  # until the server closes its stdout
     return server.wait()
 

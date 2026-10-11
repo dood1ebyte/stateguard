@@ -216,6 +216,8 @@ def build(seed: int = 0, *, corpus: Corpus | None = None, per_fault: int = 8) ->
     fault("E", "stdio_kill_before_execute", {0: act.CLOSE_BEFORE_EXECUTE}, timeout=0.6)
     fault("F", "hang_then_recover", {0: act.HANG_BEFORE_EXECUTE}, timeout=0.6)
     fault("F", "transient_error", {0: act.TRANSIENT_ERROR})
+    # A slow tool that succeeds: no failure at all, unless something gives up on it.
+    fault("F", "slow_success", {0: act.DELAYED_RESPONSE}, timeout=0.6)
     fault("G", "execution_error_after_side_effect", {0: act.TOOL_ERROR})
     fault("H", "truncated_response", {0: act.GARBAGE}, timeout=0.6)
     fault("I", "response_lost_after_execute", {0: act.DROP_RESPONSE}, timeout=0.6)

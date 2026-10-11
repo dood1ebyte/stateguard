@@ -77,6 +77,11 @@ class ServerAction(StrEnum):
     HANG_BEFORE_EXECUTE = "hang_before_execute"  # never execute, never answer
     TRANSIENT_ERROR = "transient_error"  # do not execute, answer isError (temporary)
     AUTH_EXPIRED = "auth_expired"  # do not execute, answer a JSON-RPC auth error
+    DELAYED_RESPONSE = "delayed_response"  # execute, answer correctly after DELAY_SECONDS
+
+
+#: How late a DELAYED_RESPONSE answer is.
+DELAY_SECONDS = 0.45
 
 
 @dataclass
@@ -296,6 +301,10 @@ class ScriptedServer:
             ],
             "isError": False,
         }
+        if action is ServerAction.DELAYED_RESPONSE:
+            import time
+
+            time.sleep(DELAY_SECONDS)
         self._reply(writer, identifier, result)
         if action is ServerAction.DUPLICATE_RESPONSE:
             self._reply(writer, identifier, result)
@@ -335,6 +344,7 @@ class Rig:
         unreadable: str = "forward",
         listing_wait: float | None = None,
         refresh_before_intervening: bool = True,
+        call_deadline: float | None = None,
     ) -> None:
         from stateguard import ContractGuard, GuardConfig
         from stateguard.core.models.config import RepairMode
@@ -370,6 +380,7 @@ class Rig:
             unreadable=unreadable,
             passthrough=mode is RelayMode.PASSTHROUGH,
             refresh_before_intervening=refresh_before_intervening,
+            call_deadline=call_deadline,
         )
         server_in, server_out = os.fdopen(r2s_r, "rb"), os.fdopen(s2r_w, "wb")
         self._threads = [
@@ -377,6 +388,7 @@ class Rig:
             threading.Thread(target=self._pump_client_side, daemon=True),
             threading.Thread(target=self.relay.pump_client, daemon=True),
             threading.Thread(target=self._pump_server_side, daemon=True),
+            threading.Thread(target=self.relay.run_deadlines, daemon=True),
         ]
         for thread in self._threads:
             thread.start()

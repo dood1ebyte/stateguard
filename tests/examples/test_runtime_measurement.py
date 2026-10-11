@@ -5,8 +5,10 @@ Runs the full scenario set at one invocation per injected fault, in all four
 arms, and checks the properties that must hold whatever the numbers are:
 
 * shadow behaves exactly like raw (same success, same server executions);
-* auto never fails an invocation that raw got right (no StateGuard-induced
-  failure) and never executes anything twice;
+* auto, in its default configuration, never fails an invocation that raw
+  got right (no StateGuard-induced failure) and never executes anything
+  twice -- the deadline arm is a configuration with a measured cost, so it
+  is held only to "never executes twice";
 * every category but those listed as untested is exercised.
 
 The numbers themselves are recorded in docs/runtime/TASKMAP.md, not asserted
@@ -52,6 +54,14 @@ def test_auto_induces_no_failure_and_no_duplicate(summary: dict[str, Any]) -> No
             assert row["auto_vs_raw"]["stateguard_induced"] == 0, cat
             assert row["auto_vs_raw"]["duplicate_execution"] == 0, cat
             assert row["auto_vs_raw"]["crashes"] == 0, cat
+            assert "duplicate_execution" not in row["auto_dl"]["kinds"], cat
+
+
+def test_auto_hides_fewer_failures_than_raw(summary: dict[str, Any]) -> None:
+    hidden = summary["totals"]["hidden"]
+    assert hidden["shadow"] == hidden["raw"]
+    assert hidden["auto"] < hidden["raw"]
+    assert hidden["auto_dl"] <= hidden["auto"]
 
 
 def test_auto_prevents_contract_failures(summary: dict[str, Any]) -> None:

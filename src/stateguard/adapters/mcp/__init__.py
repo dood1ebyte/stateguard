@@ -36,6 +36,12 @@ from stateguard.adapters.mcp.jsonrpc import (
     refusal_response,
     tool_error_response,
 )
+from stateguard.adapters.mcp.ledger import (
+    ExecutionState,
+    Invocation,
+    InvocationLedger,
+    ResponseDisposition,
+)
 from stateguard.adapters.mcp.outcomes import (
     MCPAction,
     ToolCallOutcome,
@@ -54,6 +60,10 @@ from stateguard.adapters.mcp.registry import (
 
 __all__ = [
     "DEFAULT_CACHE_SIZE",
+    "ExecutionState",
+    "Invocation",
+    "InvocationLedger",
+    "ResponseDisposition",
     "ForwardingInvariantError",
     "InvalidToolDefinitionError",
     "MCPAction",

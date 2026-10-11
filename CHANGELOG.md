@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`InvocationLedger`** (`stateguard.adapters.mcp`): per-request execution
+  state for a proxy. The states are `PENDING`, `ANSWERED_LOCALLY` (never sent,
+  certainly not executed), `SENT`, `COMPLETED`, and `UNKNOWN` (sent, no answer
+  coming: may or may not have executed). `response(id)` says whether to
+  deliver a server response or drop it as a duplicate or late answer.
+  `transport_closed()` and `expire(deadline)` resolve in-flight requests as
+  `UNKNOWN`. It decides nothing alone and does no I/O. A property test drives
+  random interleavings: at most one answer per request, and `UNKNOWN` is never
+  rounded to success or failure.
+- **The stdio relay uses the ledger** (auto mode; shadow only logs):
+  - A second response for an answered request is dropped.
+  - If the server dies, every request in flight gets an explicit JSON-RPC
+    error saying the outcome is unknown, instead of silence.
+  - `--call-deadline` (opt-in) does the same for unanswered requests and
+    drops the late answer.
+- **`benchmarks/runtime/`**: before/after measurement per failure category,
+  with seeded fault injection and raw, naive-retry, shadow and auto arms.
 - **`ToolRegistry`** (`stateguard.adapters.mcp`): the in-memory record of a
   server's tools, keyed by `ToolKey(name, server)` so two servers' `search`
   tools never collide. `sync(tools, server=)` replaces a listing atomically

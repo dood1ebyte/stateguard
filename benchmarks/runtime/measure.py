@@ -11,7 +11,11 @@ fresh in-process rig (client <-> stdio relay <-> scripted server):
 ``naive``      Raw, plus a client that retries once on an error or a
                timeout. Not a safe strategy; it shows what blind retry does.
 ``shadow``     StateGuard observing. Must match raw exactly.
-``auto``       StateGuard acting.
+``auto``       StateGuard acting, default configuration.
+``auto_dl``    StateGuard acting with ``--call-deadline 0.3`` (the relay
+               answers "outcome unknown" to a request unanswered after
+               0.3 s; clients here wait 0.6 s). A configuration, not a
+               default: a deadline cuts legitimately slow tools short.
 =============  =============================================================
 
 An invocation **succeeds** when it ends as its ground truth says:
@@ -34,7 +38,15 @@ Anything else is a failure, recorded with its kinds:
 * ``executed_reported_failed`` -- the intended call ran, and the client was
   told it failed: the client's view and the server's state now disagree;
 * ``duplicate_response`` -- the client received more than one response for
-  one request id.
+  one request id;
+* ``surfaced_unknown`` -- the client was told, truthfully, that the outcome is
+  unknown (it may or may not have executed). Still a failure -- the call
+  did not complete -- but not a *hidden* one.
+
+``no_response``, ``phantom_success`` and ``duplicate_response`` are
+**hidden** failures: the client is left without the truth. The report counts
+them separately, because turning a hidden failure into a surfaced one is
+progress that the success rate alone does not show.
 
 The server's execution ledger is the ground truth for side effects, so
 duplicates and phantom successes are counted where they happen, not
@@ -80,7 +92,9 @@ from .scenarios import (  # noqa: E402
     equivalent,
 )
 
-ARMS = ("raw", "naive", "shadow", "auto")
+ARMS = ("raw", "naive", "shadow", "auto", "auto_dl")
+DEADLINE_ARM_SECONDS = 0.3
+HIDDEN_KINDS = frozenset({"no_response", "phantom_success", "duplicate_response"})
 FAILURE_KINDS = (
     "not_executed",
     "wrong_execution",
@@ -89,6 +103,7 @@ FAILURE_KINDS = (
     "no_response",
     "executed_reported_failed",
     "duplicate_response",
+    "surfaced_unknown",
 )
 
 
@@ -138,8 +153,14 @@ def run_one(scenario: Scenario, arm: str, *, listing_wait: float = 1.0) -> Resul
         "naive": RelayMode.PASSTHROUGH,
         "shadow": RelayMode.SHADOW,
         "auto": RelayMode.AUTO,
+        "auto_dl": RelayMode.AUTO,
     }[arm]
-    rig = Rig(server, mode, listing_wait=listing_wait)
+    rig = Rig(
+        server,
+        mode,
+        listing_wait=listing_wait,
+        call_deadline=DEADLINE_ARM_SECONDS if arm == "auto_dl" else None,
+    )
     try:
         rig.request("server/discover")
         if mode is not RelayMode.PASSTHROUGH:
@@ -189,7 +210,8 @@ def _judge(
 ) -> Result:
     executed = list(server.executed)
     client_ok = _client_ok(response)
-    kinds: list[str] = []
+    unknown = _surfaced_unknown(response)
+    kinds: list[str] = ["surfaced_unknown"] if unknown else []
     if scenario.intended is not None:
         matching = [c for c in executed if equivalent(tool, c.arguments, scenario.intended)]
         if not matching:
@@ -202,7 +224,7 @@ def _judge(
             kinds.append("phantom_success")
         if response is None:
             kinds.append("no_response")
-        elif not client_ok and matching:
+        elif not client_ok and matching and not unknown:
             kinds.append("executed_reported_failed")
         success = len(matching) == 1 and len(executed) == 1 and client_ok
     else:
@@ -248,6 +270,12 @@ def _judge(
         latency_ms=latency,
         retried=retried,
     )
+
+
+def _surfaced_unknown(response: dict[str, Any] | None) -> bool:
+    error = response.get("error") if isinstance(response, dict) else None
+    data = error.get("data") if isinstance(error, dict) else None
+    return isinstance(data, dict) and data.get("io.stateguard/executionState") == "unknown"
 
 
 def _method(line: bytes) -> str | None:
@@ -300,7 +328,11 @@ def summarise(report: Report) -> dict[str, Any]:
             kinds: Counter[str] = Counter()
             for s in failures:
                 kinds.update(by[(s, arm)].kinds)
-            row[arm] = {"failures": len(failures), "kinds": dict(kinds)}
+            row[arm] = {
+                "failures": len(failures),
+                "hidden": sum(1 for s in failures if HIDDEN_KINDS & set(by[(s, arm)].kinds)),
+                "kinds": dict(kinds),
+            }
 
         raw_fail = {s for s in ids if not by[(s, "raw")].success}
         auto = {s: by[(s, "auto")] for s in ids}
@@ -315,6 +347,9 @@ def summarise(report: Report) -> dict[str, Any]:
             "unresolved": sum(1 for s in raw_fail if not auto[s].success),
             "stateguard_induced": sum(
                 1 for s in ids if by[(s, "raw")].success and not auto[s].success
+            ),
+            "stateguard_induced_auto_dl": sum(
+                1 for s in ids if by[(s, "raw")].success and not by[(s, "auto_dl")].success
             ),
             "incorrect_repair": sum(
                 1 for r in auto.values() if r.rewrote and "wrong_execution" in r.kinds
@@ -377,6 +412,14 @@ def summarise(report: Report) -> dict[str, Any]:
         "stateguard_induced": sum(
             c.get("auto_vs_raw", {}).get("stateguard_induced", 0) for c in categories.values()
         ),
+        "stateguard_induced_auto_dl": sum(
+            c.get("auto_vs_raw", {}).get("stateguard_induced_auto_dl", 0)
+            for c in categories.values()
+        ),
+        "hidden": {
+            arm: sum(c[arm]["hidden"] for c in categories.values() if c.get("exercised"))
+            for arm in ARMS
+        },
     }
     return {
         "provenance": report.provenance,
@@ -418,8 +461,9 @@ def render(summary: dict[str, Any]) -> str:
         f"{summary['totals']['invocations']} invocations per arm",
         "",
         f"{'cat':<4}{'name':<30}{'N':>4} {'raw':>4} {'naive':>5} {'shadow':>6} {'auto':>5}"
-        f" {'prev':>5} {'esc':>4} {'unres':>5} {'Z':>3} {'dup(naive)':>10} {'dup(auto)':>9}",
-        "-" * 104,
+        f" {'a+dl':>5} {'prev':>5} {'esc':>4} {'unres':>5} {'Z':>3} {'hid raw':>7}"
+        f" {'hid auto':>8} {'hid a+dl':>8} {'dup(naive)':>10} {'dup(auto)':>9}",
+        "-" * 132,
     ]
     for cat, row in summary["categories"].items():
         if not row["exercised"]:
@@ -429,18 +473,24 @@ def render(summary: dict[str, Any]) -> str:
         lines.append(
             f"{cat:<4}{row['name']:<30}{row['n']:>4} {row['raw']['failures']:>4}"
             f" {row['naive']['failures']:>5} {row['shadow']['failures']:>6}"
-            f" {row['auto']['failures']:>5} {avr['prevented']:>5} {avr['escalated']:>4}"
+            f" {row['auto']['failures']:>5} {row['auto_dl']['failures']:>5}"
+            f" {avr['prevented']:>5} {avr['escalated']:>4}"
             f" {avr['unresolved']:>5} {avr['stateguard_induced']:>3}"
+            f" {row['raw']['hidden']:>7} {row['auto']['hidden']:>8} {row['auto_dl']['hidden']:>8}"
             f" {row['naive_retry']['duplicate_execution']:>10} {avr['duplicate_execution']:>9}"
         )
     t = summary["totals"]
     lines += [
-        "-" * 104,
+        "-" * 132,
         f"failures before (raw) {t['failures_before']}, after (auto) {t['failures_after']}, "
-        f"StateGuard-induced {t['stateguard_induced']}",
-        "columns: raw/naive/shadow/auto = failing invocations per arm; prev = prevented by "
-        "auto; esc = escalated; unres = still failing under auto; Z = succeeded raw, failed "
-        "auto; dup = duplicate executions",
+        f"StateGuard-induced {t['stateguard_induced']} "
+        f"(with the {DEADLINE_ARM_SECONDS}s deadline: {t['stateguard_induced_auto_dl']})",
+        "hidden failures: " + ", ".join(f"{arm} {n}" for arm, n in t["hidden"].items()),
+        "columns: raw/naive/shadow/auto/a+dl = failing invocations per arm (a+dl: auto with "
+        f"a {DEADLINE_ARM_SECONDS}s call deadline); prev = prevented by auto; esc = escalated; "
+        "unres = still failing under auto; Z = succeeded raw, failed auto; hid = failures "
+        "hidden from the client (no answer, phantom success, duplicate answer); dup = "
+        "duplicate executions",
         "latency (category A, in-process): "
         + ", ".join(
             f"{arm} p50 {v['p50_ms']:.1f} ms / p99 {v['p99_ms']:.1f} ms"
