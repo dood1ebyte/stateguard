@@ -64,11 +64,14 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Kill switch | COMPLETE (T2) | `--passthrough`; `test_passthrough_is_a_byte_relay` | — | Also the raw-baseline arm. |
 | Protocol-aware refusal (`resultType`) | COMPLETE | `jsonrpc.tool_error_response`; SDK e2e test | auto | |
 | Stdio relay | PARTIAL | `examples/mcp/stdio_proxy.py`; SDK e2e + scripted tests | both | Example only; no reconnect, no timeouts. |
-| Audit log | PARTIAL | relay JSON lines, value-free | both | No invocation ledger / execution state. |
+| Audit log | PARTIAL | relay JSON lines, value-free; `category` on Z / E / I / J events | both | Not exported as structured telemetry. |
 | Telemetry hooks | PARTIAL | `telemetry/hooks.py` `ITelemetryHook` (repair events only) | n/a | No runtime-event hooks. |
 | Effect classification | MISSING | grep: no effect model | — | Annotations stored only, never used in decisions (VERIFIED, risk D safe). |
-| Outcome / invocation ledger | MISSING | — | — | |
-| Execution state | MISSING | — | — | |
+| Outcome / invocation ledger | COMPLETE (T6, `c1c9acc`) | `adapters/mcp/ledger.py`; `test_ledger.py` (13 unit + 600-example property) | both | Library primitive; the relay is its first user. |
+| Execution state | COMPLETE (T6) | `ExecutionState`: PENDING / ANSWERED_LOCALLY / SENT / COMPLETED / UNKNOWN | both | UNKNOWN is first-class; never rounded. |
+| Duplicate-response containment (J) | COMPLETE (T6) | `test_relay_ledger.py`; M5 J 8 → 0 | auto drops / shadow logs | |
+| Surface unknown outcome on transport close (E/I) | COMPLETE (T6) | `test_relay_ledger.py`; M5 hidden failures 53 → 25 | auto answers / shadow logs | JSON-RPC `-32000` error with `data["io.stateguard/executionState"] = "unknown"`. |
+| Call deadline (F/H/I) | PARTIAL (T6) — opt-in only | M5: hidden 25 → 1, but **8 Z** on slow successes | auto, opt-in | Off by default; the operator must set it above legitimate tool latency. |
 | Retry decision logic | MISSING | — | — | |
 | Circuit breaking | MISSING | — | — | |
 | Result validation (`outputSchema`) | MISSING | results pass through untouched (VERIFIED) | — | Safe absence; must start Shadow-only. |
@@ -104,9 +107,9 @@ list-changed delivery at 2026-07-28.
 | T3 | Stale-listing safety at 2026-07-28: never act (repair/refuse/escalate) on a listing not known fresh — re-list then re-decide | 2 spec compat | DONE `3be1e3e` | T2 |
 | T4 | Measurement vertical slice: seeded workload × fault injectors × arms (raw, naive retry, shadow, auto) → per-category report incl. Z | 3 measurement | DONE `198aa25` | T1–T3 |
 | T5 | JSON Schema 2020-12 coverage: annotation keywords, simple assertions, single-branch `allOf`, `true` subschema; differential-verified | 2/4 | TODO | T4 (to measure) |
-| T6 | Execution state + invocation ledger (request id → SENT / RESPONDED / FAILED_BEFORE_SEND / UNKNOWN) | 5 | TODO | T4 |
-| T7 | Effect model: operator-declared only; annotations recorded as untrusted hints | 5 | TODO | T6 |
-| T8 | Retry decision via TrustPolicy: not-sent or operator-idempotent only; ambiguous → ESCALATE | 5 | TODO | T6, T7 |
+| T6 | Execution state + invocation ledger; relay: dedupe (J), surface unknown on transport close (E/I), opt-in deadline | 5 | DONE `c1c9acc` | T4 |
+| T7 | Effect model: operator-declared only; annotations recorded as untrusted hints | 5 | IN PROGRESS | T6 |
+| T8 | Retry decision (TrustDecision vocabulary + Shadow/Auto): operator-declared read-only/idempotent only; UNKNOWN on undeclared → ESCALATE | 5 | IN PROGRESS | T6, T7 |
 | T9 | Circuit breaker per (server, tool), Shadow-first | 5 | TODO | T6 |
 | T10 | Result integrity: `outputSchema` / `structuredContent` validation, Shadow-only | 4 | TODO | T4 |
 | T11 | Auth-signal classification + operator callback | 4 | TODO | T6 |
@@ -165,6 +168,34 @@ safety boundary / Z modes / Shadow-first / Auto conditions / evidence).
   pass-throughs (a missed repair, not a wrong one).
 - **Shadow-first / Auto:** active in both (it keeps shadow records honest).
 - **Evidence:** `tests/examples/test_relay_staleness.py` (14 tests); M3.
+
+### P-T6 Invocation ledger + relay containment (T6)
+
+- **Ownable:** yes. The relay sees every request and response on the wire.
+- **Deterministic:** yes. The deadline is time-based by definition and
+  opt-in.
+- **State:** the ledger, per request id, with bounded retention (4,096
+  finished).
+- **Safety boundary:**
+  - It never retries.
+  - It never claims success or failure it does not know.
+  - It drops a response only when the client already has its one answer
+    (DUPLICATE / LATE). Id reuse after completion is delivered as without a
+    proxy.
+- **Z modes:**
+  - The deadline cuts slow successes (measured: 8/8 slow-success injections
+    at 0.3 s). This is why it is opt-in.
+  - A response to a reused-but-finished id beyond retention is passed
+    through (as raw).
+  - Shadow never alters traffic (VERIFIED).
+- **Auto conditions:**
+  - Dedupe and surface-on-close are on in auto, because neither can make an
+    outcome worse than raw: dedupe only removes a second answer, and
+    surfacing replaces silence with a truthful error. VERIFIED: Z = 0
+    (M5).
+  - The deadline needs an operator-chosen value above legitimate tool
+    latency.
+- **Evidence:** `test_ledger.py`, `test_relay_ledger.py`, M5.
 
 ## Measured results
 
@@ -237,6 +268,26 @@ production rates. VERIFIED by running.
   cannot be built on the client-visible signal alone.** It needs execution
   state plus an operator-declared effect model.
 
+**M5 — after T6 (`c1c9acc`).** Same corpus and seed as M4, plus a new F
+injector (`slow_success`: correct answer after 0.45 s). **SYNTHETIC.**
+VERIFIED by running.
+
+| Cat | N | raw | auto | auto + 0.3 s deadline | hidden raw → auto → auto+dl | notes |
+|---|---|---|---|---|---|---|
+| A | 37 | 21 | 1 | 1 | 5 → 1 → 1 | unchanged from M4 |
+| B, C | 6, 8 | 0 | 0 | 0 | 0 | |
+| E | 8 | 8 | 8 | 8 | **8 → 0 → 0** | server death now answered "outcome unknown" |
+| F | 24 | 16 | 16 | **24** | 8 → 8 → 0 | deadline: hangs surfaced, but 8 slow successes cut (**Z = 8**) |
+| G | 8 | 8 | 8 | 8 | 0 | executed, reported failed |
+| H | 8 | 8 | 8 | 8 | 8 → 8 → 0 | |
+| I | 16 | 16 | 16 | 16 | **16 → 8 → 0** | |
+| J | 8 | 8 | **0** | 0 | 8 → 0 → 0 | duplicate responses dropped |
+| K | 8 | 8 | 8 | 8 | 0 | |
+
+- **Totals:** 93 failures before, 65 after (auto), StateGuard-induced 0
+  (auto) / 8 (deadline arm).
+- **Hidden failures:** raw 53, naive 29, shadow 53, auto 25, auto+deadline 1.
+
 ## Known risks / unresolved categories
 
 - **Unresolved:** C (detect only), D, E, F, G, H, I, J, K — no runtime
@@ -247,13 +298,15 @@ production rates. VERIFIED by running.
 
 ## Next task
 
-T6: execution state + invocation ledger in the relay. It is deterministic,
-and needs no effect model, for three uses:
+T7 + T8: the effect model and the retry decision.
 
-- (a) drop a second response for an id already answered (J);
-- (b) when the server's pipe closes, answer every outstanding call with an
-  explicit "delivery uncertain, may have executed" error instead of
-  silence (E, I): surface, never hide;
-- (c) record per-call execution state for T7/T8.
-
-The measurement gains a "hidden vs surfaced" split.
+- **Effects** are operator-declared only, per `(server, tool)`, as READ_ONLY,
+  IDEMPOTENT, NON_IDEMPOTENT or UNKNOWN (the default). Annotations are
+  recorded as untrusted hints and never used.
+- **Retry** is decided from ledger state plus the declared effect, in the
+  TrustDecision vocabulary (APPLY = retry, AMBIGUOUS = escalate, REJECT =
+  deliver as-is), under Shadow/Auto: Shadow-first, Auto opt-in.
+- **Reuse rationale:** TrustPolicy *scores* evidence on field operations.
+  Retry safety is a hard rule over state and declaration, not a score, so
+  T8 reuses the decision vocabulary and the Shadow/Auto mode rather than
+  forcing retries into field-operation evidence.
