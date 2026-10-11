@@ -74,6 +74,9 @@ class ServerAction(StrEnum):
     CLOSE_AFTER_EXECUTE = "close_after_execute"  # execute, then close the pipe
     GARBAGE = "garbage"  # execute, answer bytes that are not JSON
     DUPLICATE_RESPONSE = "duplicate_response"  # execute once, answer twice
+    HANG_BEFORE_EXECUTE = "hang_before_execute"  # never execute, never answer
+    TRANSIENT_ERROR = "transient_error"  # do not execute, answer isError (temporary)
+    AUTH_EXPIRED = "auth_expired"  # do not execute, answer a JSON-RPC auth error
 
 
 @dataclass
@@ -251,6 +254,23 @@ class ScriptedServer:
 
         if action is ServerAction.CLOSE_BEFORE_EXECUTE:
             return False
+        if action is ServerAction.HANG_BEFORE_EXECUTE:
+            return True
+        if action is ServerAction.TRANSIENT_ERROR:
+            self._reply(writer, identifier, _error_result(f"{name}: temporarily unavailable"))
+            return True
+        if action is ServerAction.AUTH_EXPIRED:
+            self._write(
+                writer,
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": identifier,
+                        "error": {"code": -32001, "message": "Unauthorized: token expired"},
+                    }
+                ).encode(),
+            )
+            return True
         if tool is None:
             self._reply(writer, identifier, _error_result(f"Unknown tool: {name}"))
             return True
@@ -326,6 +346,10 @@ class Rig:
         self.audit: list[dict[str, Any]] = []
         self._responses: queue.Queue[dict[str, Any] | bytes] = queue.Queue()
         self._next_id = 0
+        #: Every message the client received, in order (for duplicate detection).
+        self.client_received: list[dict[str, Any] | bytes] = []
+        #: Ids of the requests sent through ``request()``.
+        self.sent_ids: list[Any] = []
 
         c2r_r, c2r_w = os.pipe()
         r2c_r, r2c_w = os.pipe()
@@ -335,10 +359,11 @@ class Rig:
         self._client_r = os.fdopen(r2c_r, "rb")
 
         repair_mode = RepairMode.SHADOW if mode is RelayMode.SHADOW else RepairMode.AUTO
+        self._relay_client_out = os.fdopen(r2c_w, "wb")
         self.relay = relay_module.StdioRelay(
             ContractGuard.with_mcp(config=GuardConfig(mode=repair_mode)),
             os.fdopen(c2r_r, "rb"),
-            os.fdopen(r2c_w, "wb"),
+            self._relay_client_out,
             os.fdopen(r2s_w, "wb"),
             os.fdopen(s2r_r, "rb"),
             _AuditSink(self.audit),
@@ -351,17 +376,39 @@ class Rig:
             threading.Thread(target=server.serve, args=(server_in, server_out), daemon=True),
             threading.Thread(target=self._pump_client_side, daemon=True),
             threading.Thread(target=self.relay.pump_client, daemon=True),
-            threading.Thread(target=self.relay.pump_server, daemon=True),
+            threading.Thread(target=self._pump_server_side, daemon=True),
         ]
         for thread in self._threads:
             thread.start()
 
+    def _pump_server_side(self) -> None:
+        # As the real relay's process does when its server exits: stop, which
+        # closes the client's stdout. Without this the client side never sees EOF.
+        try:
+            self.relay.pump_server()
+        finally:
+            with contextlib.suppress(OSError):
+                self._relay_client_out.close()
+
+    def wait_synced(self, count: int = 1, *, timeout: float = 5.0) -> bool:
+        """Wait until the relay has synced *count* listings (passthrough: no-op)."""
+        import time
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if sum(1 for e in self.audit if e.get("event") == "tools_synced") >= count:
+                return True
+            time.sleep(0.01)
+        return False
+
     def _pump_client_side(self) -> None:
         for line in self._client_r:
             try:
-                self._responses.put(json.loads(line))
+                message: dict[str, Any] | bytes = json.loads(line)
             except ValueError:
-                self._responses.put(line)  # bytes the client could not parse
+                message = line  # bytes the client could not parse
+            self.client_received.append(message)
+            self._responses.put(message)
 
     def send(self, message: dict[str, Any]) -> None:
         self._client_w.write((json.dumps(message) + "\n").encode())
@@ -372,6 +419,7 @@ class Rig:
     ) -> dict[str, Any] | None:
         self._next_id += 1
         identifier = self._next_id
+        self.sent_ids.append(identifier)
         self.send(
             {
                 "jsonrpc": "2.0",
@@ -397,10 +445,12 @@ class Rig:
         return self.request("tools/call", {"name": name, "arguments": arguments}, timeout=timeout)
 
     def close(self) -> None:
+        """EOF from the client end; it propagates client -> relay -> server -> back."""
         with contextlib.suppress(OSError):
             self._client_w.close()
         for thread in self._threads:
             thread.join(timeout=2)
+        self.leaked_threads = sum(1 for t in self._threads if t.is_alive())
 
 
 class _AuditSink:

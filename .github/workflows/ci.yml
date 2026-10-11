@@ -141,6 +141,9 @@ jobs:
       - name: MCP adapter benchmark smoke test
         run: python benchmarks/mcp_bench.py --repeat 1
 
+      - name: Runtime failure measurement (synthetic, quick)
+        run: python benchmarks/runtime/measure.py --per-fault 1
+
       # Gates on regressions and on stale known_gap markers only -- a
       # documented gap failing is the corpus doing its job, not CI breaking.
       - name: Calibration corpus

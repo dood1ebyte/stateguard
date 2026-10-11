@@ -81,6 +81,7 @@ parses.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import itertools
 import json
 import subprocess
@@ -261,6 +262,15 @@ class StdioRelay:
     # -- client -> server ----------------------------------------------------
 
     def pump_client(self) -> None:
+        try:
+            self._pump_client()
+        except OSError as exc:  # the server's stdin is gone: the server exited
+            self._log("transport_closed", category="E", direction="client->server", error=str(exc))
+        finally:
+            with self._to_server, contextlib.suppress(OSError):
+                self._server_in.close()
+
+    def _pump_client(self) -> None:
         for line in self._client_in:
             if self._passthrough:
                 self._send(self._server_in, self._to_server, line)
@@ -284,8 +294,6 @@ class StdioRelay:
                 is_notification(message, "notifications/initialized") or first_versioned
             ):
                 self._request_listing()
-        with self._to_server:
-            self._server_in.close()
 
     def _internal_error(self, where: str, exc: BaseException, **fields: Any) -> None:
         """Record a StateGuard failure (category Z). The caller fails open."""
@@ -443,6 +451,12 @@ class StdioRelay:
     # -- server -> client ----------------------------------------------------
 
     def pump_server(self) -> None:
+        try:
+            self._pump_server()
+        except OSError as exc:  # the client's stdout is gone
+            self._log("transport_closed", category="E", direction="server->client", error=str(exc))
+
+    def _pump_server(self) -> None:
         for line in self._server_out:
             if self._passthrough:
                 self._send(self._client_out, self._to_client, line)
