@@ -48,8 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     refused by `StdioRelay` (`ValueError`); the relay CLI exits 2, before
     starting the server, without `--shadow` and `--record`, with
     `--passthrough`, or with `--record-redaction secrets_only`.
-  - **Mask only.** `Recorder` refuses `real_capture` with any redaction but
-    `mask`; the parser refuses such a file.
+  - **Mask only, numbers included.** `Recorder` refuses `real_capture` with
+    any redaction but `mask`, and always applies the new
+    `RedactionPolicy.mask_numbers`: every number is reduced to sign and
+    order of magnitude (`482913` -> `100000`), a numeric string is never
+    vouched for by a numeric schema type, and pure-number identifiers and
+    dict keys are masked. Kept: JSON-RPC ids, `error.code`, tool schemas,
+    published `enum`/`const` values, HTTP statuses in `error.data`, the
+    relay's own counters and settings. The parser refuses a `real_capture`
+    file without both. Other provenances are unchanged.
   - **No ground truth on observed traffic.** `fault()` / `label()` write
     nothing for `local_development`, `real_capture` and the new `replay`
     provenance (counted as `ground_truth_refused` in `end`); the parser

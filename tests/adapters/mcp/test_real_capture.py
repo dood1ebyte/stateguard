@@ -160,6 +160,8 @@ def _lines(provenance: Provenance, mode: str = "mask") -> list[str]:
     header = json.loads(lines[0])
     header["provenance"] = provenance.value
     header["redaction"]["mode"] = mode
+    if provenance is Provenance.REAL_CAPTURE:
+        header["redaction"]["rules"].append("mask_numbers")
     return [json.dumps(header), *lines[1:]]
 
 
@@ -178,6 +180,13 @@ def test_parser_refuses_ground_truth_in_observed_traffic(provenance: Provenance,
 def test_parser_refuses_an_unmasked_real_capture() -> None:
     with pytest.raises(MalformedRecordingError, match="mask redaction"):
         parse_recording(_lines(Provenance.REAL_CAPTURE, mode="secrets_only")[:2])
+
+
+def test_parser_refuses_a_real_capture_that_kept_numbers() -> None:
+    header = json.loads(_lines(Provenance.REAL_CAPTURE)[0])
+    header["redaction"]["rules"].remove("mask_numbers")
+    with pytest.raises(MalformedRecordingError, match="must mask numbers"):
+        parse_recording([json.dumps(header)])
 
 
 def test_parser_accepts_generated_ground_truth() -> None:
@@ -259,7 +268,9 @@ def _body(text: str) -> list[dict[str, Any]]:
 
 
 @pytest.mark.parametrize("provenance", [p for p in Provenance if p is not Provenance.REAL_CAPTURE])
-def test_real_capture_redacts_exactly_as_any_masked_recording(provenance: Provenance) -> None:
+def test_real_capture_redacts_through_the_same_path(provenance: Provenance) -> None:
+    """One redaction path: on traffic with no free-standing numbers, a real
+    capture's records equal any masked recording's. (Numbers: see below.)"""
     assert _body(_record(Provenance.REAL_CAPTURE)) == _body(_record(provenance))
 
 
@@ -456,3 +467,283 @@ def test_a_live_recording_digests_lines_under_a_key_it_never_writes() -> None:
     recorder.close()
     (plain,) = parse_recording(sink.getvalue().splitlines()).messages()
     assert "digest" not in plain["diag"]
+
+
+# ---------------------------------------------------------------------------
+# Numbers: a real capture keeps no number a user could have typed
+# ---------------------------------------------------------------------------
+
+NUMERIC_TOOL = {
+    "name": "verify",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "code": {"type": "integer"},
+            "code_text": {"type": "integer"},
+            "limit": {"type": "integer", "maximum": 1000},
+            "page_size": {"type": "integer", "enum": [10, 25, 50]},
+            "version": {"const": 3},
+            "ratio": {"type": "number"},
+        },
+    },
+}
+NUMERIC_LISTING = {
+    "jsonrpc": "2.0",
+    "id": "stateguard-relay:1",
+    "result": {"resultType": "complete", "tools": [NUMERIC_TOOL]},
+}
+#: Values a user might type that no key name marks as a credential.
+TYPED = (482913, 7351, 664422, 118842, 90210, 31415, 271828)
+
+
+def _numeric_call(identifier: int = 123456) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": identifier,
+        "method": "tools/call",
+        "params": {
+            "name": "verify",
+            "arguments": {
+                "code": 482913,  # an OTP under an ordinary key
+                "code_text": "7351",  # a PIN as a numeric string in an integer field
+                "limit": 25,  # ordinary, not sensitive
+                "page_size": 25,  # a published enum member
+                "version": 3,  # a published const
+                "ratio": 3.14159,  # a float
+                "flow": {"step": 2, "answer": 664422, "geo": [37.774929, -122.419416]},
+                "history": [118842, {"value": 90210}],
+                "embedded": json.dumps({"value": 31415}),
+                "value": "hunter2xyz",  # a password under a non-obvious key
+                "note": SECRETS["github"],
+            },
+            "_meta": {"io.example/counter": 271828},
+        },
+    }
+
+
+def _numeric_recording(provenance: Provenance, **kwargs: Any) -> tuple[str, list[dict[str, Any]]]:
+    recorder, sink = _capture(provenance=provenance, **kwargs)
+    recorder.message(Direction.SERVER_TO_RELAY, _line(NUMERIC_LISTING))
+    recorder.message(Direction.CLIENT_TO_RELAY, _line(_numeric_call()))
+    recorder.message(
+        Direction.SERVER_TO_RELAY,
+        _line(
+            {
+                "jsonrpc": "2.0",
+                "id": 123456,
+                "result": {
+                    "resultType": "complete",
+                    "isError": False,
+                    "content": [{"type": "text", "text": "balance 482913"}],
+                    "structuredContent": {"balance": 7351.25, "pin": 1234, "items": [664422]},
+                },
+            }
+        ),
+    )
+    recorder.message(
+        Direction.SERVER_TO_RELAY,
+        _line(
+            {
+                "jsonrpc": "2.0",
+                "id": 123457,
+                "error": {
+                    "code": -32603,
+                    "message": "Request failed",
+                    "data": {"status": 401, "retry_after": 118842, "statusCode": 4821},
+                },
+            }
+        ),
+    )
+    recorder.close()
+    text = sink.getvalue()
+    return text, list(map(json.loads, text.splitlines()))
+
+
+def _numbers(value: Any, path: str = "") -> list[tuple[str, int | float]]:
+    if isinstance(value, dict):
+        return [n for k, v in value.items() for n in _numbers(v, f"{path}.{k}")]
+    if isinstance(value, list):
+        return [n for i, v in enumerate(value) for n in _numbers(v, f"{path}[{i}]")]
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return [(path, value)]
+    return []
+
+
+def _power_of_ten(value: int | float) -> bool:
+    size = abs(value)
+    if size == 0:
+        return True
+    while size >= 10:
+        size /= 10
+    while size < 1:
+        size *= 10
+    return abs(size - 1) < 1e-9
+
+
+def test_a_real_capture_keeps_no_typed_number() -> None:
+    text, records = _numeric_recording(Provenance.REAL_CAPTURE)
+    for typed in TYPED:
+        assert str(typed) not in text, typed
+    for fragment in ("37.774929", "122.419416", "3.14159", "7351.25", "hunter2", "4821"):
+        assert fragment not in text, fragment
+    assert SECRETS["github"] not in text
+    # Whatever number is left in a message is a protocol value or a scale.
+    kept = {
+        ".id": {123456, 123457},
+        ".error.code": {-32603},
+        ".error.data.status": {401},
+        ".params.arguments.page_size": {25},
+        ".params.arguments.version": {3},
+    }
+    for record in records:
+        if record["type"] != "message":
+            continue
+        for path, number in _numbers(record["message"]):
+            if ".inputSchema." in path:
+                continue  # a published tool schema: the server's contract
+            assert number in kept.get(path, set()) or _power_of_ten(number), (path, number)
+
+
+def test_real_capture_numbers_keep_type_sign_and_scale() -> None:
+    _, records = _numeric_recording(Provenance.REAL_CAPTURE)
+    (call,) = [r for r in records if r["type"] == "message" and r["kind"] == "request"]
+    arguments = call["message"]["params"]["arguments"]
+    assert arguments["code"] == 100000 and isinstance(arguments["code"], int)
+    assert arguments["code_text"] == "1111"  # masked text, not vouched by the integer type
+    assert arguments["limit"] == 10  # ordinary: scale kept, value not
+    assert (arguments["page_size"], arguments["version"]) == (25, 3)  # published members
+    assert arguments["ratio"] == 1.0 and isinstance(arguments["ratio"], float)
+    assert arguments["flow"] == {"step": 1, "answer": 100000, "geo": [10.0, -100.0]}
+    assert arguments["history"] == [100000, {"value": 10000}]
+    assert json.loads(arguments["embedded"]) == {"value": 10000}
+    assert arguments["value"] == "aaaaaa1aaa"
+    assert call["message"]["params"]["_meta"]["io.example/counter"] == 100000
+
+
+def test_real_capture_keeps_what_analysis_needs() -> None:
+    from stateguard.adapters.mcp.failures import FailureClass, classify_response
+
+    _, records = _numeric_recording(Provenance.REAL_CAPTURE)
+    listing = records[1]["message"]["result"]["tools"][0]["inputSchema"]
+    assert listing["properties"]["limit"]["maximum"] == 1000  # the contract
+    assert listing["properties"]["page_size"]["enum"] == [10, 25, 50]
+    (error,) = [r for r in records if r["type"] == "message" and r["kind"] == "error"]
+    data = error["message"]["error"]["data"]
+    # The status the auth classifier reads survives; other numbers do not,
+    # and an out-of-range "status" is not an HTTP status.
+    assert data == {"status": 401, "retry_after": 100000, "statusCode": 1000}
+    assert classify_response(error["message"]).failure is FailureClass.AUTHENTICATION
+    (result,) = [
+        r
+        for r in records
+        if r["type"] == "message" and r["kind"] == "response" and r.get("id") == 123456
+    ]
+    assert result["message"]["result"]["structuredContent"] == {
+        "balance": 1000.0,
+        "pin": 0,  # a credential key: scrubbed, as before
+        "items": [100000],
+    }
+    assert records[0]["redaction"]["rules"][-1] == "mask_numbers"
+
+
+def test_real_capture_keeps_relay_counters_and_settings() -> None:
+    recorder, sink = _capture(config={"mode": "shadow", "restart": 2, "call_deadline": 2.5})
+    recorder.audit(
+        {
+            "event": "server_restarted",
+            "category": "E",
+            "generation": 3,
+            "attempt": 2,
+            "in_flight_unknown": 1,
+            "decisions": [{"path": "limit", "trust": 0.873}],
+            "summary": {"added": 2, "removed": 0, "breaking": 1},
+            "error_count": 482913,  # not a relay counter: masked
+        }
+    )
+    recorder.close()
+    header, audit, _ = map(json.loads, sink.getvalue().splitlines())
+    assert header["config"]["restart"] == 2 and header["config"]["call_deadline"] == 2.5
+    event = audit["event"]
+    assert (event["generation"], event["attempt"], event["in_flight_unknown"]) == (3, 2, 1)
+    assert event["decisions"] == [{"path": "limit", "trust": 0.873}]
+    assert event["summary"] == {"added": 2, "removed": 0, "breaking": 1}
+    assert event["error_count"] == 100000
+
+
+@pytest.mark.parametrize("provenance", [p for p in Provenance if p is not Provenance.REAL_CAPTURE])
+def test_generated_recordings_keep_their_numbers_as_before(provenance: Provenance) -> None:
+    """Unchanged outside real capture: synthetic, fault-injection, replay and
+    local-development recordings keep numbers below 1,000,000 (the documented
+    residual of the default policy)."""
+    text, records = _numeric_recording(provenance)
+    (call,) = [r for r in records if r["type"] == "message" and r["kind"] == "request"]
+    arguments = call["message"]["params"]["arguments"]
+    assert (arguments["code"], arguments["limit"], arguments["ratio"]) == (482913, 25, 3.14159)
+    assert arguments["code_text"] == "7351"
+    assert "mask_numbers" not in records[0]["redaction"]["rules"]
+    assert SECRETS["github"] not in text and "hunter2" not in text  # strings: masked as ever
+
+
+def test_real_capture_masks_numbers_whatever_policy_is_passed() -> None:
+    text, records = _numeric_recording(
+        Provenance.REAL_CAPTURE, policy=RedactionPolicy(mask_numbers=False)
+    )
+    assert "482913" not in text and "mask_numbers" in records[0]["redaction"]["rules"]
+    parse_recording(text.splitlines())  # and it is a valid real capture
+
+
+def test_any_recording_can_opt_into_masking_numbers() -> None:
+    text, _ = _numeric_recording(
+        Provenance.LOCAL_DEVELOPMENT, policy=RedactionPolicy(mask_numbers=True)
+    )
+    assert all(str(typed) not in text for typed in TYPED)
+
+
+def record_jsonrpc(provenance: Provenance) -> Any:
+    recorder, sink = _capture(provenance=provenance)
+    recorder.message(Direction.CLIENT_TO_RELAY, _line({"jsonrpc": "2.0", "id": 1, "method": "m"}))
+    recorder.message(
+        Direction.SERVER_TO_RELAY,
+        _line(
+            {"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "s", "version": "2.0"}}}
+        ),
+    )
+    recorder.close()
+    first, second = (json.loads(x) for x in sink.getvalue().splitlines()[1:3])
+    assert second["message"]["result"]["serverInfo"]["version"] == "2.0"
+    return first["message"]["jsonrpc"]
+
+
+def test_numbers_in_identifier_positions_and_keys_are_masked_too() -> None:
+    def record(provenance: Provenance) -> dict[str, Any]:
+        recorder, sink = _capture(provenance=provenance)
+        recorder.message(
+            Direction.CLIENT_TO_RELAY,
+            _line(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 9,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "lookup",
+                        "arguments": {"by_code": {"482": "x", "7351": "y", "open": "z"}},
+                        "_meta": {
+                            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                            "io.modelcontextprotocol/ref": "664422",
+                        },
+                    },
+                }
+            ),
+        )
+        recorder.close()
+        lines = sink.getvalue().splitlines()
+        return dict(json.loads(lines[1])["message"]["params"])
+
+    real = record(Provenance.REAL_CAPTURE)
+    assert set(real["arguments"]["by_code"]) == {"111", "1111", "open"}
+    assert real["_meta"]["io.modelcontextprotocol/ref"] == "111111"
+    assert real["_meta"]["io.modelcontextprotocol/protocolVersion"] == "2026-07-28"
+    assert record_jsonrpc(Provenance.REAL_CAPTURE) == "2.0"
+    synthetic = record(Provenance.SYNTHETIC)  # unchanged there
+    assert "482" in synthetic["arguments"]["by_code"]
+    assert synthetic["_meta"]["io.modelcontextprotocol/ref"] == "664422"

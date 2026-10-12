@@ -81,7 +81,7 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Property tests (repair layer) | COMPLETE | `test_mcp_properties.py`, `test_diff.py` | — | None for runtime primitives (do not exist). |
 | Replay / benchmark | PARTIAL (T13) | `stateguard replay`, `mcp_bench.py`, `calibrate.py`, `measure.py`, `recovery.py`, **`replay.py` (recorded sessions × raw / shadow / auto / auto_ops / as-recorded)** | — | Record/replay works end to end (M11). **No real-traffic recording exists yet**: the committed corpus is fault injection. |
 | Traffic recording + redaction | COMPLETE (T13) | `adapters/mcp/recording.py`; relay `--record`; `test_recording.py`, `test_relay_recording.py`, `test_replay.py` | observe only, every mode | Deterministic rule-based redaction, mask by default. Recorder never raises; background mode never blocks the relay. |
-| Real-capture readiness | COMPLETE (RC) — **no capture taken** | `recording.py` provenance families, `evidence.py`, relay/CLI refusals; `test_real_capture.py` ×2 | **shadow only**, mask only | Evidence collection, not proof of reliability improvement. Procedure: `docs/runtime/REAL_CAPTURE.md`. |
+| Real-capture readiness | COMPLETE (RC) — **no capture taken** | `recording.py` provenance families, `evidence.py`, relay/CLI refusals; `test_real_capture.py` ×2 | **shadow only**, mask only, numbers masked | Evidence collection, not proof of reliability improvement. Procedure: `docs/runtime/REAL_CAPTURE.md`. |
 | Category Z tracking | PARTIAL (T2, T4) | relay logs `category: "Z"`; `measure.py` counts StateGuard-induced failures, incorrect repair/refusal, duplicates, crashes per category | — | Counted per measurement run; not yet exported as runtime telemetry. |
 
 **Contradictions found.** The docs claimed applied precision of 100%
@@ -1090,7 +1090,7 @@ answers), `stateguard_observed`, `proposed` (`hypothetical: true` in shadow;
 `acted` must be zero), `unknown` (never success or failure;
 `answer_seen_later` kept apart), `not_claimed`.
 
-**Tests** (VERIFIED, 53): `tests/adapters/mcp/test_real_capture.py` (33:
+**Tests** (VERIFIED, 53 at `7984fc3`; 65 after the number hardening, 45 + 20): `tests/adapters/mcp/test_real_capture.py` (33:
 provenance families, mask requirement, ground-truth refusal in recorder and
 parser, truncated capture, identical redaction, secret fragments absent,
 one-time-code keys, server identity, digest, evidence separation and
@@ -1104,6 +1104,22 @@ replay of the capture; relay refusal in auto/passthrough; five CLI refusal
 combinations with the server never started; defaults never claim
 real_capture; CLI capture against the local fake server with a credential in
 the server command line, absent from recording and audit log).
+
+**Hardening: numbers** (separate commit). Review found that mask mode kept
+integers below 1,000,000 and floats, so a numeric OTP/PIN under an ordinary
+key would reach a real capture. Now `RedactionPolicy.mask_numbers` (forced
+for `real_capture`, header rule checked by the parser) reduces every number
+to sign and order of magnitude, stops numeric schema types vouching for
+numeric strings, and masks pure-number identifiers and dict keys. Kept, as
+protocol/contract: ids, `error.code`, tool schemas, published
+`enum`/`const` values, HTTP statuses 100-599 under `error.data` status keys
+(T11 still classifies recordings), the relay's audit counters and `config`.
+Generated recordings are unchanged (the committed tapes re-record
+byte-identically). Tests: OTP/PIN/verification numbers, numeric strings,
+ordinary numbers, enum/const, floats, nested dicts, lists, embedded JSON,
+`_meta`, structured results, `error.data`, numeric keys and identifiers,
+non-obvious keys, credential strings, real vs every other provenance, forced
+policy, parser refusal.
 
 **Benchmarks after the change** (VERIFIED, synthetic, not real-world
 evidence):
@@ -1482,9 +1498,12 @@ How to read it:
   text, decision reasons; `relay_started` server command except under
   `real_capture`). Pre-existing; only the recording path is redacted. For a
   real capture it must be kept private (REAL_CAPTURE.md).
-- **Mask-mode residuals matter more for real capture:** integers below
-  1,000,000 and floats are kept, so a numeric one-time code under an
-  innocuous key persists; string lengths persist.
+- **Real-capture residuals** (after the number-masking hardening): numbers
+  keep sign, type and order of magnitude; strings keep length; values equal
+  to a published `enum`/`const` member, JSON-RPC ids, `error.code`, schema
+  contents and digits inside identifier-shaped protocol strings are kept.
+  Full list: REAL_CAPTURE.md "Residual risks". Other provenances still keep
+  numbers below 1,000,000.
 - **Mid-restart refresh race:** RESOLVED in T14 (0 unsafe bypasses across 60
   race-provoking replays; 83 across the same 60 before the fix). See the T14 section for the
   residual limits.

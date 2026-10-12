@@ -146,6 +146,8 @@ class FailureClassification:
 _AUTHN, _AUTHZ = FailureClass.AUTHENTICATION, FailureClass.AUTHORIZATION
 
 _STATUS_KEYS = ("status", "statusCode", "status_code", "httpStatus", "http_status")
+#: The ``error.data`` keys the classifier reads an HTTP status from.
+STATUS_KEYS = frozenset(_STATUS_KEYS)
 _CODE_KEYS = ("error", "error_code", "errorCode")
 _OAUTH_CODES = {
     "invalid_token": _AUTHN,
