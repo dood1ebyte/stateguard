@@ -83,7 +83,7 @@ class TestTheDemoCallsSucceed:
     def test_renamed_parameter_and_stringified_number(self) -> None:
         (call,) = anyio.run(_through_proxy, [("get_forecast", {"loc": "Mumbai", "days": "5"})])
         assert call.outcome.action is MCPAction.FORWARD
-        assert call.sent == {"location": "Mumbai", "days": 5, "unit": "celsius"}
+        assert call.sent == {"location": "Mumbai", "days": 5}  # unit: the server's own default
         assert call.response.is_error is False
         assert "Mumbai" in _text(call.response)
 
@@ -98,8 +98,9 @@ class TestTheDemoCallsSucceed:
 
     def test_abbreviated_parameter_and_omitted_optional(self) -> None:
         (call,) = anyio.run(_through_proxy, [("search_places", {"q": "Bengaluru"})])
-        assert call.sent == {"query": "Bengaluru", "limit": 5}
+        assert call.sent == {"query": "Bengaluru"}  # limit is the server's to default
         assert call.response.is_error is False
+        assert "up to 5 places" in _text(call.response)  # and it did
 
 
 class TestTheRefusalHolds:

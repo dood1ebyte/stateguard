@@ -8,8 +8,10 @@ report that blurs them overstates what StateGuard did:
 * **Observed** -- facts on the wire. What the client sent, what reached the
   server, what the server answered (a tool error, an auth failure, a
   JSON-RPC error), whether the server process went away. These happened.
-* **Proposed** -- what auto mode *would* have done: change or refuse a call,
-  retry it, restart the server, drop a duplicate answer. In shadow mode none
+* **Proposed** -- what auto mode *would* have done: repair, refuse or
+  escalate a call; write out the declared defaults of optional fields a
+  valid call omitted (``default_fill``, counted apart: it is not a repair);
+  retry it; restart the server; drop a duplicate answer. In shadow mode none
   of it happened. A proposal is not an observed failure, and a call auto
   mode would have repaired is **not** a prevented production failure: nobody
   knows whether the original call failed because of what StateGuard would
@@ -75,6 +77,14 @@ def _same_line(record: dict[str, Any], forwarded: list[dict[str, Any]]) -> tuple
     if digest is not None and all(_digest(f) is not None for f in forwarded):
         return "digest", any(_digest(f) == digest for f in forwarded)
     return "redacted_body", any(_body(f) == _body(record) for f in forwarded)
+
+
+def _proposal_kind(event: dict[str, Any]) -> str:
+    kind = event.get("proposal")
+    if isinstance(kind, str):
+        return kind
+    action = event.get("auto_action")
+    return "unclassified" if action == "forward" else str(action)
 
 
 def _events(recording: Recording, name: str) -> list[dict[str, Any]]:
@@ -240,21 +250,26 @@ def summarize_evidence(recording: Recording) -> dict[str, Any]:
                 if isinstance(c, dict) and c.get("breaking") is True
             ),
             "internal_errors": len(_events(recording, "internal_error")),
+            # Calls with at least one field StateGuard found invalid (repaired,
+            # held, discarded or unresolved): the schema mismatches. A valid
+            # call that only omitted optional fields is not one.
+            "calls_with_schema_violations": sum(1 for e in decided if e.get("decisions")),
         },
         "proposed": {
             # In shadow mode nothing below "acted" happened. In auto mode
             # these were StateGuard's actual decisions.
             "hypothetical": shadow,
+            # Calls auto mode would not forward exactly as received.
             "would_modify_call": len(would_modify),
-            # "repair": forwarded with changed arguments; else the action itself.
-            "would_modify_by_action": dict(
-                sorted(
-                    Counter(
-                        "repair" if e.get("auto_action") == "forward" else str(e.get("auto_action"))
-                        for e in would_modify
-                    ).items()
-                )
+            # By kind (the relay's ``proposal``): ``repair``, ``default_fill``
+            # (a valid call with omitted optionals written out from their
+            # declared defaults -- not a repair, not drift, not a failure),
+            # ``refuse``, ``escalate``. A recording made before the relay
+            # classified proposals says ``unclassified`` for a changed forward.
+            "would_modify_by_kind": dict(
+                sorted(Counter(_proposal_kind(e) for e in would_modify).items())
             ),
+            "would_repair_call": sum(1 for e in would_modify if _proposal_kind(e) == "repair"),
             "would_retry": sum(
                 1
                 for e in retry_decisions

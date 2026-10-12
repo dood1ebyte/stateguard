@@ -88,7 +88,7 @@ guard = ContractGuard.with_mcp()
 outcome = repair_tool_call(guard, tool, {"loc": "Mumbai", "days": "5"})
 
 outcome.action       # MCPAction.FORWARD
-outcome.arguments    # {"location": "Mumbai", "days": 5, "unit": "celsius"}
+outcome.arguments    # {"location": "Mumbai", "days": 5} -- the server applies its own default unit
 ```
 
 The model's input is not limited to a dict. `arguments` may be:
@@ -105,7 +105,7 @@ The model's input is not limited to a dict. `arguments` may be:
 
 | `action` | Mode | Meaning | `arguments` |
 |---|---|---|---|
-| `FORWARD` | both | Valid as sent, or repaired with enough evidence | the payload to send: repaired, with declared defaults filled |
+| `FORWARD` | both | Valid as sent, or repaired with enough evidence | the payload to send: as received, or with exactly the repair's changes |
 | `HOLD` | shadow only | Auto mode would *not* have sent the arguments as received: it would repair, escalate or refuse them | the arguments **as received** |
 | `ESCALATE` | auto only | A repair was found but not trusted enough to apply unsupervised | `None` |
 | `REFUSE` | auto only | No safe repair exists | `None` |
@@ -138,13 +138,16 @@ Every row below is pinned by `tests/adapters/mcp/test_outcome_truth_table.py`
 in both modes. That includes the payload forwarded, the preview, and
 determinism. The tool is the `get_forecast` example above, plus an
 `options.hourly` boolean. "Ambiguous rename" uses a tool that requires both
-`account_id` and `account_name`, called with `account`. The no-argument rows
+`account_id` and `account_name`, called with `account`. "Required field set
+from its declared default" uses a tool requiring `query` and `page`, where
+`page` declares `"default": 1`, called with `query` only. The no-argument rows
 use a tool whose schema is `{"type": "object"}`.
 
 | Scenario | Auto: `action` | Auto: forwards | Shadow: `action` | Shadow: forwards | `auto_action` |
 |---|---|---|---|---|---|
 | valid, nothing to fill | `FORWARD` | as received | `FORWARD` | as received | `FORWARD` |
-| valid, declared default filled | `FORWARD` | with `unit` filled | `HOLD` | as received | `FORWARD` |
+| valid, optional default omitted | `FORWARD` | as received | `FORWARD` | as received | `FORWARD` |
+| repairable: required field set from its declared default | `FORWARD` | with `page` set | `HOLD` | as received | `FORWARD` |
 | repairable: rename + coercion | `FORWARD` | repaired | `HOLD` | as received | `FORWARD` |
 | repairable: nested coercion | `FORWARD` | repaired | `HOLD` | as received | `FORWARD` |
 | repairable: JSON-encoded argument object | `FORWARD` | decoded object | `HOLD` | the string, as received | `FORWARD` |
@@ -159,8 +162,11 @@ use a tool whose schema is `{"type": "object"}`.
 Three things follow from the table:
 
 - **Shadow is `HOLD` exactly when auto would not send the arguments
-  unchanged.** Filling a declared default counts as a change, so a
-  defaulted call is `HOLD` in shadow mode.
+  unchanged.** "Unchanged" is JSON-exact: `2.0` coerced to `2` is a change.
+  A declared default is never written for an omitted *optional* parameter
+  -- the server applies its own -- so a valid call that omits one is
+  `FORWARD` as received in both modes. Only a missing *required* parameter
+  with a declared default is filled, as a recorded `set_default` repair.
 - **`preview` is set only when shadow is `HOLD` *and* auto would forward.**
   It is equal to `proposed_arguments`.
 - **The decision does not depend on the mode.** `auto_action` and
@@ -589,9 +595,10 @@ allowed to go.
 `REPAIRED`, `HELD`, `DISCARDED` or `UNRESOLVED`, with a path, an
 operation, trust and evidence.
 
-Every value in a forwarded payload either was sent by the model, was
-changed by a recorded repair, or is a declared default. A property test
-checks this over generated drifted calls.
+Every value in a forwarded payload either was sent by the model or was
+changed by a recorded repair (a missing *required* field set from its
+declared default is one). A property test checks this over generated drifted
+calls.
 
 ---
 

@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The MCP boundary no longer writes declared defaults into tool calls.**
+  `MCPToolAdapter.wrap` returns arguments exactly as the repair produced
+  them. A valid call that omits an optional parameter with a `default` is
+  forwarded as sent (`FORWARD`, not `HOLD`, in shadow mode; no `would_modify`,
+  no listing refresh); a repaired call carries only the repair's changes. A
+  missing *required* parameter with a declared default is still filled, as a
+  recorded `set_default` repair. `JSONSchemaAdapter.wrap` is unchanged. The
+  outcome truth table row "valid, declared default filled" is now "valid,
+  optional default omitted"; the relay's `default_fill` proposal can only
+  appear in older recordings.
+- **Relay `call` audit events carry `proposal`** (`none` / `default_fill` /
+  `repair` / `refuse` / `escalate` / `unvalidated`), recorded verbatim.
+  `summarize_evidence` reports `would_modify_by_kind` (replacing
+  `would_modify_by_action`, which counted a written-out default as a
+  repair), `would_repair_call` and `calls_with_schema_violations`. What auto
+  mode forwards is unchanged.
 - **An unknown outcome is never retried automatically, whatever the tool's
   declared effect.**
   - **The old rule.** `decide_retry` retried an attempt with no answer by
@@ -23,6 +39,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     executions stay 0.
 
 ### Fixed
+- **A repair that changed only a value's JSON type was forwarded unrepaired.**
+  Payload-change detection used Python `==` (`2 == 2.0`, `True == 1`), so
+  auto mode sent the original `2.0` after coercing it to `2`, and shadow
+  mode reported nothing to review. Every such decision now uses
+  `stateguard.adapters.mcp.payload.same_json`.
+- **Replay dropped an answer taped before its request** (two threads tape
+  them); a request sent once now owns its answers whatever their order.
+- **The stdio relay sent its own `tools/list` before the MCP session was
+  initialized.** An SDK 2.x client probes with `server/discover`; the relay
+  took the probe's protocol `_meta` as proof of a stateless session and
+  listed at once. A real SDK 1.x server (`mcp-server-git`) rejected it with
+  `-32602`. The relay now learns the session's era from the server's answers
+  and sends nothing of its own until the session is ready
+  (`tools_list_deferred` otherwise); a legacy session's relay listings no
+  longer carry the probe's `_meta`; after a restart the replayed handshake --
+  and, mid-handshake, the client's own `notifications/initialized` -- comes
+  before any relay listing.
 - **Mid-restart race in the stdio relay** (found by T13 replay: 16 of 20
   replays of the recorded session).
   - **What went wrong.** A `tools/call` that arrived while the relay was

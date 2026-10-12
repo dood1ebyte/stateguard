@@ -86,10 +86,12 @@ SAFE: list[tuple[str, str, Any, dict[str, Any]]] = [
         {"repo_path": "/r", "revision": "HEAD"},
     ),
     (
-        "a renamed parameter, with an optional default filled",
+        # The omitted optional context_lines (default 3) is not written:
+        # the repair carries the rename and nothing else.
+        "a renamed parameter, optional default left to the server",
         "git_diff",
         {"repo": "/r", "target": "main"},
-        {"repo_path": "/r", "target": "main", "context_lines": 3},
+        {"repo_path": "/r", "target": "main"},
     ),
     (
         "a number sent as a string",
@@ -273,14 +275,15 @@ class TestUndeclaredKeysArePassedThroughVisibly:
     def test_drift_on_an_optional_parameter_is_visible_in_the_explanation(self) -> None:
         """
         The documented limitation, made visible: ``maxLength`` is not renamed
-        onto the optional ``max_length``, whose default is filled instead.
-        The server would have done the same with no proxy -- but the
-        explanation must not read as though nothing was off.
+        onto the optional ``max_length``. The key goes to the server as sent
+        and no default is written beside it -- what the server would have
+        received with no proxy -- but the explanation must not read as though
+        nothing was off.
         """
         outcome = _call("fetch", {"url": "https://example.com", "maxLength": 2000})
         assert outcome.action is MCPAction.FORWARD
         assert outcome.arguments is not None
-        assert outcome.arguments["max_length"] == 5000
+        assert "max_length" not in outcome.arguments
         assert outcome.arguments["maxLength"] == 2000
         assert "unresolved  maxLength" in outcome.explain()
 

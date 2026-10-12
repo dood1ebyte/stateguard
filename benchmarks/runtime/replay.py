@@ -299,6 +299,16 @@ def derive(recording: Recording, *, allow_incomplete: bool = False) -> TapeEnvir
         elif record["kind"] == "unparsed":
             unparsed_from_server.append((record["seq"], record["gen"]))
 
+    # How often each (wire id, generation) was sent. A request and its answer
+    # are taped by different threads, so a fast server's answer can be taped
+    # *before* the request it answers; ordering by seq is only needed to tell
+    # attempts apart when the same id was sent more than once.
+    sends = Counter(
+        (_key(r.get("id")), r["gen"])
+        for r in recording.messages(Direction.RELAY_TO_SERVER)
+        if r["kind"] == "request" and r.get("method") == "tools/call"
+    )
+
     for record in recording.messages(Direction.RELAY_TO_SERVER):
         if record["kind"] != "request" or record.get("method") != "tools/call":
             continue
@@ -325,11 +335,11 @@ def derive(recording: Recording, *, allow_incomplete: bool = False) -> TapeEnvir
             )
         else:
             client_key = _key(wire)
-        later = [
-            r
-            for r in responses_by_wire.get((_key(wire), attempt.gen), [])
-            if r["seq"] > attempt.seq
-        ]
+        answered = responses_by_wire.get((_key(wire), attempt.gen), [])
+        if sends[(_key(wire), attempt.gen)] == 1:
+            later = list(answered)  # one send: every answer is its answer, whatever the seq
+        else:
+            later = [r for r in answered if r["seq"] > attempt.seq]
         attempt.responses = [r["message"] for r in later]
         attempts[client_key].append(attempt)
         by_wire[_key(wire)] = attempt

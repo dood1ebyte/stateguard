@@ -54,6 +54,7 @@ from typing import Any
 
 from stateguard.adapters.mcp.errors import MalformedMessageError
 from stateguard.adapters.mcp.outcomes import MCPAction, ToolCallOutcome
+from stateguard.adapters.mcp.payload import same_json
 from stateguard.core.paths import MAX_PAYLOAD_DEPTH, nests_deeper_than
 
 __all__ = [
@@ -246,7 +247,7 @@ def forward_message(request: ToolCallRequest, outcome: ToolCallOutcome) -> dict[
     if not outcome.should_forward:
         return None
     received = {} if request.arguments is None else request.arguments
-    if outcome.arguments == received and type(outcome.arguments) is type(received):
+    if same_json(outcome.arguments, received):  # 2.0 -> 2 is a change; see payload.py
         return copy.deepcopy(dict(request.message))
     return request.with_arguments(outcome.arguments)
 

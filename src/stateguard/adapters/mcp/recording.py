@@ -954,6 +954,7 @@ class Redactor:
             "tools",
             "failure",
             "signal",
+            "proposal",
         }
     )
 

@@ -61,6 +61,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from stateguard.adapters.mcp.errors import ForwardingInvariantError
+from stateguard.adapters.mcp.payload import same_json
 from stateguard.core.errors.results import RepairResult, RepairStatus
 from stateguard.core.explain import root_normalisation
 
@@ -242,7 +243,7 @@ def outcome_for(result: RepairResult, original_arguments: Any) -> ToolCallOutcom
             result=result,
             auto_action=auto_action,
         )
-    elif auto_action is MCPAction.FORWARD and payload == original_arguments:
+    elif auto_action is MCPAction.FORWARD and same_json(payload, original_arguments):
         # Nothing to observe: auto mode would send exactly what the model
         # sent. There is no diff to review, so there is nothing to hold.
         outcome = ToolCallOutcome(
@@ -461,7 +462,7 @@ def _check_forwarding_invariants(outcome: ToolCallOutcome, original_arguments: A
             raise ForwardingInvariantError(
                 f"Shadow mode produced {outcome.action.value}; shadow never blocks a call."
             )
-        if outcome.arguments != original_arguments:
+        if not same_json(outcome.arguments, original_arguments):
             raise ForwardingInvariantError(
                 "Shadow mode would forward a payload other than the one received."
             )
@@ -525,7 +526,7 @@ def _fill_reason(
     the payloads decides *whether* anything changed; walking them decides
     what to call it.
     """
-    if payload == original:
+    if same_json(payload, original):
         return unchanged
     names = _added_paths(payload, original)
     if names:

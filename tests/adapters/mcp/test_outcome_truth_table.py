@@ -58,6 +58,15 @@ ACCOUNT: dict[str, Any] = {
     },
 }
 
+PAGED: dict[str, Any] = {
+    "name": "search",
+    "inputSchema": {
+        "type": "object",
+        "properties": {"query": {"type": "string"}, "page": {"type": "integer", "default": 1}},
+        "required": ["query", "page"],
+    },
+}
+
 NO_PARAMS: dict[str, Any] = {"name": "list_tables", "inputSchema": {"type": "object"}}
 
 A = MCPAction
@@ -82,32 +91,43 @@ ROWS = [
         {"location": "Mumbai", "days": 5, "unit": "celsius"},
     ),
     Row(
-        "valid, declared default filled",
+        # The schema declares a default for the omitted optional `unit`; the
+        # server applies its own. Nothing is written into the call.
+        "valid, optional default omitted",
         FORECAST,
         {"location": "Mumbai", "days": 5},
         A.FORWARD,
-        {"location": "Mumbai", "days": 5, "unit": "celsius"},
+        {"location": "Mumbai", "days": 5},
+    ),
+    Row(
+        # A *required* field missing, with a declared default: a violation,
+        # repaired on record (set_default) -- the one default ever written.
+        "repairable: required field set from its declared default",
+        PAGED,
+        {"query": "x"},
+        A.FORWARD,
+        {"query": "x", "page": 1},
     ),
     Row(
         "repairable: rename + coercion",
         FORECAST,
         {"loc": "Mumbai", "days": "5"},
         A.FORWARD,
-        {"location": "Mumbai", "days": 5, "unit": "celsius"},
+        {"location": "Mumbai", "days": 5},
     ),
     Row(
         "repairable: nested coercion",
         FORECAST,
         {"location": "Mumbai", "days": 5, "options": {"hourly": "true"}},
         A.FORWARD,
-        {"location": "Mumbai", "days": 5, "unit": "celsius", "options": {"hourly": True}},
+        {"location": "Mumbai", "days": 5, "options": {"hourly": True}},
     ),
     Row(
         "repairable: JSON-encoded argument object",
         FORECAST,
         '{"location": "Mumbai", "days": 5}',
         A.FORWARD,
-        {"location": "Mumbai", "days": 5, "unit": "celsius"},
+        {"location": "Mumbai", "days": 5},
     ),
     Row("ambiguous rename", ACCOUNT, {"account": "acme"}, A.ESCALATE, None),
     Row("invalid: out of range", FORECAST, {"location": "Mumbai", "days": 99}, A.REFUSE, None),

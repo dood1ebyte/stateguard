@@ -67,7 +67,7 @@ Loaded 3 tool definition(s): get_forecast, search_places, compare_cities
 renamed parameter + stringified number
   sent by agent: {'loc': 'Mumbai', 'days': '5'}
   StateGuard: FORWARD -- Repaired 2 field(s) before forwarding.
-  sent to server: {'days': 5, 'location': 'Mumbai', 'unit': 'celsius'}
+  sent to server: {'days': 5, 'location': 'Mumbai'}
   OK: Mumbai: 5-day forecast, temperatures in degrees C.
 
 enum in the wrong case
@@ -79,7 +79,7 @@ enum in the wrong case
 abbreviated parameter, optional omitted
   sent by agent: {'q': 'Bengaluru'}
   StateGuard: FORWARD -- Repaired 1 field(s) before forwarding.
-  sent to server: {'query': 'Bengaluru', 'limit': 5}
+  sent to server: {'query': 'Bengaluru'}
   OK: Found up to 5 places matching 'Bengaluru'.
 
 out of range -- not repairable, and should not be
@@ -101,7 +101,7 @@ Loaded 3 tool definition(s): get_forecast, search_places, compare_cities
 renamed parameter + stringified number
   sent by agent: {'loc': 'Mumbai', 'days': '5'}
   StateGuard: HOLD -- Shadow mode: 2 repair(s) determined and withheld. Forward the original arguments and review the preview.
-  would have sent: {'days': 5, 'location': 'Mumbai', 'unit': 'celsius'}
+  would have sent: {'days': 5, 'location': 'Mumbai'}
   SERVER ERROR: Error executing tool get_forecast: 1 validation error for get_forecastArguments
 
 enum in the wrong case
@@ -113,7 +113,7 @@ enum in the wrong case
 abbreviated parameter, optional omitted
   sent by agent: {'q': 'Bengaluru'}
   StateGuard: HOLD -- Shadow mode: 1 repair(s) determined and withheld. Forward the original arguments and review the preview.
-  would have sent: {'query': 'Bengaluru', 'limit': 5}
+  would have sent: {'query': 'Bengaluru'}
   SERVER ERROR: Error executing tool search_places: 1 validation error for search_placesArguments
 
 out of range -- not repairable, and should not be
@@ -145,10 +145,10 @@ what it would have done.
 |---|---|---|---|
 | 1 | `loc` → `location` | fuzzy name match | 0.854 (jaro-winkler) |
 | 1 | `"5"` → `5` | type coercion | 1.0 (round-trips exactly) |
-| 1 | `unit` absent | filled from the schema's `default` | — (declared, not inferred) |
+| 1 | `unit` absent | **none** -- left to the server, which applies its own default | — |
 | 2 | `"Celsius"` → `"celsius"` | enum normalisation | 1.0 (normalises onto a declared member) |
 | 3 | `q` → `query` | fuzzy name match | — |
-| 3 | `limit` absent | filled from the schema's `default` | — |
+| 3 | `limit` absent | **none** -- left to the server | — |
 | 4 | `limit: 999` | **none** — refused | — |
 | 5 | `city` for `city_a` / `city_b` | **held** — escalated | 0.65: the two fields tie, so the margin pulls trust below the bar |
 
@@ -194,7 +194,7 @@ proxy = RepairingClient(
 
 ```text
   StateGuard: HOLD -- Shadow mode: 2 repair(s) determined and withheld. ...
-  would have sent: {'days': 5, 'location': 'Mumbai', 'unit': 'celsius'}
+  would have sent: {'days': 5, 'location': 'Mumbai'}
   ...
   StateGuard: HOLD -- Shadow mode: auto mode would refuse this call (...). Forwarded as received.
 ```

@@ -236,7 +236,7 @@ class TestToDict:
         sent = {"loc": "Mumbai", "days": "5"}
         record = repair_tool_call(auto, FORECAST, sent).to_dict()
         assert record["action"] == "forward"
-        assert record["arguments"] == {"location": "Mumbai", "days": 5, "unit": "celsius"}
+        assert record["arguments"] == {"location": "Mumbai", "days": 5}
         result = record["result"]
         assert result["original_input"] == sent
         assert result["valid_as_received"] is False
@@ -263,7 +263,7 @@ class TestToDict:
         record = repair_tool_call(shadow, FORECAST, sent).to_dict()
         assert record["action"] == "hold"
         assert record["arguments"] == sent
-        assert record["preview"] == {"location": "Mumbai", "days": 5, "unit": "celsius"}
+        assert record["preview"] == {"location": "Mumbai", "days": 5}
         assert record["result"]["repaired_output"] is None
 
     def test_a_rehydrated_payload_is_dumped_to_plain_data(self) -> None:

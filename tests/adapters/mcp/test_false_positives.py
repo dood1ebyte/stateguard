@@ -392,21 +392,22 @@ class TestDriftOnAnOptionalParameterIsNotRepaired:
         assert outcome.result.status is RepairStatus.ALREADY_VALID
         assert "contains" not in (outcome.arguments or {})
 
-    def test_the_declared_default_wins_over_what_the_model_meant(self) -> None:
+    def test_no_declared_default_is_written_over_what_the_model_meant(self) -> None:
         """
-        The sharp edge, stated plainly. ``git_diff`` declares
+        The sharp edge this used to pin, now removed. ``git_diff`` declares
         ``context_lines`` with a default of 3. A model writing ``context: 10``
-        gets ``context_lines: 3`` filled in beside its unrecognised key, so
-        the server honours 3 and the 10 is silently ignored -- no violation,
-        no warning to the caller, no repair.
+        used to get ``context_lines: 3`` written beside its unrecognised key,
+        so the server honoured 3 and the 10 was silently overridden by
+        StateGuard. Now the call goes out exactly as sent: whatever the server
+        makes of ``context``, StateGuard has not decided it for the model.
         """
         tool = BY_NAME["git_diff"]
         arguments = {"repo_path": "/repo", "target": "main", "context": 10}
         outcome = _call(tool, arguments)
 
         assert outcome.action is MCPAction.FORWARD
-        assert outcome.arguments["context_lines"] == 3
-        assert outcome.arguments["context"] == 10
+        assert outcome.arguments == arguments
+        assert "context_lines" not in outcome.arguments
 
     def test_it_is_at_least_not_a_wrong_repair(self) -> None:
         """

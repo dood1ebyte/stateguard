@@ -101,7 +101,9 @@ class TestSingleBranchAllOf:
         assert fingerprint_schema(wrapped).contract == fingerprint_schema(plain).contract
 
     def test_a_sibling_default_is_kept(self) -> None:
-        tool = _tool({"n": {"allOf": [{"type": "integer"}], "default": 5}})
+        # Kept through the allOf collapse: a *required* n, missing, is set
+        # from it (an optional one is left to the server, as any default).
+        tool = _tool({"n": {"allOf": [{"type": "integer"}], "default": 5}}, required=["n"])
         outcome = repair_tool_call(ContractGuard.with_mcp(), tool, {})
         assert outcome.arguments == {"n": 5}
 

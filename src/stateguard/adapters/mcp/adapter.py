@@ -29,6 +29,7 @@ and that goes behind an extra.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Mapping
 from typing import Any
 
@@ -228,9 +229,21 @@ class MCPToolAdapter(IContractAdapter):
         data: dict[str, Any],
     ) -> dict[str, Any]:
         """
-        Return the arguments dict, with the schema's declared defaults filled.
+        Return the arguments exactly as the repair produced them.
 
         A plain ``dict`` is the framework-native type here: it is what goes
-        into a ``tools/call`` request's ``arguments``.
+        on the wire as a ``tools/call`` request's ``arguments``. So, unlike
+        ``JSONSchemaAdapter.wrap``, this does **not** materialise the
+        schema's declared defaults. In JSON Schema ``default`` is an
+        annotation, and in MCP the server applies its own: writing one into a
+        call the model left it out of changes the request (an update tool
+        where "absent" means "leave unchanged"; a drifted key the default then
+        silently overrides) and repairs nothing. A valid call is forwarded as
+        sent; a repaired call carries exactly the repair's operations --
+        including ``set_default`` for a *required* field that was missing,
+        which is a real violation, repaired on record by
+        ``DefaultValueFillStrategy``.
+
+        Deep-copied, so the caller's arguments are never shared or mutated.
         """
-        return self._inner.wrap(contract, data)
+        return copy.deepcopy(dict(data))

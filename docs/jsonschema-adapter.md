@@ -273,8 +273,13 @@ screen, `{"type": "integer", "default": "abc"}` made `repair` return
 
 Note that filling a default can add a key to a payload that was
 `ALREADY_VALID` — an absent optional is not a violation, so no repair strategy
-ever sees it. In shadow mode that change is withheld and reported as a `HOLD`
-preview like any other.
+ever sees it.
+
+**The MCP boundary does not do this.** `MCPToolAdapter.wrap` returns tool
+arguments exactly as the repair produced them: an MCP server applies its own
+defaults, and writing one into a call changes the request without repairing
+anything (see `docs/mcp-adapter.md`). A missing *required* field with a
+declared default is still filled there, as a recorded `set_default` repair.
 
 ### `strict_mode`
 

@@ -800,7 +800,7 @@ class TestToolFlag:
         assert code == 0
         record = json.loads(out)
         assert record["action"] == "forward"
-        assert record["arguments"] == {"location": "Mumbai", "days": 5, "unit": "celsius"}
+        assert record["arguments"] == {"location": "Mumbai", "days": 5}
         assert record["result"]["original_input"] == sent
         assert [d["decision"] for d in record["result"]["decisions"]] == ["repaired", "repaired"]
 

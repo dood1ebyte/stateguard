@@ -157,9 +157,14 @@ see the `HOLD` view.
 - **A scalar where a string is declared** (`42` for `"42"`). That is a
   type disagreement, not an encoding slip, and is refused.
 - **Drift on an optional parameter.** `maxLength` for an optional
-  `max_length` is not renamed; the key is forwarded as sent and the declared
-  default fills `max_length`. It is listed as `unresolved` in the
-  explanation. A missed repair, never a wrong one.
+  `max_length` is not renamed; the key is forwarded as sent, and nothing is
+  written in its place -- the server decides what it makes of it. It is
+  listed as `unresolved` in the explanation. A missed repair, never a wrong
+  one.
+- **A declared default for an omitted optional parameter.** A call that
+  leaves out an optional parameter is valid; the server applies its own
+  default, so StateGuard forwards the call as sent. Only a missing *required*
+  parameter with a declared default is filled -- a recorded repair.
 - **A different word, even when the names look alike.** `max_price` is not
   renamed to `min_price`, nor `updated_after` to `created_after`: the names
   share a word but swap another, which is a different field, not a typo. At

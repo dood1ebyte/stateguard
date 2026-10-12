@@ -9,7 +9,7 @@ StateGuard was run against it:
 ====================  =====================================================
 ``repairable``        A safe correction exists; auto forwards exactly
                       ``forward``.
-``unchanged``         Valid as sent; forwarded (declared defaults filled).
+``unchanged``         Valid as sent; forwarded as sent (no default is written).
 ``ambiguous``         A correction exists but is not safe to pick; escalated.
 ``invalid``           No safe correction; refused.
 ====================  =====================================================
@@ -36,6 +36,7 @@ import pytest
 from stateguard import ContractGuard, GuardConfig
 from stateguard.adapters.jsonschema.diff import diff_schemas
 from stateguard.adapters.mcp import MCPAction, ToolCallOutcome, ToolRegistry
+from stateguard.adapters.mcp.payload import same_json
 from stateguard.core.explain import FieldDecisionKind
 from stateguard.core.models.config import RepairMode
 
@@ -69,10 +70,11 @@ def _process(registry: ToolRegistry, case: dict[str, Any]) -> ToolCallOutcome:
 def _meets_label(case: dict[str, Any], outcome: ToolCallOutcome) -> bool:
     if outcome.action is not ACTION[case["class"]]:
         return False
-    if "forward" in case and outcome.arguments != case["forward"]:
+    if "forward" in case and not same_json(outcome.arguments, case["forward"]):
         return False
     received = {} if case["arguments"] is None else case["arguments"]
-    return not (case["class"] == "repairable" and outcome.arguments == received)
+    # JSON-exact: a repair from 2.0 to 2 is a repair, though Python says 2 == 2.0.
+    return not (case["class"] == "repairable" and same_json(outcome.arguments, received))
 
 
 def _ids(cases: list[dict[str, Any]]) -> list[str]:
