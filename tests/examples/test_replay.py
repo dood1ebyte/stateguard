@@ -416,6 +416,33 @@ def test_reports_never_call_synthetic_traffic_real(envs: dict[str, TapeEnvironme
     assert any("not real traffic" in line for line in replay.LIMITATIONS)
 
 
+def test_an_answer_taped_before_its_request_is_still_its_answer() -> None:
+    """
+    The relay tapes its write after it, the answer when it is read -- on two
+    threads. A fast server's answer can be taped first (tape D held one).
+    Derivation must not drop it: one send, so it is that send's answer.
+    """
+    lines = (TAPES / "A_success.jsonl").read_text().splitlines()
+    records = [json.loads(line) for line in lines]
+    request = next(
+        i
+        for i, r in enumerate(records)
+        if r.get("dir") == "relay_to_server" and r.get("method") == "tools/call"
+    )
+    answer = next(
+        i
+        for i, r in enumerate(records)
+        if r.get("dir") == "server_to_relay" and r.get("id") == records[request]["id"]
+    )
+    records[request], records[answer] = records[answer], records[request]
+    for seq, record in enumerate(records):
+        record["seq"] = seq
+    env = derive(parse_recording([json.dumps(r) for r in records]))
+    (attempt,) = env.attempts[replay._key(records[answer]["id"])]
+    assert attempt.seq > next(r["seq"] for r in records if r is records[request])
+    assert attempt.responses, "the answer taped before its request was dropped"
+
+
 def test_a_real_capture_is_reported_as_one() -> None:
     sink = io.StringIO()
     recorder = Recorder(sink, provenance=Provenance.REAL_CAPTURE, session="captured")

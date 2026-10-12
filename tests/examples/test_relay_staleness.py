@@ -144,6 +144,9 @@ def test_drift_against_the_new_schema_is_still_repaired_after_the_refresh() -> N
     rig = Rig(server, RelayMode.AUTO)
     try:
         rig.request("server/discover")
+        # The relay lists once the server has answered discover: let that
+        # listing (v1) sync, so the swap below is the stale-listing case.
+        assert rig.wait_synced()
         server.set_tools([v2])
         response = rig.call("search", {"q": "x", "limit": "3"})
         assert response is not None and response["result"]["isError"] is False
@@ -196,6 +199,9 @@ def test_shadow_records_the_decision_on_a_confirmed_listing() -> None:
     rig = Rig(server, RelayMode.SHADOW)
     try:
         rig.request("server/discover")
+        # The relay lists once the server has answered discover: let that
+        # listing (v1) sync, so the swap below is the stale-listing case.
+        assert rig.wait_synced()
         server.set_tools([v2])
         rig.call("search", arguments)
         decision = [e for e in rig.audit if e.get("event") == "call"][-1]

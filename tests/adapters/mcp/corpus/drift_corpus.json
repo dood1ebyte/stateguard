@@ -433,19 +433,17 @@
   },
   "calls": [
     {
-      "name": "valid call, defaults filled",
+      "name": "valid call, optional defaults omitted",
       "class": "unchanged",
       "tool": "list_issues",
       "arguments": {
         "owner": "acme",
         "repo": "api"
       },
-      "why": "Valid as sent; declared defaults are filled.",
+      "why": "Valid as sent; forwarded as sent -- the server applies its own declared defaults.",
       "forward": {
         "owner": "acme",
-        "repo": "api",
-        "state": "open",
-        "per_page": 30
+        "repo": "api"
       }
     },
     {
@@ -461,7 +459,6 @@
       "forward": {
         "path": "a.txt",
         "content": "x",
-        "create_dirs": false,
         "mode": "0644"
       }
     },
@@ -509,8 +506,7 @@
       },
       "why": "Dropped letter; one plausible target.",
       "forward": {
-        "path": "/etc/hosts",
-        "encoding": "utf-8"
+        "path": "/etc/hosts"
       }
     },
     {
@@ -564,7 +560,6 @@
       "forward": {
         "owner": "a",
         "repo": "b",
-        "state": "open",
         "per_page": 50
       }
     },
@@ -581,8 +576,6 @@
       "forward": {
         "owner": "a",
         "repo": "b",
-        "state": "open",
-        "per_page": 30,
         "page": 2
       }
     },
@@ -667,8 +660,7 @@
       "forward": {
         "owner": "a",
         "repo": "b",
-        "state": "closed",
-        "per_page": 30
+        "state": "closed"
       }
     },
     {
@@ -752,12 +744,10 @@
         "repo": "b",
         "perpage": 50
       },
-      "why": "Optional-field drift is not repaired: the key is passed through and the default used (documented limitation).",
+      "why": "Optional-field drift is not repaired: the key is passed through as sent (documented limitation), and no default is written beside it.",
       "forward": {
         "owner": "a",
         "repo": "b",
-        "state": "open",
-        "per_page": 30,
         "perpage": 50
       }
     },
@@ -848,8 +838,7 @@
         "params": [
           "a",
           1
-        ],
-        "timeout_ms": 5000
+        ]
       }
     },
     {
@@ -978,8 +967,7 @@
       },
       "why": "'q' is the conventional abbreviation and the only missing field.",
       "forward": {
-        "query": "mcp",
-        "count": 10
+        "query": "mcp"
       }
     },
     {

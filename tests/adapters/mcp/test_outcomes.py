@@ -58,7 +58,8 @@ class TestForward:
     def test_a_repaired_call_forwards_the_repaired_arguments(self, auto: ContractGuard) -> None:
         outcome = _outcome(auto, {"loc": "Mumbai", "days": "5"})
         assert outcome.action is MCPAction.FORWARD
-        assert outcome.arguments == {"location": "Mumbai", "days": 5, "unit": "celsius"}
+        # Exactly the repair's changes: no declared default rides along.
+        assert outcome.arguments == {"location": "Mumbai", "days": 5}
         assert outcome.preview is None
 
     def test_an_already_valid_call_forwards(self, auto: ContractGuard) -> None:
@@ -66,17 +67,17 @@ class TestForward:
         assert outcome.action is MCPAction.FORWARD
         assert outcome.result.status is RepairStatus.ALREADY_VALID
 
-    def test_the_reason_admits_when_defaults_changed_the_payload(self, auto: ContractGuard) -> None:
+    def test_an_omitted_optional_default_is_not_written(self, auto: ContractGuard) -> None:
         """
-        "Already valid" and "what I am sending differs from what you sent"
-        are both true when a default gets filled. A log line claiming the
-        arguments went out unchanged would be wrong.
+        ``unit`` declares a default and the model left it out. The call is
+        valid; the server applies its own default. Writing ``unit: celsius``
+        into the call would change the request and repair nothing.
         """
-        outcome = _outcome(auto, {"location": "Mumbai", "days": 5})
-        assert outcome.arguments is not None
-        assert outcome.arguments["unit"] == "celsius"
-        assert "'unit'" in outcome.reason
-        assert "unchanged" not in outcome.reason
+        sent = {"location": "Mumbai", "days": 5}
+        outcome = _outcome(auto, sent)
+        assert outcome.result.status is RepairStatus.ALREADY_VALID
+        assert outcome.arguments == sent
+        assert "unchanged" in outcome.reason
 
     def test_the_reason_says_unchanged_when_it_is(self, auto: ContractGuard) -> None:
         outcome = _outcome(auto, {"location": "Mumbai", "days": 5, "unit": "celsius"})
@@ -109,7 +110,7 @@ class TestHold:
         sent = {"loc": "Mumbai", "days": "5"}
         outcome = _outcome(shadow, sent)
         assert outcome.arguments == sent
-        assert outcome.preview == {"location": "Mumbai", "days": 5, "unit": "celsius"}
+        assert outcome.preview == {"location": "Mumbai", "days": 5}
         assert outcome.arguments != outcome.preview
 
     def test_the_call_still_proceeds(self, shadow: ContractGuard) -> None:
@@ -126,25 +127,19 @@ class TestHold:
         arguments = {"loc": "Mumbai", "days": "5"}
         assert _outcome(shadow, arguments).preview == _outcome(auto, arguments).arguments
 
-    def test_an_already_valid_call_holds_when_defaults_would_be_filled(
-        self, shadow: ContractGuard
-    ) -> None:
+    def test_an_omitted_optional_default_is_nothing_to_hold(self, shadow: ContractGuard) -> None:
         """
-        Shadow also withholds the *default fill*, which is a change to the
-        payload like any other -- and therefore a change shadow has to show.
-
-        This used to report ``FORWARD`` with no preview and a reason reading
-        "forwarded unchanged", because the mapping inferred shadow from
-        ``proposed_output`` and never asked about ``ALREADY_VALID``. The
-        payload sent was right; what was lost was the only signal a team
-        running shadow has that auto would send something else.
+        Auto mode sends a valid call that omitted a defaulted optional
+        exactly as received, so shadow has no diff to show: ``FORWARD``, no
+        preview. (It used to be ``HOLD``, previewing a default auto mode
+        wrote into the call -- the injection capture 1a found on 5 of 18
+        valid calls.)
         """
         arguments = {"location": "Mumbai", "days": 5}
         outcome = _outcome(shadow, arguments)
         assert outcome.result.status is RepairStatus.ALREADY_VALID
-        assert outcome.action is MCPAction.HOLD
-        assert outcome.preview == {"location": "Mumbai", "days": 5, "unit": "celsius"}
-        assert "default" in outcome.reason
+        assert outcome.action is MCPAction.FORWARD
+        assert outcome.preview is None
 
     def test_holding_still_sends_the_model_s_arguments(self, shadow: ContractGuard) -> None:
         """
@@ -181,7 +176,7 @@ class TestHold:
         _sent``, extended to the status that used to escape it: shadow's
         preview is what flipping to auto would put on the wire.
         """
-        arguments = {"location": "Mumbai", "days": 5}
+        arguments = {"location": "Mumbai", "days": "5"}  # repairable: days is a string
         assert _outcome(shadow, arguments).preview == _outcome(auto, arguments).arguments
 
     def test_shadow_is_read_from_the_mode_not_from_the_payload_fields(
@@ -284,11 +279,10 @@ class TestTheReasonMatchesWhatWasActuallySent:
     shadow mode's entire argument is that the diff it reports can be trusted.
 
     The reason used to be chosen by whether a **top-level** key had been
-    added, while ``JSONSchemaAdapter.wrap`` fills declared defaults at every
-    depth. So a default on a *nested* property produced a payload that
-    differed from the model's under a line reading "forwarded unchanged" --
-    and the shadow wording rendered as "would also have filled none named",
-    a sentence promising a list and then naming nothing.
+    added (when defaults were still written into calls, a nested one was
+    missed); then by Python ``==``, which called a payload repaired from
+    ``2.0`` to ``2`` "unchanged". Whether anything changed is now asked of
+    ``same_json``, at any depth, type for type.
     """
 
     NESTED: dict[str, Any] = {
@@ -298,32 +292,37 @@ class TestTheReasonMatchesWhatWasActuallySent:
             "properties": {
                 "outer": {
                     "type": "object",
-                    "properties": {"inner": {"type": "string", "default": "filled"}},
+                    "properties": {
+                        "inner": {"type": "string", "default": "filled"},
+                        "n": {"type": "integer"},
+                    },
                 }
             },
             "required": ["outer"],
         },
     }
 
-    def test_auto_does_not_call_a_changed_payload_unchanged(self) -> None:
-        arguments = {"outer": {}}
+    def test_auto_does_not_call_a_type_only_nested_change_unchanged(self) -> None:
+        arguments = {"outer": {"n": 2.0}}
         outcome = outcome_for(ContractGuard.with_mcp().repair(self.NESTED, arguments), arguments)
 
-        assert outcome.arguments != arguments, "precondition: wrap filled a nested default"
+        assert outcome.arguments == {"outer": {"n": 2}}
+        assert type(outcome.arguments["outer"]["n"]) is int  # Python == would call this unchanged
         assert "unchanged" not in outcome.reason
 
-    def test_auto_names_the_nested_path_it_filled(self) -> None:
+    def test_a_nested_optional_default_is_not_written(self) -> None:
         arguments = {"outer": {}}
         outcome = outcome_for(ContractGuard.with_mcp().repair(self.NESTED, arguments), arguments)
-        assert "'outer.inner'" in outcome.reason
+        assert outcome.arguments == arguments
+        assert "forwarded unchanged" in outcome.reason
 
-    def test_shadow_names_it_too_instead_of_naming_nothing(self) -> None:
+    def test_shadow_holds_a_type_only_nested_change(self) -> None:
         guard = ContractGuard.with_mcp(config=GuardConfig(mode=RepairMode.SHADOW))
-        arguments = {"outer": {}}
+        arguments = {"outer": {"n": 2.0}}
         outcome = outcome_for(guard.repair(self.NESTED, arguments), arguments)
 
         assert outcome.action is MCPAction.HOLD
-        assert "'outer.inner'" in outcome.reason
+        assert outcome.preview == {"outer": {"n": 2}}
         assert "none named" not in outcome.reason
 
     def test_unchanged_is_still_said_when_it_is_true(self) -> None:

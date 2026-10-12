@@ -259,7 +259,7 @@ layer hands one out:
 | Shadow forwards exactly the original | `_check_forwarding_invariants` | as above, plus the relay byte-level tests |
 | A forwarded auto payload validates | `_check_forwarded_payload_validates` | truth table, properties, corpus |
 | Forwarding is idempotent (a forwarded payload is a fixed point) | engine re-validation | properties, corpus |
-| Every forwarded value was sent, repaired on record, or is a declared default | engine and explain | properties, corpus |
+| Every forwarded value was sent or repaired on record (no optional default is ever written) | engine, explain, `MCPToolAdapter.wrap` | properties, corpus, truth table |
 | Escalated keys are never moved | `TrustPolicy`, engine | properties |
 | Decisions are deterministic | no randomness, sorted iteration | truth table, corpus |
 | The auto decision is the same in either mode | `_verdict` is mode-independent | truth table, properties |

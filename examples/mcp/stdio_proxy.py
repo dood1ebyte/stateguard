@@ -242,6 +242,7 @@ from stateguard.adapters.mcp.jsonrpc import (
     request_id,
     tool_error_response,
 )
+from stateguard.adapters.mcp.payload import same_json
 from stateguard.adapters.mcp.recording import Direction, Provenance, Recorder, RedactionPolicy
 from stateguard.adapters.mcp.recording import RedactionMode as RecordRedaction
 from stateguard.core.explain import FieldDecisionKind, root_normalisation
@@ -1117,7 +1118,7 @@ class StdioRelay:
         forwarded = forward_message(request, outcome)
         if forwarded is None:
             return False, self._encode(refusal_response(request, outcome))
-        if forwarded == request.message:
+        if same_json(forwarded, request.message):
             return True, line  # byte-for-byte
         return True, self._encode(forwarded)
 
@@ -1566,7 +1567,8 @@ def _intervenes(request: ToolCallRequest, outcome: ToolCallOutcome) -> bool:
     if outcome.auto_action is not MCPAction.FORWARD:
         return True
     received = {} if request.arguments is None else request.arguments
-    return outcome.proposed_arguments != received or type(received) is not dict
+    # JSON-exact: a repair from 2.0 to 2 (or 1 to True) is a change.
+    return not same_json(outcome.proposed_arguments, received) or type(received) is not dict
 
 
 def _proposal(request: ToolCallRequest, outcome: ToolCallOutcome) -> str:

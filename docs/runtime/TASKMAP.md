@@ -119,6 +119,7 @@ list-changed delivery at 2026-07-28.
 | T12 | Safe server restart: idle death only by default; in-flight → UNKNOWN, never replayed; re-initialize + re-list + registry reset; bounded; session recovery workload | 5 | DONE (`9d1f401`, `24011f5`, + measurement commit) | T6, T8 |
 | T13 | Record/replay with redaction: versioned format, deterministic redaction, fail-open relay taps, replay engine + A–H fault-injection corpus, provenance-labelled report | 6 | DONE (`bbb660b` + replay commit) | T4, T12 |
 | T14 | Mid-restart race: gate `tools/call` on a live, listed server; bind every decision to its server generation | 1 | DONE (see T14 section) | T12, T13 |
+| C2 | F3 JSON-exact payload-change detection; D no optional defaults at the MCP boundary | 1 | DONE (see Capture 1a findings) | C1 |
 | C1 | Capture 1a findings: relay listed before `initialize` (F1, fixed); default fill counted as repair (F2, measurement fixed, forwarding decision open) | 1 | DONE (see Capture 1a findings) | RC |
 | RC | Real-capture readiness: shadow-only + mask-only `real_capture`, no ground truth on observed traffic, `replay` provenance, evidence summary, first-capture procedure | 6 | DONE (see Real capture section); **no capture taken** | T11, T13, T14 |
 
@@ -1217,13 +1218,43 @@ was visible in synthetic data.
   before the field report `unclassified`. Capture 1a, re-summarised
   (recording unchanged): 5 changed payloads, `unclassified`, 0 repairs, 0
   schema violations.
-- *Recommended next (needs approval: changes auto-mode payloads).* Option A,
-  narrowly: auto mode forwards a schema-valid call exactly as received, and
-  a repaired payload carries only its operations' changes -- defaults stay an
-  internal validation view. Keep the required-field `set_default` repair.
-  Effect: no `would_modify`, no T3 refresh for valid calls. Touches the
-  outcome truth table ("valid, declared default filled"), drift-corpus
-  expectations and replay counterfactuals.
+- *Resolved (recommendation D, approved).* See "F3 + D" below.
+
+**F3 -- payload-change detection used Python `==` (fixed).** Found by the
+default-fill investigation: `2 == 2.0` and `True == 1`, so a repair coercing
+`2.0` to `2` compared "unchanged" and auto mode forwarded the *original*
+float; shadow reported nothing to review. Masked whenever an injected default
+made the payloads differ (the synthetic "integer as 5.0" case passed only
+because of it). All six payload-change decisions now ask
+`stateguard.adapters.mcp.payload.same_json` (JSON type for type; key order
+ignored; iterative, so hostile nesting cannot exhaust the stack):
+`forward_message`, shadow FORWARD vs HOLD and the preview, the shadow
+forwarding invariant, the reason text, the relay's `_intervenes`
+(`would_modify`, `proposal`, T3 refresh) and its byte-for-byte check. The
+engine refuses `True`/`1` both ways; the boundary still treats it as a change.
+
+**D -- no optional default is written at the MCP boundary.**
+`MCPToolAdapter.wrap` returns tool arguments exactly as the repair produced
+them (deep-copied). A valid call omitting a defaulted optional is forwarded
+as sent in both modes; a repaired call carries only its operations' changes;
+a missing *required* field with a declared default is still set
+(`DefaultValueFillStrategy`, op `set_default`). `JSONSchemaAdapter.wrap` (the
+non-MCP library path, Pydantic parity) is unchanged. Status, action and
+repair operations are unchanged for every case probed and every drift-corpus
+call; only forwarded payloads lose keys the model never sent.
+
+- *Measured (synthetic, not real-world evidence).* `measure.py`: 0 outcome
+  changes vs `00b0581` (successes per arm identical), 12 fewer relay
+  re-listings (617 -> 605), 10 fewer rewritten payloads (42 -> 32). Replay:
+  outcome table unchanged (auto prevented 20; without F3 it would be 19),
+  fidelity 68/68 + 58/58 on re-recorded tapes, determinism 40 runs, 0
+  mismatched. Race: 0 unsafe bypasses. Auth: 32/32.
+- *Also fixed here.* Replay `derive()` matched a response to its request
+  only if taped after it; request and answer are taped on different threads,
+  so a fast server's answer can come first (the re-recorded tape D had one).
+  A (wire id, generation) sent once now owns its answers regardless of seq.
+  The two staleness tests that raced the relay's first listing (flaky 1/40
+  since F1) now wait for it.
 
 ## Measured results
 

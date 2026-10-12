@@ -413,7 +413,7 @@ class TestCalls:
         assert change.breaking
         outcome = registry.process_call("search", {"query": "cats"})
         assert outcome.action is MCPAction.FORWARD
-        assert outcome.arguments == {"query_text": "cats", "limit": 10}
+        assert outcome.arguments == {"query_text": "cats"}  # the rename; limit stays the server's
 
     def test_unknown_tool(self, registry: ToolRegistry) -> None:
         registry.register(_tool("search"))
