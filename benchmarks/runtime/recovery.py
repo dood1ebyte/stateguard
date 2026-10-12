@@ -228,7 +228,11 @@ def run_session(session: Session, arm: str) -> SessionResult:
             faults=faults,
         )
         if session.first_restart_dies and n == 0:
-            threading.Timer(0.02, server.kill).start()
+            # Dead before it serves anything: it exits on its first input
+            # without processing it. (A wall-clock kill raced the relay: a call
+            # written inside the window died in flight -- correctly UNKNOWN --
+            # and made the session's outcome depend on timing.)
+            server.dead = True
         return server
 
     mode = {

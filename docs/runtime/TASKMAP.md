@@ -1022,8 +1022,8 @@ involved. **SYNTHETIC.** VERIFIED by running.
 | raw | 109 | 0 | 0 | 0 | 116 | 0 | 0 | 0 | 0 | 40 | 0 | 0 | 0 |
 | shadow | 109 | 0 | 0 | 0 | 116 | 0 | 0 | 0 | 0 | 40 | 0 | 0 | 0 |
 | auto (restart off) | 109 | 0 | 20 | 0 | 96 | 0 | 0 | 0 | 0 | 40 | 0 | 0 | 0 |
-| restart idle-only | 109 | **58** | 20 | 0 | 38 | 0 | **0** | **0** | **0** | 45 | 40 | 25 | 15 |
-| restart after-unknown | 109 | **82** | 20 | 0 | 14 | 0 | **0** | **0** | **0** | 45 | 55 | 40 | 15 |
+| restart idle-only | 109 | **58** | 20 | 0 | 38 | 0 | **0** | **0** | **0** | 45 | 40 | 20 | 20 |
+| restart after-unknown | 109 | **82** | 20 | 0 | 14 | 0 | **0** | **0** | **0** | 45 | 55 | 35 | 20 |
 
 How to read it:
 
@@ -1040,8 +1040,20 @@ How to read it:
 - **Deaths:** 45 vs 40 because the dies-on-start sessions lose a restarted
   server too.
 - **Reconnects:**
-  - Failed attempts: 15, which is 5 unrestartable sessions × 3.
+  - Failed attempts: 20. That is 5 unrestartable sessions × 3, plus the 5
+    restarted servers in the dies-on-start sessions that die before serving
+    anything.
   - Succeeded: a restarted server that then served its tool list.
+  - **Corrected after T14 CI.** The dies-on-start fixture used to kill its
+    server with a 20 ms wall-clock timer. That server sometimes listed its
+    tools first, so it counted as a successful reconnect (the earlier 25/15
+    and 40/15). On slow CI runners (macOS) a call could also be written
+    inside the window: it died in flight, was correctly UNKNOWN, and was
+    never replayed, but `test_unknown_is_never_resolved_by_a_restart`
+    failed.
+  - The fixture now marks that server dead before it serves anything, which
+    is deterministic. Invocation outcomes are unchanged: recovered 58 / 82,
+    UNKNOWN 20, replays 0, duplicate executions 0, Z 0.
 
 Per kind (restart idle-only vs raw):
 
