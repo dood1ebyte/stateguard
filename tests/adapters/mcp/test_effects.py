@@ -86,11 +86,21 @@ class TestPolicy:
 
 
 class TestRules:
-    def test_declared_read_only_is_retried_after_a_deadline(self) -> None:
-        v = decide_retry(
-            Observed.UNKNOWN_DEADLINE, EffectPolicy({"s": "read_only"}).of("s"), attempts_made=1
-        )
-        assert v.retry and "read_only" in v.reason
+    @pytest.mark.parametrize("observed", [Observed.UNKNOWN_DEADLINE, Observed.UNKNOWN_TRANSPORT])
+    @pytest.mark.parametrize("effect", ["read_only", "idempotent", "non_idempotent", None])
+    @pytest.mark.parametrize("attempts", [0, 1])
+    def test_an_unknown_outcome_is_never_retried(
+        self, observed: Observed, effect: str | None, attempts: int
+    ) -> None:
+        policy = EffectPolicy({"s": effect}) if effect else EffectPolicy()
+        v = decide_retry(observed, policy.of("s"), attempts_made=attempts)
+        assert v.decision is T.AMBIGUOUS and not v.retry
+        assert "never re-sent" in v.reason
+
+    @pytest.mark.parametrize("effect", ["read_only", "idempotent"])
+    def test_a_known_tool_error_on_a_declared_safe_tool_is_retried(self, effect: str) -> None:
+        v = decide_retry(Observed.TOOL_ERROR, EffectPolicy({"s": effect}).of("s"), attempts_made=1)
+        assert v.retry and effect in v.reason
 
     def test_undeclared_unknown_outcome_escalates(self) -> None:
         v = decide_retry(Observed.UNKNOWN_DEADLINE, EffectPolicy().of("s"), attempts_made=1)
@@ -149,9 +159,9 @@ def test_property_the_safety_invariants_hold_everywhere(
             Observed.AUTH_ERROR,
             Observed.PROTOCOL_ERROR,
         )
-        assert not (observed is Observed.UNKNOWN_TRANSPORT and not connected)
-    if observed.outcome_unknown and not repeatable:
-        assert v.decision is T.AMBIGUOUS
+        assert observed is Observed.TOOL_ERROR  # only a knowingly failed attempt
+    if observed.outcome_unknown:
+        assert v.decision is T.AMBIGUOUS  # never retried, whatever the effect
     if observed.outcome_unknown:
         assert v.decision is not T.REJECT  # unknown is never delivered as a plain failure
     # hints never matter: same verdict without them

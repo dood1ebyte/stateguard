@@ -228,6 +228,16 @@ CASES: tuple[Case, ...] = (
         note="auto_retry: resolved UNKNOWN at the deadline; the late 401 is dropped, not "
         "classified. auto (no deadline): just a slow 401",
     ),
+    Case(
+        "late_auth_on_read_only",
+        "unknown",
+        "search",
+        {"query": "p"},
+        tool_error("401 Unauthorized"),
+        late=True,
+        expected_without_deadline="authentication",
+        note="as above, on a tool declared read_only: the UNKNOWN is still never retried",
+    ),
 )
 
 
@@ -337,6 +347,8 @@ def measure() -> dict[str, Any]:
         "unknown_reclassified_as_auth": sum(
             1 for r in rows if r["expected"] == "unknown" and r["auth_events"]
         ),
+        # An UNKNOWN outcome is never re-sent, whatever the declared effect.
+        "unknown_retried": sum(r["retries"] for r in rows if r["expected"] == "unknown"),
         "rows": rows,
     }
 
@@ -361,7 +373,8 @@ def render(summary: dict[str, Any]) -> str:
         f"turned into success {summary['auth_turned_into_success']}, "
         f"delivered as sent {summary['auth_delivered_as_sent']}/{summary['auth_runs']}",
         f"false-positive auth {summary['false_positive_auth']}  "
-        f"UNKNOWN reclassified as auth {summary['unknown_reclassified_as_auth']}",
+        f"UNKNOWN reclassified as auth {summary['unknown_reclassified_as_auth']}  "
+        f"UNKNOWN retried {summary['unknown_retried']}",
     ]
     return "\n".join(out)
 

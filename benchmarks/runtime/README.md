@@ -160,7 +160,7 @@ This is fault injection on a synthetic workload.
 python benchmarks/runtime/auth.py
 ```
 
-This runs 15 cases through the relay in two configurations: `auto`, and
+This runs 16 cases through the relay in two configurations: `auto`, and
 `auto_retry` (retry on, a 0.3 s deadline, `search` declared read-only). The
 cases are:
 
@@ -171,7 +171,8 @@ cases are:
   hold", "access", "403 Forbidden City", the SDK's `-32001` timeout, a
   transport failure and an UNKNOWN outcome mentioning auth, a successful
   call with a `token_budget` argument;
-- a 401 that arrives after the deadline.
+- a 401 that arrives after the deadline, on an undeclared tool and on a
+  tool declared read-only (it must stay UNKNOWN and is never retried).
 
 For each case it reports:
 

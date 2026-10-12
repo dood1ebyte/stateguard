@@ -60,12 +60,14 @@ coming. The relay uses it, in auto mode, for two things only:
 
 Retry
 -----
-A call that failed or went unanswered is sent again only when the operator
-has declared the tool READ_ONLY or IDEMPOTENT (``--effects FILE``), and only
-with ``--retry auto``. The rule is ``decide_retry``: never after an
+A call that *knowingly* failed (a tool error) is sent again only when the
+operator has declared the tool READ_ONLY or IDEMPOTENT (``--effects FILE``),
+and only with ``--retry auto``. The rule is ``decide_retry``: never after an
 authorization or protocol error, never past the attempt budget (one retry),
-never for a tool not declared safe to repeat -- an unknown outcome on such a
-tool is escalated as "outcome unknown". Tool annotations
+never for a tool not declared safe to repeat, and **never after an unknown
+outcome** (no answer by the deadline, or the connection lost with the
+request in flight) -- whatever the declared effect, that is escalated as
+"outcome unknown" and never re-sent. Tool annotations
 (``readOnlyHint`` ...) are recorded as hints and never decide anything. The
 default, ``--retry shadow``, logs every decision and retries nothing.
 

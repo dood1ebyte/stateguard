@@ -73,7 +73,7 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Duplicate-response containment (J) | COMPLETE (T6) | `test_relay_ledger.py`; M5 J 8 → 0 | auto drops / shadow logs | |
 | Surface unknown outcome on transport close (E/I) | COMPLETE (T6) | `test_relay_ledger.py`; M5 hidden failures 53 → 25 | auto answers / shadow logs | JSON-RPC `-32000` error with `data["io.stateguard/executionState"] = "unknown"`. |
 | Call deadline (F/H/I) | PARTIAL (T6) — opt-in only | M5: hidden 25 → 1, but **8 Z** on slow successes | auto, opt-in | Off by default; the operator must set it above legitimate tool latency. |
-| Retry decision logic | COMPLETE (T8, `ad6f041`, `88a5afa`) | `decide_retry`; relay `--retry`; `test_relay_retry.py` (server ledger checked) | **Shadow by default**; Auto opt-in with `--effects` | Never after auth/protocol error; one retry max; undeclared + unknown outcome → ESCALATE. |
+| Retry decision logic | COMPLETE (T8, `ad6f041`, `88a5afa`) | `decide_retry`; relay `--retry`; `test_relay_retry.py` (server ledger checked) | **Shadow by default**; Auto opt-in with `--effects` | Never after auth/protocol error; never after an UNKNOWN outcome, whatever the effect (T11 follow-up); one retry max; only known tool errors on declared-safe tools are retried. |
 | Circuit breaking | MISSING | — | — | |
 | Result validation (`outputSchema`) | COMPLETE, detection only (T10) | `adapters/mcp/results.py`; `test_results.py`, `test_relay_results.py`; M8: 8/8 injected detected, 0 elsewhere | observe in all modes; **never alters** | Missing `structuredContent` = advisory (2026-07-28 text: optional). Non-object `outputSchema` not checked (advisory). |
 | Auth signal classification | COMPLETE (T11) | `adapters/mcp/failures.py`; `test_failures.py` (174), `test_relay_auth.py` (36), `auth.py` (M13) | both: classified and logged in shadow and auto; never retried | Deterministic signals only; text fallback deliberately narrow. Classification, not resolution: credentials are never touched. |
@@ -224,9 +224,12 @@ safety boundary / Z modes / Shadow-first / Auto conditions / evidence).
 - **State:** ledger state + attempts per call + retry-id → client-id map.
 - **Safety boundary:**
   - Never after AUTH_ERROR or PROTOCOL_ERROR.
+  - **Never after an UNKNOWN outcome (deadline or transport loss), whatever
+    the declared effect: escalated.** This was tightened after T11; T8
+    originally retried unknown outcomes on declared read-only/idempotent
+    tools.
   - Never beyond one retry.
   - Never for an undeclared or non-idempotent tool.
-  - No connection → escalate.
   - A shadow relay never retries.
 - **Z modes:**
   - A wrong declaration (see P-T7).
@@ -895,7 +898,7 @@ an `isError` result.
 | AUTHENTICATION / AUTHORIZATION | `AUTH_ERROR` | **never**, whatever the declared effect, attempt count or connection |
 | PROTOCOL / TRANSPORT / upstream UNKNOWN | `PROTOCOL_ERROR` | never (as before) |
 | TOOL | `TOOL_ERROR` | only if declared read-only/idempotent under `--retry auto` (as before) |
-| local UNKNOWN (deadline, transport loss) | `UNKNOWN_*` | unchanged T8 rule; see the note below |
+| local UNKNOWN (deadline, transport loss) | `UNKNOWN_*` | **never**, whatever the declared effect (escalated); see the note below |
 
 - **What the relay logs.** Every delivered auth failure is logged as
   `auth_failure` (category K: id, tool, failure, signal). `retry_decision`
@@ -903,18 +906,49 @@ an `isError` result.
 - **The answer is never altered.** A late answer to a request already
   resolved UNKNOWN is dropped as before and is never classified.
 
-**Note on UNKNOWN and retry (not changed).** The T11 brief says "UNKNOWN →
-never automatically retry".
+**UNKNOWN is never retried (policy correction after T11).** The invariant
+is that an uncertain side effect is never blindly replayed.
 
-- **Current rule (T8):** an unknown *outcome* is retried only when the
-  operator declared the tool read-only or idempotent, and only under opt-in
-  `--retry auto`. Undeclared tools are never retried.
-- **Why it is kept.** Changing it would undo M6's measured recoveries, and
-  the brief forbids redesigning retry.
-- **What T11 does guarantee:** UNKNOWN is never *reclassified* (as auth or
-  anything else).
-- **If UNKNOWN must never be retried at all,** that is a one-line policy
-  change in `decide_retry`; it needs the operator's call.
+- **Old rule (T8).** `decide_retry` retried an unknown *outcome* (no answer
+  by the deadline, or the connection lost with the request in flight) when
+  the operator had declared the tool read-only or idempotent, under opt-in
+  `--retry auto`.
+- **New rule.** One rule, placed right after the protocol-error rule: an
+  unknown outcome is always `AMBIGUOUS`, escalated, never re-sent, whatever
+  the effect.
+  - Retry is now reachable only for a *known* failure: a tool error on a
+    declared-safe tool, within the one-retry budget. Those behave exactly
+    as before.
+  - The `UNKNOWN_TRANSPORT and no connection` branch became unreachable and
+    was removed.
+  - UNKNOWN is also never reclassified (as auth or anything else) to enable
+    a retry.
+- **Measured cost** (M9, synthetic `auto_ops`):
+
+  | | Before | After |
+  |---|---|---|
+  | recovered | 11 | 7 |
+  | retries sent | 13 | 7 |
+  | failures | 76 | 82 (F +5, H +1) |
+  | StateGuard-induced | 6 | 8 |
+  | duplicate executions | 0 | 0 |
+  | hidden failures | 9 | 9 |
+
+  The deadline's cuts of slow-but-successful read-only calls used to be
+  rescued by a retry; they now stay explicitly UNKNOWN. The default `auto`
+  arm, M10, M11, T14's race and M13 are unchanged.
+- **Tests.**
+  - `test_effects.py`: unknown × {read_only, idempotent, non_idempotent,
+    undeclared} × both unknown kinds × attempts 0/1 gives `AMBIGUOUS`; the
+    exhaustive property now asserts every retry is a `TOOL_ERROR` and every
+    unknown is `AMBIGUOUS`.
+  - `test_relay_retry.py`: hang and dropped response × 4 tools; sent once,
+    no duplicate execution, decision ambiguous. A known tool error on
+    read-only and idempotent tools is still retried.
+  - `auth.py` / `test_relay_auth.py`: a late 401 on a declared read-only
+    tool stays UNKNOWN and is not retried (`unknown_retried` = 0).
+  - Against the old rule, 4 of the new relay tests fail and the auth
+    measurement shows `unknown_retried` 1.
 
 **Recording.** Mask-mode redaction now keeps two things verbatim, both
 fixed vocabulary and never data:
@@ -974,6 +1008,14 @@ injection on a synthetic workload, not real-world evidence):
 | non-auth runs classified as auth (false positives) | 0 | **0** |
 | UNKNOWN reclassified as auth | 0 | **0** |
 | runs classified as expected | — | **30/30** |
+
+After the UNKNOWN policy correction, a 16th case was added: a late 401 on
+a tool declared read-only. The measurement then gives:
+
+- 32/32 runs classified as expected;
+- 14/14 auth answers delivered as sent, 0 retried;
+- `unknown_retried` 0. Under the old rule this was 1: the read-only tool's
+  UNKNOWN was re-sent.
 
 The committed T13 corpus, re-recorded with auth signals kept, has 33
 failure responses: 31 tool, 1 protocol and **1 authentication** (G's

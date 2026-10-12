@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **An unknown outcome is never retried automatically, whatever the tool's
+  declared effect.**
+  - **The old rule.** `decide_retry` retried an attempt with no answer by
+    the deadline, or one lost with the connection, when the operator had
+    declared the tool read-only or idempotent.
+  - **The new rule.** It now always escalates such an attempt as "outcome
+    unknown" (`AMBIGUOUS`), because the request may have executed.
+  - **What still retries.** Known tool errors on declared-safe tools are
+    still retried, as before.
+  - **Cost, measured on the synthetic `auto_ops` arm.** Recovered 11 → 7,
+    retries sent 13 → 7, StateGuard-induced 6 → 8: deadline cuts of slow
+    read-only successes are no longer rescued by a retry. Duplicate
+    executions stay 0.
+
 ### Fixed
 - **Mid-restart race in the stdio relay** (found by T13 replay: 16 of 20
   replays of the recorded session).
@@ -138,6 +153,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `decide_retry` is a rule, not a score. It never retries after an auth or
     protocol error, never beyond one retry, and never a tool not declared
     safe to repeat. An unknown outcome on such a tool is escalated.
+    (Superseded: an unknown outcome is now never retried on any tool; see
+    Changed.)
 - **The stdio relay can retry**, with `--effects FILE` and `--retry auto`.
   The default `--retry shadow` logs every decision and retries nothing.
 - **`InvocationLedger`** (`stateguard.adapters.mcp`): per-request execution

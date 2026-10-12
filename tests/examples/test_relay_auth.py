@@ -43,6 +43,8 @@ def test_every_case_is_classified_and_handled(case: auth.Case, arm: str) -> None
         assert row["delivered_as_sent"] is True  # never altered, never "repaired"
     else:
         assert row["auth_events"] == 0  # no false positive, UNKNOWN never reclassified
+    if row["expected"] == "unknown":
+        assert row["retries"] == 0  # UNKNOWN (local or upstream) is never re-sent
 
 
 def test_the_measurement_is_clean() -> None:
@@ -52,6 +54,7 @@ def test_the_measurement_is_clean() -> None:
     assert summary["auth_delivered_as_sent"] == summary["auth_runs"] > 0
     assert summary["false_positive_auth"] == 0
     assert summary["unknown_reclassified_as_auth"] == 0
+    assert summary["unknown_retried"] == 0
 
 
 def _rig(server: ScriptedServer, mode: RelayMode = RelayMode.AUTO, **kwargs: Any) -> Rig:
