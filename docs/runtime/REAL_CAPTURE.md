@@ -186,8 +186,8 @@ recording is useless for failure analysis without it:
 | `servers` | fact | `serverInfo` per server generation |
 | `wire` | fact | client requests, tool calls forwarded unchanged / changed / not at all (`tool_calls_compared_by`: `digest` on live recordings), client answers not from the server |
 | `observed` | fact | failure class of each server answer to a tool call (T11 classifier: `authentication`, `authorization`, `tool`, `protocol`, ...), calls never answered, server lost |
-| `stateguard_observed` | StateGuard's observation | auth failures it classified, result-integrity findings, listings synced, breaking schema changes, internal errors |
-| `proposed` | **hypothetical** (shadow) | `would_modify_call` (by `repair` / `refuse` / `escalate`), `would_retry`, `would_restart`, `would_drop_response`; `acted` must be all zero in shadow |
+| `stateguard_observed` | StateGuard's observation | auth failures it classified, result-integrity findings, listings synced, breaking schema changes, internal errors, `calls_with_schema_violations` (calls with a field StateGuard found invalid) |
+| `proposed` | **hypothetical** (shadow) | `would_modify_call`, by kind (`would_modify_by_kind`: `repair` / `default_fill` / `refuse` / `escalate`; `unclassified` in recordings older than the relay's `proposal` field), `would_repair_call` (repairs only), `would_retry`, `would_restart`, `would_drop_response`; `acted` must be all zero in shadow. A `default_fill` is a valid call whose omitted optionals auto mode would write out from their declared defaults: not a repair, not drift, not a failure |
 | `unknown` | neither | outcomes the relay could not determine, by reason; `answer_seen_later` when a late answer arrived; never counted as success or failure |
 | `not_claimed` | — | what no number here supports |
 

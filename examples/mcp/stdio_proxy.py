@@ -25,6 +25,20 @@ byte for byte, except three it acts on:
     are answered by the relay with a ``CallToolResult`` carrying
     ``isError: true`` and the reason, and never reach the server.
 
+The relay's own requests respect the session
+--------------------------------------------
+The relay sends a request of its own (``tools/list``) only once the MCP
+session allows it, and it learns that from the *server's* answers, never
+from what the client merely tries: an SDK may probe the stateless protocol
+(``server/discover``) and fall back to ``initialize`` when the server does not
+speak it. Under the initialize protocol the session is usable once the
+server has answered the client's ``initialize`` and the client's
+``notifications/initialized`` has reached that server process; under the
+stateless one, once the server has answered a request carrying a protocol
+version. Until then a listing is deferred (``tools_list_deferred``), never
+sent. After a restart the same rule holds for the new process: the replayed
+handshake comes first.
+
 Never acting on a stale listing
 -------------------------------
 Under protocol 2026-07-28 a server announces ``tools/list_changed`` only on
@@ -230,6 +244,7 @@ from stateguard.adapters.mcp.jsonrpc import (
 )
 from stateguard.adapters.mcp.recording import Direction, Provenance, Recorder, RedactionPolicy
 from stateguard.adapters.mcp.recording import RedactionMode as RecordRedaction
+from stateguard.core.explain import FieldDecisionKind, root_normalisation
 from stateguard.core.models.config import GuardConfig, RepairMode
 
 #: Prefix for the ids of the relay's own requests, so their responses can be
@@ -364,6 +379,18 @@ class StdioRelay:
         # protocol version entirely.
         self._protocol_meta: dict[str, Any] = {}
         self._listed = False
+        # The session's lifecycle, learnt from the server's answers -- never
+        # from what the client merely tries (an SDK may probe the stateless
+        # protocol, then fall back to the initialize handshake):
+        #   None      unknown: the relay sends nothing of its own;
+        #   "legacy"  the server answered the client's initialize;
+        #   "modern"  the server answered a request that carried a protocol
+        #             version (2026-07-28 on: every request stands alone).
+        self._era: str | None = None
+        # Legacy only: notifications/initialized reached *this* server process.
+        self._handshake_done = False
+        # Until the era is known: client request id -> the protocol _meta it carried.
+        self._versioned: dict[str, dict[str, Any]] = {}
         # True from tools/list_changed until a refresh succeeds: calls made
         # meanwhile are validated against the last listing, and say so.
         self._listing_stale = False
@@ -444,8 +471,34 @@ class StdioRelay:
             )
             self._audit.flush()
 
+    def _session_ready(self) -> bool:
+        """Whether the session allows a relay-owned request (see ``_era``)."""
+        if self._era == "modern":
+            return True
+        return self._era == "legacy" and self._handshake_done
+
+    def _discover_tools(self) -> None:
+        """List this server's tools once the session allows it, and only once."""
+        if not self._listed and self._session_ready():
+            self._discovery_epoch = self._request_listing()
+
     def _request_listing(self, cursor: str | None = None, epoch: int | None = None) -> int:
-        """Send a relay-owned ``tools/list`` (page); return its listing epoch."""
+        """
+        Send a relay-owned ``tools/list`` (page); return its listing epoch.
+
+        Never before the session is ready: a server still waiting for its
+        initialize handshake rejects any other request, and the relay must
+        not be the one breaking the protocol. Such a listing is deferred --
+        its epoch fails at once, which callers already treat as "no fresh
+        listing" -- and happens when the session becomes ready.
+        """
+        if not self._session_ready():
+            with self._listing_done:
+                epoch = next(self._epoch_counter) if epoch is None else epoch
+            self._listed = False
+            self._log("tools_list_deferred", category="D", reason="session not initialized")
+            self._finish_epoch(epoch, ok=False)
+            return epoch
         self._listed = True
         params: dict[str, Any] = {} if cursor is None else {"cursor": cursor}
         if self._protocol_meta:
@@ -550,24 +603,25 @@ class StdioRelay:
             message = _parse(line)
             identifier = self._track(message)
             self._remember_session(message)
+            try:
+                self._note_versioned(message)
+            except Exception as exc:  # noqa: BLE001 -- fail open; see the module docstring
+                self._internal_error("client message", exc)
             if is_request(message, TOOLS_CALL):
                 self._on_call(line, message, identifier)
                 continue
             try:
-                first_versioned = self._remember_protocol(message)
                 if is_request(message, TOOLS_LIST):
                     self._client_lists.observe_request(message)
             except Exception as exc:  # noqa: BLE001 -- fail open; see the module docstring
                 self._internal_error("client message", exc)
-                first_versioned = False
             self._send_tracked(identifier, line)
-            # Learn the tools before the first call: after the handshake under
-            # the initialize-based protocol, at the first versioned request
-            # under the stateless one.
-            if not self._listed and (
-                is_notification(message, "notifications/initialized") or first_versioned
-            ):
-                self._request_listing()
+            # Under the initialize protocol, the session is usable once the
+            # client's notifications/initialized has reached the server. (The
+            # stateless protocol's moment is a server answer: _pump_server.)
+            if is_notification(message, "notifications/initialized"):
+                self._handshake_done = True
+                self._discover_tools()
 
     def _track(self, message: Any) -> Any:
         """Record a client request in the ledger; its id, or None if not a request."""
@@ -899,17 +953,49 @@ class StdioRelay:
             **fields,
         )
 
-    def _remember_protocol(self, message: Any) -> bool:
-        """Record the request's protocol _meta; True the first time one is seen."""
+    def _note_versioned(self, message: Any) -> None:
+        """
+        A client message's protocol ``_meta``. Before the era is known it is
+        only a candidate, kept by request id: the client may be probing.
+        The server's answer decides (``_on_era_evidence``).
+        """
         params = message.get("params") if isinstance(message, dict) else None
         meta = params.get("_meta") if isinstance(params, dict) else None
         if not isinstance(meta, dict) or PROTOCOL_VERSION_META_KEY not in meta:
-            return False
-        first = not self._protocol_meta
-        self._protocol_meta = {
+            return
+        versioned = {
             key: value for key, value in meta.items() if key.startswith("io.modelcontextprotocol/")
         }
-        return first
+        if self._era == "modern":
+            self._protocol_meta = versioned
+        elif self._era is None and message.get("id") is not None:
+            self._versioned[_id_key(message["id"])] = versioned
+            while len(self._versioned) > _VERSIONED_LIMIT:
+                del self._versioned[next(iter(self._versioned))]
+
+    def _on_era_evidence(self, message: dict[str, Any], identifier: Any) -> None:
+        """A server answer to a client request: does it settle the session's era?"""
+        if (
+            self._client_init_id is not None
+            and identifier == self._client_init_id
+            and isinstance(message.get("result"), dict)
+        ):
+            version = message["result"].get("protocolVersion")
+            self._negotiated_version = version if isinstance(version, str) else None
+            # An initialize session: requests carry no per-request version,
+            # so neither do the relay's (a probe's _meta is not this session's).
+            self._era = "legacy"
+            self._protocol_meta = {}
+            self._versioned.clear()
+            return
+        if self._era is not None or identifier is None:
+            return
+        candidate = self._versioned.pop(_id_key(identifier), None)
+        if candidate is not None and isinstance(message.get("result"), dict):
+            self._era = "modern"
+            self._protocol_meta = candidate
+            self._versioned.clear()
+            self._discover_tools()
 
     def _on_call(self, line: bytes, message: Any, identifier: Any = None) -> None:
         """
@@ -996,6 +1082,7 @@ class StdioRelay:
                     "forwarded unchanged rather than act on a possibly stale schema",
                     listing="unconfirmed",
                     would_modify=False,
+                    proposal="unvalidated",
                 )
                 return True, line
             evaluated = self._evaluate(line, request)
@@ -1014,6 +1101,9 @@ class StdioRelay:
             # What auto mode would do to this call (change or refuse it):
             # in shadow, a proposal -- the call is forwarded as received.
             would_modify=_intervenes(request, outcome),
+            # ...and of which kind. "default_fill" is not a repair: the call
+            # was valid, and only omitted optionals would be written out.
+            proposal=_proposal(request, outcome),
             decisions=[
                 {
                     "path": d.path,
@@ -1044,6 +1134,8 @@ class StdioRelay:
                 tool=request.name,
                 action="unvalidated",
                 reason="no definition for this tool; forwarded for the server to answer",
+                would_modify=False,
+                proposal="unvalidated",
             )
             return True, line
         except ToolSchemaUnusableError as exc:
@@ -1065,6 +1157,8 @@ class StdioRelay:
                 action="unvalidated",
                 reason=f"schema unreadable; forwarded ({'shadow' if self._shadow else 'policy'}): "
                 f"{exc.cause}",
+                would_modify=False,
+                proposal="unvalidated",
             )
             return True, line
         self._log(
@@ -1073,6 +1167,8 @@ class StdioRelay:
             tool=request.name,
             action="refuse",
             reason=f"schema unreadable: {exc.cause}",
+            would_modify=True,
+            proposal="refuse",
         )
         text = (
             f"Not sent: StateGuard cannot read the input schema of {request.name!r}, "
@@ -1186,6 +1282,7 @@ class StdioRelay:
         self._listing_stale = True
         self._listing_ready.clear()
         self._listed = False
+        self._handshake_done = False  # a new process has had no handshake
         self._log(
             "server_restarted", category="E", generation=self.generation, attempt=self._restarts
         )
@@ -1204,8 +1301,10 @@ class StdioRelay:
                 self._log("reinit_unsent", category="E", error=str(exc))
             return  # the link comes up when the server answers
         # Ask for the tools before the link comes up: calls gated on this
-        # generation wait for exactly this listing.
-        self._discovery_epoch = self._request_listing()
+        # generation wait for exactly this listing. Only in a session known
+        # to be stateless; with the era still unknown the relay sends nothing
+        # of its own, and lists when the server's first answer settles it.
+        self._discover_tools()
         self._set_link(LINK_UP)
 
     def _on_reinit(self, message: dict[str, Any]) -> None:
@@ -1228,6 +1327,7 @@ class StdioRelay:
             with self._to_server, contextlib.suppress(OSError):
                 self._server_in.close()
             return
+        self._era = "legacy"
         if self._client_initialized:
             try:
                 self._send_server(
@@ -1238,8 +1338,11 @@ class StdioRelay:
             except OSError as exc:
                 self._log("reinit_unsent", category="E", error=str(exc))
                 return
+            self._handshake_done = True
         self._log("reinitialized", category="D", generation=self.generation, version=version)
-        self._discovery_epoch = self._request_listing()
+        # Lists now if the client had completed its handshake; otherwise when
+        # its notifications/initialized arrives (_pump_client).
+        self._discover_tools()
         self._set_link(LINK_UP)
 
     def _abandon_own_listings(self) -> None:
@@ -1269,14 +1372,13 @@ class StdioRelay:
             ):
                 self._on_reinit(message)
                 continue
-            if (
-                is_response(message)
-                and self._client_init_id is not None
-                and identifier == self._client_init_id
-                and isinstance(message.get("result"), dict)
+            if is_response(message) and not (
+                isinstance(identifier, str) and identifier.startswith(OWN_ID_PREFIX)
             ):
-                version = message["result"].get("protocolVersion")
-                self._negotiated_version = version if isinstance(version, str) else None
+                try:
+                    self._on_era_evidence(message, identifier)
+                except Exception as exc:  # noqa: BLE001 -- fail open
+                    self._internal_error("session lifecycle", exc)
             if (
                 is_response(message)
                 and isinstance(identifier, str)
@@ -1395,6 +1497,14 @@ class StdioRelay:
             self._listing_ready.set()  # do not hold calls forever
 
 
+#: Client requests remembered while the session's era is still unknown.
+_VERSIONED_LIMIT = 64
+
+
+def _id_key(identifier: Any) -> str:
+    return json.dumps(identifier, sort_keys=True)
+
+
 #: JSON-RPC implementation-defined server error: the outcome is unknown.
 UNKNOWN_OUTCOME_CODE = -32000
 UNKNOWN_OUTCOME_KEY = "io.stateguard/executionState"
@@ -1457,6 +1567,31 @@ def _intervenes(request: ToolCallRequest, outcome: ToolCallOutcome) -> bool:
         return True
     received = {} if request.arguments is None else request.arguments
     return outcome.proposed_arguments != received or type(received) is not dict
+
+
+def _proposal(request: ToolCallRequest, outcome: ToolCallOutcome) -> str:
+    """
+    What auto mode would do to this call, by kind -- for the audit log and
+    the evidence it feeds, which must not count a default as a repair:
+
+    ``none``          forwarded exactly as received;
+    ``default_fill``  forwarded with omitted optional fields written out from
+                      their declared defaults -- the call was *valid*, no
+                      field was wrong, nothing was repaired;
+    ``repair``        forwarded with at least one field (or the payload root)
+                      repaired -- including a missing *required* field set
+                      from its declared default, which is a real violation;
+    ``refuse`` / ``escalate``  not forwarded.
+    """
+    auto = outcome.auto_action or outcome.action
+    if auto is not MCPAction.FORWARD:
+        return auto.value
+    if not _intervenes(request, outcome):
+        return "none"
+    repaired = any(d.kind is FieldDecisionKind.REPAIRED for d in outcome.result.field_decisions())
+    if repaired or root_normalisation(outcome.result) is not None:
+        return "repair"
+    return "default_fill"
 
 
 def _parse(line: bytes) -> Any:

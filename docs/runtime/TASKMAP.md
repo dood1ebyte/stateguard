@@ -119,6 +119,7 @@ list-changed delivery at 2026-07-28.
 | T12 | Safe server restart: idle death only by default; in-flight → UNKNOWN, never replayed; re-initialize + re-list + registry reset; bounded; session recovery workload | 5 | DONE (`9d1f401`, `24011f5`, + measurement commit) | T6, T8 |
 | T13 | Record/replay with redaction: versioned format, deterministic redaction, fail-open relay taps, replay engine + A–H fault-injection corpus, provenance-labelled report | 6 | DONE (`bbb660b` + replay commit) | T4, T12 |
 | T14 | Mid-restart race: gate `tools/call` on a live, listed server; bind every decision to its server generation | 1 | DONE (see T14 section) | T12, T13 |
+| C1 | Capture 1a findings: relay listed before `initialize` (F1, fixed); default fill counted as repair (F2, measurement fixed, forwarding decision open) | 1 | DONE (see Capture 1a findings) | RC |
 | RC | Real-capture readiness: shadow-only + mask-only `real_capture`, no ground truth on observed traffic, `replay` provenance, evidence summary, first-capture procedure | 6 | DONE (see Real capture section); **no capture taken** | T11, T13, T14 |
 
 ## Primitive records
@@ -1134,6 +1135,95 @@ evidence):
 
 **Not done:** no real capture has been taken. Nothing connected to a public
 MCP server or external service.
+
+### Capture 1a findings (first real capture)
+
+Capture 1a: `mcp-server-git` 2026.8.18 (MCP SDK 1.30.0, initialize
+handshake) through the relay in shadow mode, 18 schema-valid scripted calls
+(`docs/runtime/CAPTURE_1_PLAN.md`). Two StateGuard defects surfaced; neither
+was visible in synthetic data.
+
+**F1 -- the relay sent `tools/list` before `initialize` (fixed).**
+
+- *Root cause.* `_pump_client` listed after forwarding the first client
+  request carrying `_meta["io.modelcontextprotocol/protocolVersion"]`
+  (`first_versioned`), on the assumption "versioned request => stateless
+  session". The SDK 2.x client's `server/discover` *probe* carries it; the
+  SDK 1.x server rejected the probe (`-32602`), the client fell back to
+  `initialize`, but the relay's listing was already on the wire (rejected,
+  `-32602`, `tools_list_failed`), and every later relay listing carried the
+  probe's stateless-protocol `_meta` in a legacy session. Present since the
+  original relay (`70bcddd`), before T3/T12/T14.
+- *Second instance, restart path (T12).* `_on_reinit` listed right after the
+  replayed `initialize` even when the client had not yet sent
+  `notifications/initialized`; `_connect` listed at once on any session not
+  using `initialize`, including one whose era was still unknown.
+- *Other relay-originated requests* (replayed `initialize`, its
+  `notifications/initialized`, retries) were already lifecycle-correct.
+- *Fix.* The era is learnt from the **server's answers**: `legacy` when it
+  answers the client's `initialize` (the probe's `_meta` is dropped);
+  `modern` when it answers a request that carried a protocol version (that
+  request's `_meta` becomes the relay's). `_request_listing` is the single
+  choke point: before the session is ready it sends nothing, logs
+  `tools_list_deferred` (category D) and fails the epoch (T3 then forwards
+  unchanged, as for any failed listing). `_discover_tools()` lists once the
+  session is ready, from every trigger (client `notifications/initialized`,
+  the first modern answer, a restart in a modern session, a completed
+  reinit). The handshake is tracked per server generation.
+- *Invariant.* A relay-originated request reaches a server process only when
+  that process's session is ready: initialize protocol -- the server answered
+  `initialize` and `notifications/initialized` was delivered to *that*
+  process (by the client, or by the relay's replay after a restart);
+  stateless protocol -- the server answered a versioned request.
+- *T14 interplay.* The generation gate still holds every call on a restarted
+  generation until that generation's own listing is synced; that listing is
+  now requested only at a valid lifecycle point. A restart before any
+  session was established requests nothing; calls gated on it are answered
+  "not sent" if no listing comes (the safe direction).
+- *Tests.* `tests/examples/test_relay_lifecycle.py` (8) with `SdkV1Server`,
+  which reproduces the observed SDK 1.x behaviour (unknown method and any
+  pre-`notifications/initialized` request -> `-32602`, recorded as a
+  violation by whoever sent it). 7 of the 8 fail on the pre-fix relay.
+
+**F2 -- a declared default written out was counted as a repair.**
+
+- *Mechanism.* `JSONSchemaAdapter.wrap` materialises declared `default`s for
+  absent properties (as Pydantic does) so the engine validates one shape.
+  `outcomes._verdict` then forwards that wrapped payload for an
+  ALREADY_VALID call, deliberately ("the server sees the same thing whether
+  or not a repair happened"), and repaired payloads carry the same
+  materialised defaults. No `FieldOperation` is recorded; the call has no
+  field decision. The relay saw `proposed != received`: `would_modify`, and a
+  T3 refresh round trip. Separate and legitimate: `DefaultValueFillStrategy`
+  sets a *required* missing field from its declared default (a real
+  violation, op `set_default`).
+- *Is it safe?* Not in general. JSON Schema 2020-12 makes `default` an
+  annotation: it changes no validation outcome and obliges no one to apply
+  it; MCP leaves defaults to the server. Writing one out asserts that "sent
+  explicitly" equals "omitted", which fails for presence-sensitive tools
+  (update/patch: absent = leave unchanged), documentation-only or stale
+  defaults (T3 exists because listings go stale), and handlers that branch
+  on `"x" in arguments`. In capture 1a it was harmless only because
+  `mcp-server-git`'s handlers apply the same defaults as its schema.
+  Cost even then: 5 of 18 valid calls flagged and re-listed (5 of the 6
+  relay listings); in the synthetic tapes 13 of 45 "would modify" proposals
+  are default fills only. Benefit for a valid call: none found.
+- *Done now (measurement only, no forwarding change).* Every relay `call`
+  event carries `proposal`: `none` / `default_fill` / `repair` / `refuse` /
+  `escalate` / `unvalidated` (a kept value in recordings). The evidence
+  summary reports `would_modify_by_kind`, `would_repair_call` (repairs only)
+  and `calls_with_schema_violations` (calls with a field decision); a default
+  fill is none of repair, drift, failure or prevention. Recordings from
+  before the field report `unclassified`. Capture 1a, re-summarised
+  (recording unchanged): 5 changed payloads, `unclassified`, 0 repairs, 0
+  schema violations.
+- *Recommended next (needs approval: changes auto-mode payloads).* Option A,
+  narrowly: auto mode forwards a schema-valid call exactly as received, and
+  a repaired payload carries only its operations' changes -- defaults stay an
+  internal validation view. Keep the required-field `set_default` repair.
+  Effect: no `would_modify`, no T3 refresh for valid calls. Touches the
+  outcome truth table ("valid, declared default filled"), drift-corpus
+  expectations and replay counterfactuals.
 
 ## Measured results
 

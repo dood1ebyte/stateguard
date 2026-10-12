@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Relay `call` audit events carry `proposal`** (`none` / `default_fill` /
+  `repair` / `refuse` / `escalate` / `unvalidated`), recorded verbatim.
+  `summarize_evidence` reports `would_modify_by_kind` (replacing
+  `would_modify_by_action`, which counted a written-out default as a
+  repair), `would_repair_call` and `calls_with_schema_violations`. What auto
+  mode forwards is unchanged.
 - **An unknown outcome is never retried automatically, whatever the tool's
   declared effect.**
   - **The old rule.** `decide_retry` retried an attempt with no answer by
@@ -23,6 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     executions stay 0.
 
 ### Fixed
+- **The stdio relay sent its own `tools/list` before the MCP session was
+  initialized.** An SDK 2.x client probes with `server/discover`; the relay
+  took the probe's protocol `_meta` as proof of a stateless session and
+  listed at once. A real SDK 1.x server (`mcp-server-git`) rejected it with
+  `-32602`. The relay now learns the session's era from the server's answers
+  and sends nothing of its own until the session is ready
+  (`tools_list_deferred` otherwise); a legacy session's relay listings no
+  longer carry the probe's `_meta`; after a restart the replayed handshake --
+  and, mid-handshake, the client's own `notifications/initialized` -- comes
+  before any relay listing.
 - **Mid-restart race in the stdio relay** (found by T13 replay: 16 of 20
   replays of the recorded session).
   - **What went wrong.** A `tools/call` that arrived while the relay was

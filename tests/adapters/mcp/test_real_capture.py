@@ -365,6 +365,12 @@ def _shadow_session() -> list[str]:
                 "action": "forward" if identifier != 2 else "hold",
                 "auto_action": "forward",
                 "would_modify": identifier == 2,
+                "proposal": "repair" if identifier == 2 else "none",
+                "decisions": (
+                    [{"path": "state", "decision": "repaired", "op": "coerce", "trust": 0.9}]
+                    if identifier == 2
+                    else []
+                ),
                 "listing": "current",
             }
         )
@@ -414,9 +420,9 @@ def test_evidence_keeps_observed_proposed_and_unknown_apart() -> None:
 
     proposed = summary["proposed"]
     assert proposed["hypothetical"] is True
-    assert proposed["would_modify_call"] == 1 and proposed["would_modify_by_action"] == {
-        "repair": 1
-    }
+    assert proposed["would_modify_call"] == 1 and proposed["would_modify_by_kind"] == {"repair": 1}
+    assert proposed["would_repair_call"] == 1
+    assert summary["stateguard_observed"]["calls_with_schema_violations"] == 1
     assert proposed["would_restart"] == 1
     assert proposed["acted"] == {"retries_sent": 0, "restarts": 0, "responses_dropped": 0}
 
@@ -747,3 +753,55 @@ def test_numbers_in_identifier_positions_and_keys_are_masked_too() -> None:
     synthetic = record(Provenance.SYNTHETIC)  # unchanged there
     assert "482" in synthetic["arguments"]["by_code"]
     assert synthetic["_meta"]["io.modelcontextprotocol/ref"] == "664422"
+
+
+def _call_event(identifier: int, **fields: Any) -> dict[str, Any]:
+    return {
+        "event": "call",
+        "id": identifier,
+        "tool": "list_issues",
+        "action": "hold",
+        "auto_action": "forward",
+        "listing": "current",
+        "decisions": [],
+        **fields,
+    }
+
+
+def test_a_default_fill_is_not_counted_as_a_repair_or_a_mismatch() -> None:
+    """Capture 1a: 5 of 18 valid calls only omitted defaulted optionals."""
+    recorder, sink = _capture(config={"mode": "shadow"})
+    recorder.audit(_call_event(1, would_modify=True, proposal="default_fill"))
+    recorder.audit(_call_event(2, would_modify=True, proposal="default_fill"))
+    recorder.audit(
+        _call_event(
+            3,
+            would_modify=True,
+            proposal="repair",
+            decisions=[{"path": "limit", "decision": "repaired", "op": "coerce", "trust": 1.0}],
+        )
+    )
+    recorder.audit(
+        _call_event(
+            4,
+            auto_action="refuse",
+            would_modify=True,
+            proposal="refuse",
+            decisions=[{"path": "x", "decision": "unresolved", "op": None, "trust": None}],
+        )
+    )
+    recorder.audit(_call_event(5, action="forward", would_modify=False, proposal="none"))
+    # A recording from before the relay classified proposals:
+    recorder.audit({k: v for k, v in _call_event(6, would_modify=True).items()})
+    recorder.close()
+    summary = summarize_evidence(parse_recording(sink.getvalue().splitlines()))
+    proposed = summary["proposed"]
+    assert proposed["would_modify_call"] == 5
+    assert proposed["would_modify_by_kind"] == {
+        "default_fill": 2,
+        "refuse": 1,
+        "repair": 1,
+        "unclassified": 1,
+    }
+    assert proposed["would_repair_call"] == 1  # default fills are not repairs
+    assert summary["stateguard_observed"]["calls_with_schema_violations"] == 2

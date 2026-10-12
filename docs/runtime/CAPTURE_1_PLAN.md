@@ -339,8 +339,10 @@ From the evidence report (1a unless noted), never from guesses:
    valid, and `would_modify_call`. Expected ~0 in 1a (valid calls); a
    non-zero count there is a finding about StateGuard (a false positive) or
    the schema.
-3. Repair proposals: `proposed.would_modify_call`.
-4. Proposal kinds: `would_modify_by_action` (repair / refuse / escalate).
+3. Repair proposals: `proposed.would_repair_call` (and all payload changes:
+   `would_modify_call`).
+4. Proposal kinds: `would_modify_by_kind` (repair / default_fill / refuse /
+   escalate); schema mismatches: `calls_with_schema_violations`.
 5. Actual tool failures: `observed.by_failure_class` minus `none`.
 6. Failure classes: `observed.by_failure_class`, `by_signal`.
 7. UNKNOWN outcomes: `unknown.outcome_unknown` (expected 0).

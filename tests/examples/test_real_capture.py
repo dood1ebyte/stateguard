@@ -222,7 +222,9 @@ def test_the_evidence_summary_separates_fact_from_proposal(capture: Any) -> None
     assert observed["tool_calls_never_answered"] == 1 and observed["server_lost"] == 1
     proposed = summary["proposed"]
     assert proposed["hypothetical"] is True
-    assert proposed["would_modify_call"] >= 2  # the repair and the refusal, at least
+    assert proposed["would_modify_call"] == 2
+    assert proposed["would_modify_by_kind"] == {"refuse": 1, "repair": 1}
+    assert summary["stateguard_observed"]["calls_with_schema_violations"] == 2
     # Each tool error on a read_only tool would have been retried in auto.
     assert proposed["would_retry"] == 3 and proposed["would_restart"] == 1
     assert proposed["acted"] == {"retries_sent": 0, "restarts": 0, "responses_dropped": 0}
