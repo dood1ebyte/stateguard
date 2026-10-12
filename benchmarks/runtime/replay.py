@@ -991,7 +991,7 @@ def summarise(
         "fidelity": fidelity,
         "determinism": determinism,
         "overhead": overhead,
-        "limitations": LIMITATIONS,
+        "limitations": limitations(envs),
     }
 
 
@@ -1044,7 +1044,7 @@ def _corpus(envs: list[TapeEnvironment], parse_ms: dict[str, float]) -> dict[str
     return {
         "provenance": dict(provenances),
         "evidence": (
-            "captured real traffic"
+            Provenance.REAL_CAPTURE.evidence
             if real
             else "NOT real-world evidence: "
             + "; ".join(sorted({Provenance(p).evidence for p in provenances}))
@@ -1081,6 +1081,23 @@ LIMITATIONS = [
     "Whether a call executed is ground truth only for fault-injection recordings; for real "
     "captures the TapeServer assumes execution unless the server refused at the protocol level.",
 ]
+
+
+#: Replaces the first limitation when the corpus is observed traffic.
+OBSERVED_CORPUS = (
+    "The corpus is observed traffic ({provenances}). It has no ground truth: no request is "
+    "labelled, so no failure is counted as prevented or recovered, and a call StateGuard would "
+    "have repaired is not shown to have needed it. Fidelity and determinism are measured; "
+    "outcome deltas are not. This is evidence collection, not proof of reliability improvement."
+)
+
+
+def limitations(envs: list[TapeEnvironment]) -> list[str]:
+    """LIMITATIONS, with the corpus line describing the corpus actually replayed."""
+    provenances = sorted({e.recording.provenance.value for e in envs})
+    if envs and all(e.recording.provenance.observed for e in envs):
+        return [OBSERVED_CORPUS.format(provenances=", ".join(provenances)), *LIMITATIONS[1:]]
+    return list(LIMITATIONS)
 
 
 # ---------------------------------------------------------------------------
@@ -1159,7 +1176,8 @@ def recording_overhead(envs: list[TapeEnvironment], *, runs: int = 3) -> dict[st
                 sink = io.StringIO()
                 recorder = Recorder(
                     sink,
-                    provenance=Provenance.SYNTHETIC,
+                    # What it records is a replay of ``env``, not new traffic.
+                    provenance=Provenance.REPLAY,
                     session=env.session,
                     background=kind == "background",
                 )

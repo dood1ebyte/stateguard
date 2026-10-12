@@ -36,8 +36,13 @@ Three kinds of content are kept apart:
   ``message``. Deterministic: recording the same traffic twice gives the
   same records.
 * **Diagnostic** -- everything under ``diag`` (line length; with
-  ``deterministic=False`` also a monotonic timestamp). Never needed to
-  replay, and dropped by nothing that replays.
+  ``deterministic=False`` also a monotonic timestamp and ``digest``, an
+  HMAC-SHA256 of the raw line under a random key that lives only in the
+  recorder's memory and is never written). Never needed to replay, and
+  dropped by nothing that replays. The digest shows two lines in one
+  recording were byte-identical -- that a call reached the server exactly
+  as the client sent it -- without the content, and is meaningless
+  across recordings: without the key it cannot be checked against a guess.
 * **Sensitive** -- never written. Redaction happens before anything
   reaches the sink; the header says which policy ran and ``end`` how many
   values it changed.
@@ -64,6 +69,16 @@ Three layers, applied to every value at every depth:
    punctuation and length are kept -- so the recording holds no user text,
    yet a type or format check sees the same shape. Integers of seven or
    more digits are reduced to their order of magnitude.
+4. **Numbers** (``mask_numbers``; always on for ``real_capture``): every
+   number is reduced to its sign and order of magnitude (``482913`` ->
+   ``100000``, ``3.14`` -> ``1.0``, ``0.042`` -> ``0.01``), however
+   innocuous its key. Kept verbatim only where the value is protocol or
+   contract, never user data: JSON-RPC ids and ``error.code``; tool
+   schemas from a listing; an argument value the tool's schema lists in
+   ``enum`` / ``const``; HTTP statuses (100-599) under the status keys of
+   ``error.data`` (what the auth classifier reads); the relay's own audit
+   counters; the host's ``config``. Without it, numbers below 1,000,000 are
+   kept -- right for generated traffic, unsafe for real traffic.
 
 A tool argument is kept verbatim only when the tool's own schema vouches
 that it is not user data: it equals, up to case and separators, or is
@@ -90,19 +105,22 @@ Zero external dependencies.
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import hmac
 import json
 import math
 import queue
 import re
+import secrets
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import IO, Any, TypeVar
 
-from stateguard.adapters.mcp.failures import AUTH_CODES, signal_spans
+from stateguard.adapters.mcp.failures import AUTH_CODES, STATUS_KEYS, signal_spans
 
 _T = TypeVar("_T")
 
@@ -147,16 +165,42 @@ REDACTED = "[redacted]"
 
 
 class Provenance(StrEnum):
-    """Where the traffic in a recording came from. Only REAL_CAPTURE is real traffic."""
+    """
+    Where the traffic in a recording came from. Only REAL_CAPTURE is real traffic.
+
+    Two families, never mixed in one file:
+
+    * **Generated** -- ``synthetic``, ``fault_injection``, ``replay``: a
+      harness or a replay produced the traffic. The first two may carry
+      ground truth (``fault`` and ``label`` records) because their builder
+      knows it.
+    * **Observed** -- ``local_development``, ``real_capture``: the relay saw
+      traffic it did not generate. Nobody knows its ground truth, so these
+      files carry no ``fault`` or ``label`` records: the recorder refuses to
+      write them and the parser refuses a file that has them.
+    """
 
     SYNTHETIC = "synthetic"
     FAULT_INJECTION = "fault_injection"
+    #: Traffic produced by replaying a recording through a model server
+    #: (the TapeServer): a derivative of its source, never new evidence.
+    REPLAY = "replay"
     LOCAL_DEVELOPMENT = "local_development"
     REAL_CAPTURE = "real_capture"
 
     @property
     def is_real_traffic(self) -> bool:
         return self is Provenance.REAL_CAPTURE
+
+    @property
+    def observed(self) -> bool:
+        """Traffic the relay saw rather than generated: it has no ground truth."""
+        return self in (Provenance.LOCAL_DEVELOPMENT, Provenance.REAL_CAPTURE)
+
+    @property
+    def admits_ground_truth(self) -> bool:
+        """Whether ``fault`` / ``label`` records may appear: only where a harness made them."""
+        return self in (Provenance.SYNTHETIC, Provenance.FAULT_INJECTION)
 
     @property
     def evidence(self) -> str:
@@ -166,11 +210,18 @@ class Provenance(StrEnum):
             Provenance.FAULT_INJECTION: (
                 "deterministic fault injection on a synthetic workload -- not real-world evidence"
             ),
+            Provenance.REPLAY: (
+                "replay of a recording through a model server -- a derivative of its source "
+                "recording, not new evidence"
+            ),
             Provenance.LOCAL_DEVELOPMENT: (
                 "local development traffic -- real servers, not production use; "
                 "not representative evidence"
             ),
-            Provenance.REAL_CAPTURE: "captured real traffic",
+            Provenance.REAL_CAPTURE: (
+                "captured real traffic (shadow mode) -- evidence of what happened, "
+                "not proof of reliability improvement"
+            ),
         }[self]
 
 
@@ -219,6 +270,13 @@ _SENSITIVE_PARTS = (
     "bearer",
     "signature",
     "sessionid",
+    "passcode",
+    "verificationcode",
+    "securitycode",
+    "recoverycode",
+    "backupcode",
+    "mfacode",
+    "otpcode",
     "creditcard",
     "cardnumber",
     "socialsecurity",
@@ -251,6 +309,8 @@ _SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     )
 )
 
+#: A number written as a string. Under mask_numbers it is never an identifier.
+_NUMERIC = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)$")
 #: Strings kept verbatim where the structure allows it must look like this.
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_./:$\-\[\]*]{0,128}$")
 #: Dict keys kept verbatim (outside a schema that declares them) must look like
@@ -365,8 +425,12 @@ def _branches(schema: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return found
 
 
-def _schema_vouches(value: str, schema: Mapping[str, Any] | None) -> bool:
-    """Whether the argument's own schema shows *value* is not free-form user data."""
+def _schema_vouches(value: str, schema: Mapping[str, Any] | None, *, numbers: bool = True) -> bool:
+    """
+    Whether the argument's own schema shows *value* is not free-form user data.
+    ``numbers=False`` (``mask_numbers``): a numeric string in a numeric field
+    is not vouched for -- a field typed ``integer`` can hold a PIN.
+    """
     if schema is None:
         return False
     members: list[str] = []
@@ -385,7 +449,7 @@ def _schema_vouches(value: str, schema: Mapping[str, Any] | None) -> bool:
                 return True
             if len(value) >= 4 and _osa_distance(value.lower(), member.lower(), 2) <= 2:
                 return True
-    if types & {"number", "integer"} and len(value) <= 12:
+    if numbers and types & {"number", "integer"} and len(value) <= 12:
         try:
             number = float(value.strip())
         except ValueError:
@@ -395,6 +459,42 @@ def _schema_vouches(value: str, schema: Mapping[str, Any] | None) -> bool:
     return "boolean" in types and value.strip().lower() in _BOOLEAN_WORDS
 
 
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _schema_lists_number(value: int | float, schema: Mapping[str, Any] | None) -> bool:
+    """Whether the schema publishes *value* itself in ``enum`` / ``const`` (same JSON type)."""
+    if schema is None:
+        return False
+    for branch in _branches(schema):
+        members = list(branch["enum"]) if isinstance(branch.get("enum"), list) else []
+        if "const" in branch:
+            members.append(branch["const"])
+        for member in members:
+            if (
+                _is_number(member)
+                and member == value
+                and isinstance(member, int) is isinstance(value, int)
+            ):
+                return True
+    return False
+
+
+def _magnitude(value: int | float) -> int | float:
+    """Sign and order of magnitude only: 482913 -> 100000, -3.5 -> -1.0, 0.042 -> 0.01."""
+    if value == 0:
+        return value
+    size = abs(value)
+    if isinstance(value, int):
+        reduced: int | float = 10 ** (len(str(size)) - 1)
+    elif size >= 1:
+        reduced = float(10 ** (len(str(int(size))) - 1))
+    else:
+        reduced = float(10 ** math.floor(math.log10(size)))
+    return reduced if value > 0 else -reduced
+
+
 @dataclass(frozen=True)
 class RedactionPolicy:
     """What the redactor removes. Deterministic: same policy, same input, same output."""
@@ -402,12 +502,17 @@ class RedactionPolicy:
     mode: RedactionMode = RedactionMode.MASK
     #: Extra key names (any spelling; normalized) treated as credentials.
     extra_sensitive_keys: frozenset[str] = frozenset()
+    #: Reduce every number to sign and order of magnitude, except protocol and
+    #: contract values (see "Numbers" in the module docs). Forced on for
+    #: real_capture.
+    mask_numbers: bool = False
 
     def describe(self) -> dict[str, Any]:
         return {
             "mode": self.mode.value,
             "rules": ["key_names", "value_patterns"]
-            + (["mask_free_form", "keep_auth_signals"] if self.mode is RedactionMode.MASK else []),
+            + (["mask_free_form", "keep_auth_signals"] if self.mode is RedactionMode.MASK else [])
+            + (["mask_numbers"] if self.mask_numbers else []),
             "patterns": [name for name, _ in _SECRET_PATTERNS],
             "extra_sensitive_keys": sorted(_normalize_key(k) for k in self.extra_sensitive_keys),
         }
@@ -480,6 +585,8 @@ class Redactor:
         text = str(key)
         if secret_pattern(text) is not None:
             return self._changed(self._alias(text, "key"))
+        if self.policy.mask_numbers and not declared and _NUMERIC.match(text):
+            return self._changed(mask_string(text))  # a number used as a key
         if declared or not self._mask or _IDENTIFIER_KEY.match(text):
             return text
         return self._changed(mask_string(text))
@@ -510,6 +617,9 @@ class Redactor:
     def _number(self, value: int | float) -> int | float:
         if isinstance(value, float) and not math.isfinite(value):
             return self._changed(0.0)
+        if self.policy.mask_numbers:
+            scale = _magnitude(value)
+            return scale if scale == value else self._changed(scale)
         if not self._mask or abs(value) < 1_000_000:
             return value
         magnitude = 10 ** (len(str(int(abs(value)))) - 1)
@@ -519,7 +629,10 @@ class Redactor:
     def identifier(self, value: Any) -> Any:
         """A protocol identifier: kept if it looks like one, else masked."""
         if isinstance(value, str):
-            return self.string(value, keep=bool(_IDENTIFIER.match(value)))
+            keep = bool(_IDENTIFIER.match(value)) and not (
+                self.policy.mask_numbers and _NUMERIC.match(value)
+            )
+            return self.string(value, keep=keep)
         return self.value(value)
 
     def request_id(self, value: Any) -> Any:
@@ -565,12 +678,16 @@ class Redactor:
         if value is None or isinstance(value, bool):
             return value
         if isinstance(value, (int, float)):
+            if self.policy.mask_numbers and _schema_lists_number(value, schema):
+                return value  # a published enum / const member: contract, not user data
             return self._number(value)
         if isinstance(value, str):
             embedded = self._embedded_json(value, schema, depth)
             if embedded is not None:
                 return embedded
-            return self.string(value, keep=_schema_vouches(value, schema))
+            return self.string(
+                value, keep=_schema_vouches(value, schema, numbers=not self.policy.mask_numbers)
+            )
         return self._changed(REDACTED)  # not JSON: nothing to vouch for it
 
     def _embedded_json(self, text: str, schema: Mapping[str, Any] | None, depth: int) -> str | None:
@@ -599,7 +716,9 @@ class Redactor:
             return self.value(message)
         out: dict[str, Any] = {}
         for k, v in message.items():
-            if k == "jsonrpc" or k == "method":
+            if k == "jsonrpc" and v == "2.0":
+                out[k] = v  # the protocol constant
+            elif k == "jsonrpc" or k == "method":
                 out[k] = self.identifier(v)
             elif k == "id":
                 out[k] = self.request_id(v)
@@ -661,6 +780,8 @@ class Redactor:
                 out[k] = [self.identifier(x) for x in v]
             elif k == "tools" and isinstance(v, list):
                 out[k] = [self.tool_definition(t) for t in v]
+            elif k == "serverInfo" and isinstance(v, Mapping):
+                out[k] = self.server_info(v)
             elif k == "content" and isinstance(v, list):
                 out[k] = [self._content(item) for item in v]
             elif k == "_meta":
@@ -690,7 +811,36 @@ class Redactor:
             if k == "code" and isinstance(v, int) and not isinstance(v, bool):
                 out[k] = v
             elif k == "data" and isinstance(v, Mapping):
-                out[k] = self._meta(v)
+                data = self._meta(v)
+                # An HTTP status where the auth classifier reads one: protocol
+                # vocabulary, kept so a recording classifies as the traffic did.
+                for name in STATUS_KEYS:
+                    status = v.get(name)
+                    if (
+                        isinstance(status, int)
+                        and not isinstance(status, bool)
+                        and 100 <= status <= 599
+                        and name in data
+                    ):
+                        data[name] = status
+                out[k] = data
+            elif self._sensitive(str(k)):
+                self._put(out, k, self._scrub(v))
+            else:
+                self._put(out, k, self.value(v))
+        return out
+
+    def server_info(self, info: Mapping[str, Any]) -> dict[str, Any]:
+        """
+        The server's self-description: ``name`` and ``version`` kept when they
+        look like identifiers (they say which server a recording is evidence
+        about); everything else (title, description, URLs, icons) redacted.
+        """
+        out: dict[str, Any] = {}
+        for k, v in info.items():
+            if k in ("name", "version") and isinstance(v, str):
+                # Server-published, so a numeric version ("2.0") is kept too.
+                out[k] = self.string(v, keep=bool(_IDENTIFIER.match(v)))
             elif self._sensitive(str(k)):
                 self._put(out, k, self._scrub(v))
             else:
@@ -807,6 +957,25 @@ class Redactor:
         }
     )
 
+    #: Audit fields whose numbers the relay itself computes (counters, trust,
+    #: a listing's change counts): never traffic values, kept under mask_numbers.
+    _AUDIT_METRICS = frozenset(
+        {
+            "generation",
+            "attempt",
+            "attempts",
+            "restarts_used",
+            "in_flight_unknown",
+            "trust",
+            "added",
+            "removed",
+            "changed",
+            "unchanged",
+            "unusable",
+            "breaking",
+        }
+    )
+
     def audit(self, event: Mapping[str, Any], depth: int = 0) -> Any:
         """A relay audit event: decisions and states kept, free text masked."""
         if depth > MAX_DEPTH:
@@ -817,6 +986,8 @@ class Redactor:
                 redacted = self._scrub(v)
             elif k == "id":
                 redacted = self.request_id(v)
+            elif k in self._AUDIT_METRICS and _is_number(v) and math.isfinite(v):
+                redacted = v
             elif isinstance(v, Mapping):
                 redacted = self.audit(v, depth + 1)
             elif isinstance(v, list):
@@ -882,6 +1053,18 @@ class Recorder:
     the queue is full the record is dropped and recording stops (the file is
     then incomplete). Without it, each call redacts and writes before it
     returns -- simplest, and deterministic, but the host waits for the sink.
+
+    Construction is the one place it does raise (``ValueError``), for a
+    configuration that must never record at all: ``real_capture`` with any
+    redaction but ``mask``. Real traffic holds user text; ``secrets_only``
+    would persist it. ``real_capture`` also always masks numbers
+    (``mask_numbers``), whatever the policy passed in says.
+
+    On a provenance that admits no ground truth -- the observed ones
+    (``local_development``, ``real_capture``) and ``replay`` -- ``fault()``
+    and ``label()`` write nothing: nobody knows the ground truth of traffic
+    the relay did not generate, so none may be attached. Each refused call
+    is counted (``ground_truth_refused`` in ``end``).
     """
 
     def __init__(
@@ -897,13 +1080,28 @@ class Recorder:
         background: bool = False,
         queue_size: int = 10_000,
         close_timeout: float = 5.0,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
+        policy = policy or RedactionPolicy()
+        provenance = Provenance(provenance)
+        if provenance is Provenance.REAL_CAPTURE:
+            if policy.mode is not RedactionMode.MASK:
+                raise ValueError(
+                    "real_capture recordings require mask redaction: real traffic holds user "
+                    f"text, and redaction mode {policy.mode.value!r} would persist it"
+                )
+            # Not optional: a number under an innocuous key can be a PIN.
+            policy = replace(policy, mask_numbers=True)
         self._sink = sink
         self._lock = threading.RLock()
         self._failure_lock = threading.Lock()
         self.redactor = Redactor(policy)
-        self.provenance = Provenance(provenance)
+        self.provenance = provenance
+        #: fault()/label() calls refused (see the class docstring).
+        self.ground_truth_refused = 0
         self._deterministic = deterministic
+        # Never written, never exposed: see "Diagnostic" in the module docs.
+        self._digest_key = None if deterministic else secrets.token_bytes(32)
         self._clock = clock
         self._start = clock()
         self._seq = 0
@@ -917,18 +1115,21 @@ class Recorder:
         self._close_timeout = close_timeout
         self._queue: queue.Queue[Any] | None = None
         self._writer: threading.Thread | None = None
-        self._emit(
-            {
-                "type": "header",
-                "format": FORMAT,
-                "version": FORMAT_VERSION,
-                "provenance": self.provenance.value,
-                "session": str(session),
-                "deterministic": deterministic,
-                "redaction": self.redactor.policy.describe(),
-                "config": self._config(config or {}),
-            }
-        )
+        header: dict[str, Any] = {
+            "type": "header",
+            "format": FORMAT,
+            "version": FORMAT_VERSION,
+            "provenance": self.provenance.value,
+            "session": str(session),
+            "deterministic": deterministic,
+            "redaction": self.redactor.policy.describe(),
+            "config": self._config(config or {}),
+        }
+        if not deterministic:
+            # Diagnostic: when the session began (UTC, to the second). The
+            # ``t_ms`` offsets in ``diag`` count from here.
+            header["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(wall_clock()))
+        self._emit(header)
         if background:
             self._queue = queue.Queue(maxsize=queue_size)
             self._writer = threading.Thread(
@@ -944,6 +1145,8 @@ class Recorder:
                 self.redactor._put(out, k, self.redactor._scrub(v))
             elif isinstance(v, str):
                 self.redactor._put(out, k, self.redactor.identifier(v))
+            elif _is_number(v) and math.isfinite(v) and self.redactor.policy.mask_numbers:
+                self.redactor._put(out, k, v)  # an operator setting, not traffic
             else:
                 self.redactor._put(out, k, self.redactor.value(v))
         return out
@@ -1033,6 +1236,10 @@ class Recorder:
             "gen": int(generation),
             "diag": self._diag(at, bytes=len(line)),
         }
+        if self._digest_key is not None:
+            record["diag"]["digest"] = hmac.new(
+                self._digest_key, line.rstrip(b"\r\n"), hashlib.sha256
+            ).hexdigest()[:32]
         try:
             message = json.loads(line)
         except (ValueError, UnicodeDecodeError, RecursionError):
@@ -1077,16 +1284,28 @@ class Recorder:
         event = dict(event)
         self._guard(lambda: {"type": "audit", "event": self.redactor.audit(event)})
 
+    def _refuse_ground_truth(self) -> bool:
+        """True (and counted) when this provenance may carry no ground truth."""
+        if self.provenance.admits_ground_truth:
+            return False
+        with self._failure_lock:
+            self.ground_truth_refused += 1
+        return True
+
     def fault(self, fault: str, **fields: Any) -> None:
-        """A failure a harness injected. Ground truth for replay."""
+        """A failure a harness injected. Ground truth for replay; refused on observed traffic."""
+        if self._refuse_ground_truth():
+            return
         self._guard(lambda: {"type": "fault", "fault": str(fault), **self.redactor.audit(fields)})
 
     def label(self, identifier: Any, *, tool: str | None = None, **fields: Any) -> None:
         """
         Ground truth for one request (e.g. ``intended=`` arguments). Argument
         values go through the same redaction as the request's own arguments,
-        so they stay comparable.
+        so they stay comparable. Refused on observed traffic.
         """
+        if self._refuse_ground_truth():
+            return
 
         def build() -> dict[str, Any]:
             record: dict[str, Any] = {
@@ -1133,6 +1352,8 @@ class Recorder:
             "failure_types": list(self.failure_types),
             "values_redacted": self.redactor.redactions,
         }
+        if self.ground_truth_refused:
+            end["ground_truth_refused"] = self.ground_truth_refused
         with self._lock:
             # A sink that failed takes no more writes; one that did not still
             # gets the end record, which says recording stopped early.
@@ -1233,6 +1454,16 @@ def _check_header(record: dict[str, Any], number: int) -> None:
         raise _malformed(number, "header redaction policy missing or unknown")
     if record.get("seq") != 0:
         raise _malformed(number, "header seq must be 0")
+    if "started_at" in record and not isinstance(record["started_at"], str):
+        raise _malformed(number, "header started_at must be a string")
+    if record["provenance"] == Provenance.REAL_CAPTURE.value and redaction["mode"] != (
+        RedactionMode.MASK.value
+    ):
+        raise _malformed(number, "a real_capture recording must use mask redaction")
+    if record["provenance"] == Provenance.REAL_CAPTURE.value and "mask_numbers" not in (
+        redaction.get("rules") or []
+    ):
+        raise _malformed(number, "a real_capture recording must mask numbers")
 
 
 def _check_record(record: dict[str, Any], number: int) -> None:
@@ -1311,6 +1542,15 @@ def parse_recording(lines: Iterable[str | bytes], *, source: str = "") -> Record
             if end is not None:
                 raise _malformed(number, "record after end")
             _check_record(record, number)
+            if (
+                record["type"] in ("fault", "label")
+                and not Provenance(header["provenance"]).admits_ground_truth
+            ):
+                raise _malformed(
+                    number,
+                    f"a {record['type']} record in a {header['provenance']} recording: "
+                    "observed and replayed traffic carries no ground truth",
+                )
             seq = record.get("seq")
             if not isinstance(seq, int) or isinstance(seq, bool) or seq <= last_seq:
                 raise _malformed(number, "seq must increase strictly")
