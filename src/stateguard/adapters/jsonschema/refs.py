@@ -65,11 +65,18 @@ from contextlib import contextmanager
 from typing import Any
 
 from stateguard.adapters.jsonschema.errors import (
+    MalformedReferenceError,
     SchemaReferenceError,
     UnsupportedSchemaError,
 )
 
-__all__ = ["DEFAULT_MAX_DEPTH", "RefResolver"]
+__all__ = [
+    "ALL_OF_ANNOTATION_SIBLINGS",
+    "DEFAULT_MAX_DEPTH",
+    "DEFAULT_MAX_EXPANSIONS",
+    "RefResolver",
+    "flatten_single_all_of",
+]
 
 
 #: Maximum number of nested ``resolved()`` contexts before a schema is
@@ -83,6 +90,68 @@ __all__ = ["DEFAULT_MAX_DEPTH", "RefResolver"]
 #: to exhaust CPython's default 1000-frame limit, with headroom for a host
 #: that has lowered ``sys.setrecursionlimit``.
 DEFAULT_MAX_DEPTH = 100
+
+#: Maximum number of subschemas one traversal may expand, in total.
+#:
+#: The depth cap bounds how *deep* a walk goes, not how *wide*: references
+#: are expanded per occurrence, so a chain of definitions that each refer to
+#: the next twice doubles at every level --
+#: ``D0 = {a: D1, b: D1}, D1 = {a: D2, b: D2}, ...`` -- and stays well inside
+#: the depth cap while expanding to 2**depth subschemas. Measured: 16 such
+#: levels, a ~2 KB document, took 3.4 s and produced 131,071 fields; each
+#: further level doubles it. A tool definition arrives from a third party, so
+#: that is a denial of service a ``tools/list`` response can deliver.
+#:
+#: The real-schema corpus needs at most 15 expansions per extraction, so
+#: 10,000 leaves several hundredfold headroom for legitimate schemas while
+#: refusing the blow-up a dozen levels in.
+DEFAULT_MAX_EXPANSIONS = 10_000
+
+
+#: Sibling keywords that do not constrain what an instance may be. A
+#: single-branch ``allOf`` beside only these is exactly its branch.
+ALL_OF_ANNOTATION_SIBLINGS = frozenset(
+    {
+        "$comment",
+        "$anchor",
+        "title",
+        "description",
+        "default",
+        "examples",
+        "example",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+        "contentEncoding",
+        "contentMediaType",
+        "contentSchema",
+    }
+)
+
+
+def flatten_single_all_of(schema: Mapping[str, Any]) -> Mapping[str, Any]:
+    """
+    ``{"allOf": [X], "description": ...}`` -> ``X`` with the annotations on top.
+
+    Generators emit this shape to attach a description or a default to a
+    ``$ref`` (older Pydantic, zod-to-json-schema). With a single branch and
+    only annotation siblings, "valid against every branch and the siblings"
+    is "valid against X", so the rewrite changes nothing an instance can be.
+    Anything else -- two branches, or a sibling that asserts -- is left for
+    the keyword screen to refuse.
+    """
+    current = schema
+    for _ in range(64):  # nested single-branch allOf; bounded
+        branches = current.get("allOf")
+        if not (
+            isinstance(branches, list) and len(branches) == 1 and isinstance(branches[0], Mapping)
+        ):
+            return current
+        siblings = {key: value for key, value in current.items() if key != "allOf"}
+        if set(siblings) - ALL_OF_ANNOTATION_SIBLINGS:
+            return current
+        current = {**branches[0], **siblings}
+    return current
 
 
 class RefResolver:
@@ -99,6 +168,9 @@ class RefResolver:
         How deeply resolution may nest before the schema is refused.  See
         ``DEFAULT_MAX_DEPTH`` for what the number counts and why it is not
         expressed in schema levels.
+    max_expansions:
+        How many subschemas one traversal may expand in total before the
+        schema is refused.  See ``DEFAULT_MAX_EXPANSIONS``.
 
     Not thread-safe and not reusable across concurrent extractions: the
     active-pointer stack is per-traversal state.  Construct one per
@@ -109,11 +181,14 @@ class RefResolver:
         self,
         root: Mapping[str, Any],
         max_depth: int = DEFAULT_MAX_DEPTH,
+        max_expansions: int = DEFAULT_MAX_EXPANSIONS,
     ) -> None:
         self._root = root
         self._active: list[str] = []
         self._max_depth = max_depth
         self._depth = 0
+        self._max_expansions = max_expansions
+        self._expansions = 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -140,10 +215,13 @@ class RefResolver:
         the active stack, and still counts one level of depth -- the bound
         has to hold for schemas that nest without using references at all.
         """
+        if schema is True:  # type: ignore[comparison-overlap]
+            # The boolean schema ``true`` accepts every instance: exactly ``{}``.
+            schema = {}
         if not isinstance(schema, Mapping):
             raise UnsupportedSchemaError(
                 f"Expected a schema object, got {type(schema).__name__}. "
-                f"Boolean schemas (`true` / `false`) are not supported."
+                f"The boolean schema `false` (accept nothing) is not supported."
             )
 
         if self._depth >= self._max_depth:
@@ -154,6 +232,17 @@ class RefResolver:
                 f"RecursionError rather than something a caller can act on. "
                 f"Raise RefResolver's 'max_depth' if the schema is genuinely "
                 f"this deep and the stack can take it."
+            )
+
+        self._expansions += 1
+        if self._expansions > self._max_expansions:
+            raise SchemaReferenceError(
+                f"Schema expands to more than {self._max_expansions} subschemas and "
+                f"is refused rather than walked. References are expanded per "
+                f"occurrence, so definitions that each refer to the next more than "
+                f"once grow exponentially -- a small document can describe billions "
+                f"of fields. Raise RefResolver's 'max_expansions' if a schema is "
+                f"genuinely this large."
             )
 
         target, pointers = self._follow(schema)
@@ -197,12 +286,12 @@ class RefResolver:
         """
         pointers: list[str] = []
         seen: set[str] = set()
-        current: Mapping[str, Any] = schema
+        current: Mapping[str, Any] = flatten_single_all_of(schema)
 
         while "$ref" in current:
             raw_ref = current["$ref"]
             if not isinstance(raw_ref, str):
-                raise SchemaReferenceError(
+                raise MalformedReferenceError(
                     f"'$ref' must be a string, got {type(raw_ref).__name__}: {raw_ref!r}"
                 )
 
@@ -218,6 +307,7 @@ class RefResolver:
             target = self._dereference(pointer, raw_ref)
             siblings = {key: value for key, value in current.items() if key != "$ref"}
             current = {**target, **siblings} if siblings else target
+            current = flatten_single_all_of(current)
 
         return current, pointers
 
@@ -264,7 +354,7 @@ class RefResolver:
             node = self._descend(node, token, raw_ref)
 
         if not isinstance(node, Mapping):
-            raise SchemaReferenceError(
+            raise MalformedReferenceError(
                 f"Reference {raw_ref!r} resolves to a {type(node).__name__}, not a schema object."
             )
         return node
@@ -274,7 +364,7 @@ class RefResolver:
         """Take one JSON Pointer step through a mapping or a sequence."""
         if isinstance(node, Mapping):
             if token not in node:
-                raise SchemaReferenceError(
+                raise MalformedReferenceError(
                     f"Reference {raw_ref!r} does not resolve: no '{token}' in {sorted(node)[:8]!r}."
                 )
             return node[token]
@@ -283,18 +373,18 @@ class RefResolver:
             try:
                 index = int(token)
             except ValueError:
-                raise SchemaReferenceError(
+                raise MalformedReferenceError(
                     f"Reference {raw_ref!r} does not resolve: '{token}' is not a "
                     f"valid index into a {len(node)}-element array."
                 ) from None
             if not 0 <= index < len(node):
-                raise SchemaReferenceError(
+                raise MalformedReferenceError(
                     f"Reference {raw_ref!r} does not resolve: index {index} is out "
                     f"of range for a {len(node)}-element array."
                 )
             return node[index]
 
-        raise SchemaReferenceError(
+        raise MalformedReferenceError(
             f"Reference {raw_ref!r} does not resolve: cannot descend into a "
             f"{type(node).__name__} looking for '{token}'."
         )

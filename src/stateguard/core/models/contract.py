@@ -116,8 +116,16 @@ class FieldSpec:
         Used exclusively by ``ExactAliasStrategy``.
     item_type:
         For ``FieldType.ARRAY`` fields, the ``FieldType`` of each element.
-        ``None`` for non-array fields.  V1 does not support arrays of nested
-        models; ``nested_spec`` is unused when ``item_type`` is set.
+        ``None`` for non-array fields.  ``nested_spec`` is unused when
+        ``item_type`` is set; see ``item_spec`` for object elements.
+    item_spec:
+        For ``FieldType.ARRAY`` fields whose elements are objects with
+        declared properties, the contract every element must satisfy.  The
+        validator checks each element against it and reports violations at
+        ``path[i].field``.  Validation only: no repair strategy reaches
+        inside a list, so such a violation is reported and refused, never
+        repaired.  ``None`` when the elements are not objects or declare
+        nothing.
     nested_spec:
         For ``FieldType.OBJECT`` fields, the sub-``ContractSpec`` describing
         the nested structure.  ``None`` for non-object fields.
@@ -140,6 +148,7 @@ class FieldSpec:
     item_type: FieldType | None = None
     nested_spec: ContractSpec | None = None
     union_members: tuple[UnionMember, ...] | None = None
+    item_spec: ContractSpec | None = None
 
     def __post_init__(self) -> None:
         if not self.path:

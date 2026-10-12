@@ -531,6 +531,37 @@ class TestValueConstraints:
         result = validator.validate(contract, {"age": 0})
         assert result.is_valid is True
 
+    @pytest.mark.parametrize(
+        ("kind", "value", "valid"),
+        [
+            (FieldConstraintType.EXCLUSIVE_MINIMUM, 0, False),
+            (FieldConstraintType.EXCLUSIVE_MINIMUM, -1, False),
+            (FieldConstraintType.EXCLUSIVE_MINIMUM, 1, True),
+            (FieldConstraintType.EXCLUSIVE_MINIMUM, 0.5, True),
+            (FieldConstraintType.EXCLUSIVE_MAXIMUM, 0, False),
+            (FieldConstraintType.EXCLUSIVE_MAXIMUM, 1, False),
+            (FieldConstraintType.EXCLUSIVE_MAXIMUM, -1, True),
+            (FieldConstraintType.EXCLUSIVE_MAXIMUM, -0.5, True),
+        ],
+    )
+    def test_exclusive_bounds_exclude_the_bound_itself(
+        self,
+        validator: ContractValidator,
+        kind: FieldConstraintType,
+        value: float,
+        valid: bool,
+    ) -> None:
+        contract = ContractSpec(
+            fields=[FieldSpec("n", FieldType.FLOAT, constraints=[FieldConstraint(kind, 0)])]
+        )
+        result = validator.validate(contract, {"n": value})
+        assert result.is_valid is valid
+        if not valid:
+            v = result.violations[0]
+            assert v.violation_type is ViolationType.VALUE_CONSTRAINT_VIOLATION
+            assert v.expected_value == 0
+            assert v.received_value == value
+
     def test_maximum_violated(self, validator: ContractValidator) -> None:
         contract = ContractSpec(
             fields=[

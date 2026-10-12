@@ -290,7 +290,53 @@ class TestRefusals:
 
     def test_boolean_schema_is_refused_clearly(self) -> None:
         with (
-            pytest.raises(UnsupportedSchemaError, match="Boolean schemas"),
-            RefResolver({}).resolved(True),  # type: ignore[arg-type]
+            pytest.raises(UnsupportedSchemaError, match="`false`"),
+            RefResolver({}).resolved(False),  # type: ignore[arg-type]
         ):
+            pass
+
+
+class TestExponentialExpansionIsBounded:
+    """
+    Definitions that each refer to the next twice double at every level and
+    stay inside the depth cap. Unbounded, 16 levels (~2 KB) took seconds and
+    each level doubled it -- a denial of service a tools/list can deliver.
+    """
+
+    @staticmethod
+    def _laughs(levels: int) -> dict[str, Any]:
+        defs: dict[str, Any] = {
+            f"D{i}": {
+                "type": "object",
+                "properties": {
+                    "a": {"$ref": f"#/$defs/D{i + 1}"},
+                    "b": {"$ref": f"#/$defs/D{i + 1}"},
+                },
+            }
+            for i in range(levels)
+        }
+        defs[f"D{levels}"] = {"type": "string"}
+        return {"type": "object", "properties": {"root": {"$ref": "#/$defs/D0"}}, "$defs": defs}
+
+    def test_it_is_refused_quickly(self) -> None:
+        import time
+
+        from stateguard.adapters.jsonschema import JSONSchemaAdapter
+
+        start = time.perf_counter()
+        with pytest.raises(SchemaReferenceError, match="expands to more than"):
+            JSONSchemaAdapter().extract_contract(self._laughs(40))
+        assert time.perf_counter() - start < 2.0
+
+    def test_a_small_shared_definition_is_still_fine(self) -> None:
+        from stateguard.adapters.jsonschema import JSONSchemaAdapter
+
+        contract = JSONSchemaAdapter().extract_contract(self._laughs(4))
+        assert [f.path for f in contract.fields] == ["root"]
+
+    def test_the_budget_is_configurable(self) -> None:
+        resolver = RefResolver({"type": "object"}, max_expansions=2)
+        with resolver.resolved({"type": "object"}), resolver.resolved({"type": "string"}):
+            pass
+        with pytest.raises(SchemaReferenceError, match="more than 2"), resolver.resolved({}):
             pass

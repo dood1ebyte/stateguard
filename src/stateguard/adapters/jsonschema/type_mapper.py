@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from stateguard.adapters.jsonschema.errors import (
+    MalformedSchemaError,
     SchemaFeatureWarning,
     UnsupportedSchemaError,
 )
@@ -148,7 +149,7 @@ class JSONSchemaTypeMapper:
         if isinstance(declared, str):
             return self._map_named_type(declared, schema, resolver, path)
         if declared is not None:
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"Field '{path}': 'type' must be a string or a list of strings, "
                 f"got {type(declared).__name__}: {declared!r}"
             )
@@ -201,12 +202,12 @@ class JSONSchemaTypeMapper:
         combinator = any_of if any_of is not None else one_of
         if combinator is not None:
             if not isinstance(combinator, Sequence) or isinstance(combinator, (str, bytes)):
-                raise UnsupportedSchemaError(
+                raise MalformedSchemaError(
                     f"Field '{path}': 'anyOf'/'oneOf' must be a list, "
                     f"got {type(combinator).__name__}."
                 )
             if not combinator:
-                raise UnsupportedSchemaError(
+                raise MalformedSchemaError(
                     f"Field '{path}': 'anyOf'/'oneOf' is empty, which accepts nothing."
                 )
             return list(combinator)
@@ -281,6 +282,21 @@ class JSONSchemaTypeMapper:
         for branch in surviving:
             with resolver.resolved(branch) as target:
                 mapped = self.map_schema(target, resolver, path)
+                if mapped.field_type is FieldType.OBJECT and (
+                    target.get("properties") or target.get("required")
+                ):
+                    # A union member is a type and nothing more, so an object
+                    # branch's own properties are never checked: a value is
+                    # accepted if it is *an* object. Said out loud, like every
+                    # other place validation is looser than the schema.
+                    warnings.warn(
+                        f"Field '{path}': an 'anyOf'/'oneOf' branch is an object with "
+                        f"declared properties, which StateGuard does not validate -- any "
+                        f"object is accepted for that branch, so this field is validated "
+                        f"more loosely than the schema specifies.",
+                        SchemaFeatureWarning,
+                        stacklevel=2,
+                    )
             members.append(
                 UnionMember(
                     field_type=mapped.field_type,
@@ -309,7 +325,7 @@ class JSONSchemaTypeMapper:
         try:
             field_type = JSON_TYPE_NAMES[declared]
         except KeyError:
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"Field '{path}': unknown type {declared!r}. "
                 f"Supported types are {sorted(JSON_TYPE_NAMES)}."
             ) from None
@@ -404,7 +420,7 @@ class JSONSchemaTypeMapper:
 
         values = schema["enum"]
         if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"Field '{path}': 'enum' must be a list, got {type(values).__name__}."
             )
         if not values:

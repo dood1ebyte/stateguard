@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 from stateguard import ContractGuard
-from stateguard.adapters.mcp import MCPAction, outcome_for
+from stateguard.adapters.mcp import MCPAction, outcome_for, repair_tool_call
 from stateguard.core.errors.results import RepairStatus
 from stateguard.core.models.config import GuardConfig, RepairConfig, RepairMode
 
@@ -102,13 +102,15 @@ class TestHold:
     ) -> None:
         """
         The distinction the whole action exists for. A proxy that read
-        ``arguments`` without checking ``action`` would apply repairs the
-        caller explicitly asked it to withhold; ``None`` means it sends
-        nothing instead.
+        ``arguments`` without checking ``action`` must not apply repairs the
+        caller explicitly asked it to withhold: it gets the model's payload,
+        unrepaired, and the repair only ever appears on ``preview``.
         """
-        outcome = _outcome(shadow, {"loc": "Mumbai", "days": "5"})
-        assert outcome.arguments is None
+        sent = {"loc": "Mumbai", "days": "5"}
+        outcome = _outcome(shadow, sent)
+        assert outcome.arguments == sent
         assert outcome.preview == {"location": "Mumbai", "days": 5, "unit": "celsius"}
+        assert outcome.arguments != outcome.preview
 
     def test_the_call_still_proceeds(self, shadow: ContractGuard) -> None:
         """Shadow withholds the repair, not the call."""
@@ -146,12 +148,17 @@ class TestHold:
 
     def test_holding_still_sends_the_model_s_arguments(self, shadow: ContractGuard) -> None:
         """
-        ``HOLD`` means the proxy forwards what it received. ``arguments`` is
-        ``None`` so a caller cannot forward the preview by accident.
+        ``HOLD`` means the proxy forwards what it received, and ``arguments``
+        says so. It used to be ``None``, which made the natural
+        ``if outcome.should_forward: send(outcome.arguments)`` send nothing
+        -- breaking shadow's one promise, that the server sees exactly what
+        the model wrote.
         """
-        outcome = _outcome(shadow, {"location": "Mumbai", "days": 5})
-        assert outcome.arguments is None
+        sent = {"location": "Mumbai", "days": 5}
+        outcome = _outcome(shadow, sent)
         assert outcome.should_forward is True
+        assert outcome.arguments == sent
+        assert outcome.arguments is not sent  # a copy: mutating it cannot reach the caller's dict
 
     def test_an_already_valid_call_with_nothing_to_fill_forwards(
         self, shadow: ContractGuard
@@ -326,3 +333,122 @@ class TestTheReasonMatchesWhatWasActuallySent:
 
         assert outcome.arguments == arguments
         assert "forwarded unchanged" in outcome.reason
+
+
+# ===========================================================================
+# ``arguments`` is what to send, whenever anything is sent
+# ===========================================================================
+
+_SHAPES: list[Any] = [
+    {"location": "Mumbai", "days": 5, "unit": "celsius"},  # valid as sent
+    {"location": "Mumbai", "days": 5},  # valid, default to fill
+    {"loc": "Mumbai", "days": "5"},  # repairable
+    {"location": "Mumbai", "days": 99},  # out of range
+    {"location": "Mumbai"},  # missing required, no default
+    '{"location": "Mumbai", "days": 5}',  # JSON-encoded root
+]
+
+
+class TestArgumentsMatchShouldForward:
+    """
+    One rule a proxy can rely on without reading the action at all:
+    ``arguments`` is non-``None`` exactly when ``should_forward`` is true,
+    and under ``HOLD`` it is never the preview.
+    """
+
+    @pytest.mark.parametrize("mode", [RepairMode.AUTO, RepairMode.SHADOW])
+    @pytest.mark.parametrize("arguments", _SHAPES)
+    def test_the_rule_holds(self, mode: RepairMode, arguments: Any) -> None:
+        guard = ContractGuard.with_mcp(config=GuardConfig(mode=mode))
+        outcome = repair_tool_call(guard, TOOL, arguments)
+        assert (outcome.arguments is not None) is outcome.should_forward
+        if outcome.action is MCPAction.HOLD:
+            assert outcome.arguments == arguments
+            assert outcome.arguments != outcome.preview
+
+
+# ===========================================================================
+# repair_tool_call
+# ===========================================================================
+
+NO_PARAMS: dict[str, Any] = {
+    "name": "list_allowed_directories",
+    "inputSchema": {"type": "object", "properties": {}},
+}
+
+
+class TestRepairToolCall:
+    def test_it_is_repair_then_outcome_for(self, auto: ContractGuard) -> None:
+        arguments = {"loc": "Mumbai", "days": "5"}
+        one_step = repair_tool_call(auto, TOOL, arguments)
+        two_step = _outcome(auto, arguments)
+        assert (one_step.action, one_step.arguments, one_step.reason) == (
+            two_step.action,
+            two_step.arguments,
+            two_step.reason,
+        )
+
+    @pytest.mark.parametrize("mode", [RepairMode.AUTO, RepairMode.SHADOW])
+    def test_absent_arguments_to_a_tool_with_no_parameters_forward(self, mode: RepairMode) -> None:
+        """
+        MCP makes ``arguments`` optional and the Python SDK sends ``None``
+        for a no-argument call. Treated as a payload, ``None`` is a
+        non-object root, and every such call was refused.
+        """
+        guard = ContractGuard.with_mcp(config=GuardConfig(mode=mode))
+        outcome = repair_tool_call(guard, NO_PARAMS, None)
+        assert outcome.action is MCPAction.FORWARD
+        assert outcome.arguments == {}
+
+    def test_absent_arguments_to_a_tool_that_needs_some_are_refused(
+        self, auto: ContractGuard
+    ) -> None:
+        outcome = repair_tool_call(auto, TOOL, None)
+        assert outcome.action is MCPAction.REFUSE
+        assert "'location'" in outcome.reason
+
+    def test_an_unsupported_schema_raises_rather_than_deciding(self, auto: ContractGuard) -> None:
+        """
+        No outcome is invented for a tool whose schema cannot be read:
+        blocking it or passing it through unvalidated is the caller's policy.
+        """
+        from stateguard.adapters.jsonschema.errors import JSONSchemaError
+
+        tool = {"name": "t", "inputSchema": {"type": "object", "allOf": [{}]}}
+        with pytest.raises(JSONSchemaError, match="allOf"):
+            repair_tool_call(auto, tool, {})
+
+
+# ===========================================================================
+# Reasons name what actually happened
+# ===========================================================================
+
+
+class TestRootNormalisationReason:
+    """
+    A JSON-encoded argument object is unwrapped before any field strategy
+    runs, so it is not an operation. The reason used to read "Repaired 0
+    field(s)" in auto, and in shadow claimed the arguments "matched the
+    tool's schema" -- which they did not.
+    """
+
+    ENCODED = '{"location": "Mumbai", "days": 5, "unit": "celsius"}'
+
+    def test_auto_says_the_root_was_normalised(self, auto: ContractGuard) -> None:
+        outcome = repair_tool_call(auto, TOOL, self.ENCODED)
+        assert outcome.action is MCPAction.FORWARD
+        assert outcome.arguments == {"location": "Mumbai", "days": 5, "unit": "celsius"}
+        assert outcome.reason.startswith("Normalised the payload root")
+        assert "0 field" not in outcome.reason
+
+    def test_auto_names_both_when_fields_were_repaired_too(self, auto: ContractGuard) -> None:
+        outcome = repair_tool_call(auto, TOOL, '{"loc": "Mumbai", "days": 5}')
+        assert outcome.reason.startswith("Normalised the payload root")
+        assert "repaired 1 field(s)" in outcome.reason
+
+    def test_shadow_does_not_claim_the_arguments_matched(self) -> None:
+        shadow = ContractGuard.with_mcp(config=GuardConfig(mode=RepairMode.SHADOW))
+        outcome = repair_tool_call(shadow, TOOL, self.ENCODED)
+        assert outcome.action is MCPAction.HOLD
+        assert "matched" not in outcome.reason
+        assert "payload-root normalisation" in outcome.reason

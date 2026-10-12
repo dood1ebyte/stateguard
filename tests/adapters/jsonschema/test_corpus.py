@@ -42,14 +42,11 @@ from .corpus import CorpusTool, load_corpus
 
 CORPUS = load_corpus()
 
-#: Every ``SchemaFeatureWarning`` the corpus is expected to produce, as
-#: ``(tool, field, keyword)``. Both are ``mcp-server-fetch``'s ``max_length``,
-#: which carries ``exclusiveMinimum``/``exclusiveMaximum`` -- the keywords §5
-#: drops rather than rounding into inclusive bounds it would be wrong about.
-EXPECTED_WARNINGS: set[tuple[str, str, str]] = {
-    ("fetch", "max_length", "exclusiveMinimum"),
-    ("fetch", "max_length", "exclusiveMaximum"),
-}
+#: Every dropped-keyword ``SchemaFeatureWarning`` the corpus is expected to
+#: produce, as ``(tool, field, keyword)``. Empty: the only entries were
+#: ``mcp-server-fetch``'s ``max_length`` exclusive bounds, which are enforced
+#: now (see ``test_a_real_server_relies_on_exclusive_bounds``).
+EXPECTED_WARNINGS: set[tuple[str, str, str]] = set()
 
 
 # ===========================================================================
@@ -266,11 +263,21 @@ class TestLooseningIsAccountedFor:
 
         assert observed == EXPECTED_WARNINGS
 
-    def test_a_real_server_uses_the_keyword_we_drop(self) -> None:
+    def test_a_real_server_relies_on_exclusive_bounds(self) -> None:
         """
-        Not a hypothetical. §5 chose to drop ``exclusiveMinimum`` rather than
-        round it into ``MINIMUM``, and ``mcp-server-fetch`` is a deployed
-        server that uses it -- so the decision is load-bearing, and the
-        warning is the only thing telling a caller their bound is unenforced.
+        Not a hypothetical. ``mcp-server-fetch`` declares ``max_length`` with
+        ``exclusiveMinimum: 0`` / ``exclusiveMaximum: 1000000``. These were
+        once dropped with a warning, so ``0`` passed StateGuard and was then
+        rejected by the server. A differential run against the ``jsonschema``
+        reference validator found it; both bounds are enforced now.
         """
-        assert any(keyword.startswith("exclusive") for _, _, keyword in EXPECTED_WARNINGS)
+        (fetch,) = [tool for tool in CORPUS if tool.name == "fetch"]
+        guard = ContractGuard.with_mcp()
+        for rejected in (0, 1_000_000):
+            assert not guard.validate(
+                fetch.definition, {"url": "https://x", "max_length": rejected}
+            ).is_valid
+        for accepted in (1, 999_999):
+            assert guard.validate(
+                fetch.definition, {"url": "https://x", "max_length": accepted}
+            ).is_valid

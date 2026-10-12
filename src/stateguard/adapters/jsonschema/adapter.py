@@ -22,9 +22,9 @@ instead of silent:
   ``UnsupportedSchemaError`` (``allOf``, ``not``, ``if``/``then``/``else``,
   ``patternProperties``, ``dependentSchemas``, ``propertyNames``,
   ``unevaluatedProperties``, and any keyword not in the subset);
-* ``exclusiveMinimum`` / ``exclusiveMaximum`` are dropped with a
-  ``SchemaFeatureWarning``, because an exclusive bound is not an inclusive
-  one and rounding it would accept a value the schema forbids;
+* constructs that can only be modelled loosely (a schema-valued
+  ``additionalProperties``, tuple-form ``items``) are kept with a
+  ``SchemaFeatureWarning`` naming the field;
 * ``format`` is advisory in practice and ignored.
 
 Contrast with ``DictContractAdapter``, which also delegates to
@@ -43,7 +43,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
-from stateguard.adapters.jsonschema.errors import UnsupportedSchemaError
+from stateguard.adapters.jsonschema.errors import MalformedSchemaError
 from stateguard.adapters.jsonschema.extractor import JSONSchemaExtractor
 from stateguard.core.errors.results import ValidationResult
 from stateguard.core.interfaces.adapter import IContractAdapter
@@ -79,7 +79,7 @@ class JSONSchemaAdapter(IContractAdapter):
         contract that would validate too loosely.
         """
         if not isinstance(schema, Mapping):
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"JSONSchemaAdapter expects a JSON Schema object (a dict), "
                 f"got {type(schema).__name__}."
             )

@@ -179,7 +179,7 @@ class TestWithPydanticImportError:
 
         monkeypatch.setattr(builtins, "__import__", fake_import)
 
-        with pytest.raises(ImportError, match="pip install stateguard\\[pydantic\\]"):
+        with pytest.raises(ImportError, match='pip install "sguard\\[pydantic\\]"'):
             ContractGuard.with_pydantic()
 
 

@@ -671,3 +671,372 @@ class TestLoadModel:
     def test_nonexistent_class_raises_system_exit(self) -> None:
         with pytest.raises(SystemExit):
             _load_model("pydantic:NonExistentClass9999")
+
+
+# ---------------------------------------------------------------------------
+# --tool: replaying an MCP tool call
+# ---------------------------------------------------------------------------
+
+FORECAST_TOOL: dict[str, Any] = {
+    "name": "get_forecast",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "location": {"type": "string"},
+            "days": {"type": "integer", "maximum": 14},
+            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"], "default": "celsius"},
+        },
+        "required": ["location", "days"],
+    },
+}
+
+
+def _write(tmp_path: Path, name: str, content: Any) -> str:
+    p = tmp_path / name
+    p.write_text(json.dumps(content))
+    return str(p)
+
+
+class TestToolFlag:
+    """
+    ``check --tool`` is the replay harness: a captured tool definition and a
+    captured call in, what a repairing proxy would do out.
+    """
+
+    def test_a_repairable_call_forwards(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "tool.json", FORECAST_TOOL)
+        args = _write(tmp_path, "args.json", {"loc": "Mumbai", "days": "5"})
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args], capsys)
+        assert code == 0
+        assert out.lstrip().startswith("FORWARD: Repaired 2 field(s)")
+        assert "repaired    location <- loc" in out
+        assert '"location": "Mumbai"' in out
+
+    def test_a_bare_input_schema_works_too(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "schema.json", FORECAST_TOOL["inputSchema"])
+        args = _write(tmp_path, "args.json", {"location": "Mumbai", "days": 3})
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args], capsys)
+        assert code == 0
+        assert "FORWARD" in out
+
+    def test_shadow_sends_the_received_arguments_and_shows_the_preview(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "tool.json", FORECAST_TOOL)
+        args = _write(tmp_path, "args.json", {"loc": "Mumbai", "days": "5"})
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args, "--shadow"], capsys)
+        assert code == 0
+        assert out.lstrip().startswith("HOLD:")
+        assert "Arguments to send (as received" in out
+        assert "Shadow preview" in out
+
+    def test_an_out_of_range_value_is_refused_with_exit_2(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "tool.json", FORECAST_TOOL)
+        args = _write(tmp_path, "args.json", {"location": "x", "days": 99})
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args], capsys)
+        assert code == 2
+        assert "REFUSE" in out
+        assert "not forwarded" in out
+
+    def test_an_ambiguous_call_escalates_with_exit_3(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(
+            tmp_path,
+            "tool.json",
+            {
+                "name": "lookup",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "account_id": {"type": "string"},
+                        "account_name": {"type": "string"},
+                    },
+                    "required": ["account_id", "account_name"],
+                },
+            },
+        )
+        args = _write(tmp_path, "args.json", {"account": "x"})
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args], capsys)
+        assert code == 3
+        assert "ESCALATE" in out
+        assert "held        account_id <- account" in out
+
+    def test_null_arguments_are_no_arguments(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "tool.json", {"name": "ping", "inputSchema": {"type": "object"}})
+        args = _write(tmp_path, "args.json", None)
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args], capsys)
+        assert code == 0
+        assert "FORWARD" in out
+
+    def test_an_unsupported_schema_is_an_error_message_not_a_traceback(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(
+            tmp_path, "tool.json", {"name": "t", "inputSchema": {"type": "object", "allOf": [{}]}}
+        )
+        args = _write(tmp_path, "args.json", {})
+        code, out, err = _run(["check", "--tool", tool, "--payload", args], capsys)
+        assert code == 2
+        assert out == ""
+        assert "cannot check calls against this tool's schema" in err
+        assert "allOf" in err
+
+    def test_json_output_is_the_outcome_record(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "tool.json", FORECAST_TOOL)
+        sent = {"loc": "Mumbai", "days": "5"}
+        args = _write(tmp_path, "args.json", sent)
+        code, out, _ = _run(["check", "--tool", tool, "--payload", args, "--json"], capsys)
+        assert code == 0
+        record = json.loads(out)
+        assert record["action"] == "forward"
+        assert record["arguments"] == {"location": "Mumbai", "days": 5, "unit": "celsius"}
+        assert record["result"]["original_input"] == sent
+        assert [d["decision"] for d in record["result"]["decisions"]] == ["repaired", "repaired"]
+
+    def test_tool_is_exclusive_with_schema(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tool = _write(tmp_path, "tool.json", FORECAST_TOOL)
+        args = _write(tmp_path, "args.json", {})
+        with pytest.raises(SystemExit) as exc_info:
+            main(["check", "--tool", tool, "--schema", tool, "--payload", args])
+        assert exc_info.value.code == 2
+
+
+class TestJsonOutputAdditions:
+    def test_schema_json_output_gains_original_input_and_decisions(
+        self, schema_file: Path, payload_coercible: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        code, out, _ = _run(
+            ["check", "--schema", str(schema_file), "--payload", str(payload_coercible), "--json"],
+            capsys,
+        )
+        assert code == 0
+        record = json.loads(out)
+        assert record["original_input"] == {"temperature": "31.5", "humidity": 80}
+        assert [(d["path"], d["decision"]) for d in record["decisions"]] == [
+            ("temperature", "repaired")
+        ]
+        # The pre-existing keys are still there.
+        for key in ("status", "mode", "violations", "attempts", "ambiguous", "repaired_output"):
+            assert key in record
+
+
+# ---------------------------------------------------------------------------
+# diff / replay
+# ---------------------------------------------------------------------------
+
+
+def _git_tools() -> list[dict[str, Any]]:
+    path = Path(__file__).parent / "adapters/jsonschema/corpus/schemas/mcp-server-git.json"
+    data = json.loads(path.read_text())
+    return list(data["tools"] if isinstance(data, dict) else data)
+
+
+class TestDiffCommand:
+    def test_identical_lists_exit_zero(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        tools = _write(tmp_path, "t.json", {"tools": _git_tools()})
+        code, out, _ = _run(["diff", tools, tools], capsys)
+        assert code == 0
+        assert "0 breaking" in out
+
+    def test_a_breaking_list_change_exits_one(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        import copy
+
+        v1 = _git_tools()
+        v2 = copy.deepcopy(v1)
+        commit = next(t for t in v2 if t["name"] == "git_commit")
+        commit["inputSchema"]["properties"]["author"] = {"type": "string"}
+        commit["inputSchema"]["required"].append("author")
+        v2 = [t for t in v2 if t["name"] != "git_reset"]
+        code, out, _ = _run(
+            ["diff", _write(tmp_path, "a.json", v1), _write(tmp_path, "b.json", {"tools": v2})],
+            capsys,
+        )
+        assert code == 1
+        assert "git_commit  BREAKING" in out and "REMOVED   git_reset" in out
+
+    def test_json_report(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        v1 = {"tools": _git_tools()}
+        v2 = {"jsonrpc": "2.0", "id": 1, "result": {"tools": _git_tools()[:-1]}}
+        code, out, _ = _run(
+            ["diff", _write(tmp_path, "a.json", v1), _write(tmp_path, "b.json", v2), "--json"],
+            capsys,
+        )
+        report = json.loads(out)
+        assert code == 1
+        assert report["summary"]["removed"] == 1
+
+    def test_a_single_tool(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        before = FORECAST_TOOL
+        after = json.loads(json.dumps(FORECAST_TOOL))
+        after["inputSchema"]["properties"]["days"]["maximum"] = 30
+        code, out, _ = _run(
+            ["diff", _write(tmp_path, "a.json", before), _write(tmp_path, "b.json", after)], capsys
+        )
+        assert code == 0
+        assert "'maximum' loosened: 14 -> 30" in out
+
+    def test_bare_schemas(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        before = FORECAST_TOOL["inputSchema"]
+        after = {**before, "allOf": [{}]}
+        code, out, _ = _run(
+            [
+                "diff",
+                _write(tmp_path, "a.json", before),
+                _write(tmp_path, "b.json", after),
+                "--json",
+            ],
+            capsys,
+        )
+        assert code == 1
+        assert json.loads(out)["status"] == "unsupported"
+
+    def test_a_list_against_a_tool_is_a_usage_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        code, _, err = _run(
+            [
+                "diff",
+                _write(tmp_path, "a.json", {"tools": []}),
+                _write(tmp_path, "b.json", FORECAST_TOOL),
+            ],
+            capsys,
+        )
+        assert code == 2 and "tool list" in err
+
+
+class TestReplayCommand:
+    def _calls(self, tmp_path: Path) -> str:
+        calls = [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "get_forecast", "arguments": {"loc": "Mumbai", "days": "5"}},
+            },
+            {"name": "get_forecast", "arguments": {"location": "x", "days": 99}},
+            {"name": "nope", "arguments": {}},
+            "garbage",
+        ]
+        path = tmp_path / "calls.jsonl"
+        path.write_text("\n".join(json.dumps(c) for c in calls))
+        return str(path)
+
+    def test_human_summary(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        tools = _write(tmp_path, "t.json", {"tools": [FORECAST_TOOL]})
+        code, out, _ = _run(["replay", "--tools", tools, "--calls", self._calls(tmp_path)], capsys)
+        assert code == 0
+        assert "Summary: 1 forward, 1 malformed_call, 1 refuse, 1 unknown_tool" in out
+
+    def test_shadow_forwards_everything_it_can_read(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tools = _write(tmp_path, "t.json", [FORECAST_TOOL])
+        code, out, _ = _run(
+            ["replay", "--tools", tools, "--calls", self._calls(tmp_path), "--shadow", "--json"],
+            capsys,
+        )
+        record = json.loads(out)
+        assert record["mode"] == "shadow"
+        assert record["summary"] == {"hold": 2, "malformed_call": 1, "unknown_tool": 1}
+        assert [c.get("auto_action") for c in record["calls"][:2]] == ["forward", "refuse"]
+        assert record["calls"][0]["id"] == 1
+        assert record["auto_summary"] == {
+            "forward": 1,
+            "malformed_call": 1,
+            "refuse": 1,
+            "unknown_tool": 1,
+        }
+
+    def test_shadow_summary_says_what_auto_would_change(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        tools = _write(tmp_path, "t.json", [FORECAST_TOOL])
+        code, out, _ = _run(
+            ["replay", "--tools", tools, "--calls", self._calls(tmp_path), "--shadow"], capsys
+        )
+        assert code == 0
+        assert "Summary: 2 hold, 1 malformed_call, 1 unknown_tool" in out
+        assert "Auto mode would: 1 forward, 1 malformed_call, 1 refuse, 1 unknown_tool" in out
+
+    def test_unreadable_tools_are_named(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        bad = {"name": "get_forecast", "inputSchema": {"type": "object", "allOf": [{}]}}
+        code, out, _ = _run(
+            [
+                "replay",
+                "--tools",
+                _write(tmp_path, "t.json", [bad]),
+                "--calls",
+                self._calls(tmp_path),
+            ],
+            capsys,
+        )
+        assert "cannot read: get_forecast" in out
+        assert "UNUSABLE_SCHEMA" in out
+
+    def test_a_non_list_is_a_usage_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        code, _, err = _run(
+            [
+                "replay",
+                "--tools",
+                _write(tmp_path, "t.json", FORECAST_TOOL),
+                "--calls",
+                self._calls(tmp_path),
+            ],
+            capsys,
+        )
+        assert code == 2 and "not a tool list" in err
+
+
+class TestBrokenPipe:
+    """``stateguard ... | head`` must not end in a traceback, or in a false 0."""
+
+    def test_a_closed_stdout_exits_quietly_and_not_zero(self, tmp_path: Path) -> None:
+        import subprocess
+
+        calls = tmp_path / "calls.jsonl"
+        calls.write_text(
+            "\n".join(
+                json.dumps({"name": "get_forecast", "arguments": {"loc": "x", "days": "5"}})
+                for _ in range(2000)
+            )
+        )
+        tools = _write(tmp_path, "t.json", [FORECAST_TOOL])
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "from stateguard.cli import main; main()",
+                "replay",
+                "--tools",
+                tools,
+                "--calls",
+                str(calls),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert proc.stdout is not None and proc.stderr is not None
+        proc.stdout.readline()
+        proc.stdout.close()  # the reader goes away
+        stderr = proc.stderr.read().decode()
+        assert proc.wait(timeout=60) == 141
+        assert "Traceback" not in stderr

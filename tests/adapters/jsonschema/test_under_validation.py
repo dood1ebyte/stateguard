@@ -102,7 +102,7 @@ class TestOptionalRefKeepsWhatTheSchemaSaid:
         every payload.
         """
         with pytest.raises(UnsupportedSchemaError, match="allOf"):
-            _extract(self._optional_ref({"allOf": [{"type": "string"}]}))
+            _extract(self._optional_ref({"allOf": [{"type": "string"}, {"minLength": 2}]}))
 
     def test_redos_screen_is_reached_through_the_ref(self) -> None:
         """
@@ -234,7 +234,7 @@ class TestChainedOptionalRefs:
         Pinned so the fix cannot regress it.
         """
         with pytest.raises(UnsupportedSchemaError, match="allOf"):
-            _extract(self._chained({"allOf": [{"type": "string"}]}))
+            _extract(self._chained({"allOf": [{"type": "string"}, {"minLength": 2}]}))
 
     def test_a_genuine_cycle_through_the_chain_is_still_caught(self) -> None:
         """
@@ -567,8 +567,7 @@ class TestAdditionalProperties:
         """
         ``{"additionalProperties": {"type": "string"}}`` types the properties
         it has no name for. ``ContractSpec`` cannot express that, so it is
-        validated more loosely than the schema asks -- the same situation
-        ``exclusiveMinimum`` is in, and that one has always warned.
+        validated more loosely than the schema asks, so it warns.
         """
         with pytest.warns(SchemaFeatureWarning, match="undeclared properties"):
             spec = _extract(

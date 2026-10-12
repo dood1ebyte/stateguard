@@ -250,6 +250,28 @@ class TestCoreImportIsolation:
         rc, _, stderr = _run("import stateguard.adapters.pydantic")
         assert rc == 0, f"stateguard.adapters.pydantic stub failed to import:\n{stderr}"
 
+    def test_with_pydantic_without_pydantic_fails_at_construction(self) -> None:
+        """
+        A missing extra is reported where the guard is built, with the install
+        line -- not as a bare ``ModuleNotFoundError`` on the first repair.
+
+        ``sys.modules["pydantic"] = None`` makes the import fail whether or not
+        pydantic is installed, so this holds in both CI configurations.
+        """
+        rc, stdout, stderr = _run("""
+            import sys
+            sys.modules["pydantic"] = None
+            from stateguard import ContractGuard
+            try:
+                ContractGuard.with_pydantic()
+            except ImportError as exc:
+                print(exc)
+            else:
+                print("constructed")
+        """)
+        assert rc == 0, f"subprocess failed:\n{stderr}"
+        assert 'pip install "sguard[pydantic]"' in stdout
+
     def test_importing_core_does_not_import_adapter(self) -> None:
         """
         Importing stateguard.core must not drag in stateguard.adapters.

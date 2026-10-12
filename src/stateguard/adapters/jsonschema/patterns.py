@@ -48,7 +48,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from stateguard.adapters.jsonschema.errors import UnsupportedSchemaError
+from stateguard.adapters.jsonschema.errors import MalformedSchemaError, UnsupportedSchemaError
 
 __all__ = ["screen_pattern"]
 
@@ -66,7 +66,7 @@ def screen_pattern(pattern: Any, path: str) -> str:
     not compile, or carries a nested unbounded quantifier.
     """
     if not isinstance(pattern, str):
-        raise UnsupportedSchemaError(
+        raise MalformedSchemaError(
             f"Field '{path}': 'pattern' must be a string, got {type(pattern).__name__}: {pattern!r}"
         )
 

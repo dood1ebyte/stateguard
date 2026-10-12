@@ -14,6 +14,20 @@ Check a payload against a JSON schema file::
 
     stateguard check --schema contract.json --payload payload.json
 
+Check a tool call's arguments against an MCP tool definition (or a bare
+JSON Schema), and see what a proxy would do with it::
+
+    stateguard check --tool tool.json --payload arguments.json
+
+What changes if this tool definition changes? (a tool, a bare schema, or a
+whole ``tools/list`` on each side)::
+
+    stateguard diff tools-v1.json tools-v2.json
+
+Replay recorded calls against a tool list -- what would StateGuard do?::
+
+    stateguard replay --tools tools.json --calls calls.jsonl [--shadow]
+
 JSON output (for piping into other tools)::
 
     stateguard check --schema contract.json --payload payload.json --json
@@ -29,6 +43,11 @@ Exit codes
 3   AMBIGUOUS — a repair was found but the evidence did not justify applying
     it unsupervised. Distinct from 2 because it is actionable: the candidates
     are printed, so a caller can choose one or re-prompt for better output.
+
+``stateguard diff`` exits 0 when no change can break a call that worked
+before, 1 when one can (including a tool removed, or a schema that became
+unreadable), and 2 on a usage error. ``stateguard replay`` exits 0 when the
+replay ran, 2 on a usage error -- its findings are in the output.
 """
 
 from __future__ import annotations
@@ -37,9 +56,12 @@ import argparse
 import contextlib
 import importlib
 import json
+import os
 import sys
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn
+
+from stateguard import __version__
 
 __all__ = ["main"]
 
@@ -51,6 +73,7 @@ _EXIT_OK = 0  # SUCCESS or ALREADY_VALID
 _EXIT_PARTIAL = 1  # PARTIAL
 _EXIT_FAILED = 2  # FAILED  (argparse also uses 2 for bad args, per convention)
 _EXIT_AMBIGUOUS = 3  # AMBIGUOUS -- a repair was found but withheld
+_EXIT_BROKEN_PIPE = 141  # stdout closed early (128 + SIGPIPE), as a shell reports it
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +81,7 @@ _EXIT_AMBIGUOUS = 3  # AMBIGUOUS -- a repair was found but withheld
 # ---------------------------------------------------------------------------
 
 
-def _load_json(path_str: str) -> dict[str, Any]:
+def _load_json(path_str: str) -> Any:
     """Load and parse a JSON file; raise SystemExit with a clear message on error."""
     path = Path(path_str)
     if not path.exists():
@@ -67,7 +90,7 @@ def _load_json(path_str: str) -> dict[str, Any]:
         # utf-8-sig tolerates (and strips) a leading BOM -- e.g. files written
         # by PowerShell's `Out-File -Encoding utf8` or Notepad's "UTF-8" save.
         with open(path, encoding="utf-8-sig") as f:
-            return cast(dict[str, Any], json.load(f))
+            return json.load(f)
     except json.JSONDecodeError as exc:
         _die(f"Could not parse JSON in {path}: {exc}")
 
@@ -294,6 +317,11 @@ def _print_json(result: Any) -> None:
         "repaired_output": repaired,
         "proposed_output": proposed,
     }
+    # Added later, so appended rather than merged into the keys above:
+    # existing consumers keep the shape they parse.
+    record = result.to_dict()
+    output["original_input"] = record["original_input"]
+    output["decisions"] = record["decisions"]
     print(json.dumps(output, indent=2, default=str))
 
 
@@ -331,7 +359,10 @@ def _cmd_check(args: argparse.Namespace) -> int:
     )
 
     # Load payload
-    payload: dict[str, Any] = _load_json(args.payload)
+    payload: Any = _load_json(args.payload)
+
+    if args.tool:
+        return _cmd_check_tool(args, config, payload)
 
     # Build guard from --model or --schema
     if args.model:
@@ -358,16 +389,258 @@ def _cmd_check(args: argparse.Namespace) -> int:
     else:
         _print_human(result, args)
 
-    # Exit code
+    return _exit_code(result.status)
+
+
+def _exit_code(status: Any) -> int:
     from stateguard.core.errors.results import RepairStatus  # noqa: PLC0415
 
-    if result.status in (RepairStatus.SUCCESS, RepairStatus.ALREADY_VALID):
+    if status in (RepairStatus.SUCCESS, RepairStatus.ALREADY_VALID):
         return _EXIT_OK
-    if result.status is RepairStatus.PARTIAL:
+    if status is RepairStatus.PARTIAL:
         return _EXIT_PARTIAL
-    if result.status is RepairStatus.AMBIGUOUS:
+    if status is RepairStatus.AMBIGUOUS:
         return _EXIT_AMBIGUOUS
     return _EXIT_FAILED
+
+
+def _cmd_check_tool(args: argparse.Namespace, config: Any, payload: Any) -> int:
+    """
+    ``check --tool``: what a repairing MCP proxy would do with this call.
+
+    The payload is the call's ``arguments`` (``null`` meaning none, as MCP
+    allows). Output is the ``ToolCallOutcome`` -- its explanation, or with
+    ``--json`` its ``to_dict()`` record -- so a captured tool definition and
+    a captured call can be replayed and inspected without writing code.
+    """
+    from stateguard.adapters.jsonschema.errors import JSONSchemaError  # noqa: PLC0415
+    from stateguard.adapters.mcp import repair_tool_call  # noqa: PLC0415
+    from stateguard.guard import ContractGuard  # noqa: PLC0415
+
+    tool = _load_json(args.tool)
+    guard = ContractGuard.with_mcp(config=config)
+    try:
+        outcome = repair_tool_call(guard, tool, payload)
+    except JSONSchemaError as exc:
+        # Not a usage error and not a failed repair: StateGuard cannot read
+        # this schema, so it cannot vouch for any call to the tool. Said
+        # plainly rather than as a traceback.
+        _die(f"cannot check calls against this tool's schema: {exc}")
+
+    if args.json:
+        print(json.dumps(outcome.to_dict(), indent=2, default=str))
+    else:
+        print()
+        print(outcome.explain())
+        print()
+        if outcome.arguments is not None:
+            shadow = " (as received — shadow mode)" if outcome.preview is not None else ""
+            print(f"Arguments to send{shadow}:")
+            _dump_output(outcome.arguments)
+        else:
+            print("Arguments to send: (none — not forwarded)")
+        if outcome.preview is not None:
+            print("Shadow preview (what auto mode would send):")
+            _dump_output(outcome.preview)
+        print()
+
+    return _exit_code(outcome.result.status)
+
+
+# ---------------------------------------------------------------------------
+# diff / replay -- tool lists
+# ---------------------------------------------------------------------------
+
+
+def _tool_list(document: Any) -> list[Any] | None:
+    """
+    The tools in *document* if it is a tool list, else ``None``.
+
+    Accepts the shapes a captured listing comes in: a ``tools/list`` result
+    (``{"tools": [...]}``), a whole JSON-RPC response carrying one, or a bare
+    array of tool definitions.
+    """
+    if isinstance(document, list):
+        return document
+    if isinstance(document, dict):
+        if isinstance(document.get("tools"), list):
+            return list(document["tools"])
+        result = document.get("result")
+        if isinstance(result, dict) and isinstance(result.get("tools"), list):
+            return list(result["tools"])
+    return None
+
+
+def _cmd_diff(args: argparse.Namespace) -> int:
+    from stateguard.adapters.jsonschema.diff import diff_schemas  # noqa: PLC0415
+    from stateguard.adapters.mcp import (  # noqa: PLC0415
+        InvalidToolDefinitionError,
+        ToolRegistry,
+        split_tool_definition,
+    )
+
+    before, after = _load_json(args.before), _load_json(args.after)
+    before_list, after_list = _tool_list(before), _tool_list(after)
+
+    if (before_list is None) != (after_list is None):
+        _die("compare a tool list with a tool list, or a tool/schema with a tool/schema.")
+
+    if before_list is not None and after_list is not None:
+        registry = ToolRegistry()
+        try:
+            registry.sync(before_list)
+            report = registry.sync(after_list)
+        except InvalidToolDefinitionError as exc:
+            _die(str(exc))
+        if args.json:
+            print(json.dumps(report.to_dict(), indent=2, default=str))
+        else:
+            print(report.explain())
+        return _EXIT_PARTIAL if report.breaking else _EXIT_OK
+
+    both_tools = all(isinstance(doc, dict) and "name" in doc for doc in (before, after))
+    if both_tools:
+        registry = ToolRegistry()
+        try:
+            registry.register(before)
+            change = registry.register(after) if after["name"] == before["name"] else None
+        except InvalidToolDefinitionError as exc:
+            _die(str(exc))
+        if change is not None:
+            if args.json:
+                print(json.dumps(change.to_dict(), indent=2, default=str))
+            else:
+                print(change.explain())
+            return _EXIT_PARTIAL if change.breaking else _EXIT_OK
+
+    # Bare schemas, or two tools with different names: compare the schemas.
+    def schema_of(document: Any) -> Any:
+        try:
+            return split_tool_definition(document)[1]
+        except ValueError:
+            return document  # let diff_schemas classify it
+
+    diff = diff_schemas(schema_of(before), schema_of(after))
+    if args.json:
+        print(json.dumps(diff.to_dict(), indent=2, default=str))
+    else:
+        print(diff.explain())
+    return _EXIT_OK if diff.is_compatible else _EXIT_PARTIAL
+
+
+def _load_calls(path_str: str) -> list[Any]:
+    """Calls from a JSON array or a JSON-lines file; each a call or a tools/call message."""
+    path = Path(path_str)
+    if not path.exists():
+        _die(f"File not found: {path}")
+    text = path.read_text(encoding="utf-8-sig")
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            return [json.loads(line) for line in text.splitlines() if line.strip()]
+        except json.JSONDecodeError as exc:
+            _die(f"Could not parse {path} as JSON or JSON lines: {exc}")
+    return document if isinstance(document, list) else [document]
+
+
+def _call_parts(call: Any) -> tuple[str, Any, Any] | None:
+    """``(name, arguments, id)`` from a plain call or a JSON-RPC tools/call."""
+    if not isinstance(call, dict):
+        return None
+    params = call.get("params") if call.get("method") == "tools/call" else call
+    if not isinstance(params, dict) or not isinstance(params.get("name"), str):
+        return None
+    return params["name"], params.get("arguments"), call.get("id")
+
+
+def _cmd_replay(args: argparse.Namespace) -> int:
+    from collections import Counter  # noqa: PLC0415
+
+    from stateguard.adapters.mcp import (  # noqa: PLC0415
+        InvalidToolDefinitionError,
+        ToolNotFoundError,
+        ToolRegistry,
+        ToolSchemaUnusableError,
+    )
+    from stateguard.core.models.config import GuardConfig, RepairMode  # noqa: PLC0415
+    from stateguard.guard import ContractGuard  # noqa: PLC0415
+
+    tools = _tool_list(_load_json(args.tools))
+    if tools is None:
+        _die(f"{args.tools} is not a tool list (a tools/list result, or an array of tools).")
+    mode = RepairMode.SHADOW if args.shadow else RepairMode.AUTO
+    registry = ToolRegistry(ContractGuard.with_mcp(config=GuardConfig(mode=mode)))
+    try:
+        listing = registry.sync(tools)
+    except InvalidToolDefinitionError as exc:
+        _die(str(exc))
+
+    records: list[dict[str, Any]] = []
+    counts: Counter[str] = Counter()
+    auto_counts: Counter[str] = Counter()
+    for index, call in enumerate(_load_calls(args.calls)):
+        parts = _call_parts(call)
+        record: dict[str, Any] = {"index": index}
+        if parts is None:
+            record.update(outcome="malformed_call", detail="not a call or a tools/call message")
+        else:
+            name, arguments, identifier = parts
+            record.update(name=name, id=identifier)
+            try:
+                outcome = registry.process_call(name, arguments)
+            except ToolNotFoundError:
+                record.update(outcome="unknown_tool", detail=f"no tool {name!r} in the list")
+            except ToolSchemaUnusableError as exc:
+                record.update(outcome="unusable_schema", detail=str(exc.cause))
+            else:
+                record.update(
+                    outcome=outcome.action.value,
+                    auto_action=(outcome.auto_action or outcome.action).value,
+                    reason=outcome.reason,
+                    record=outcome.to_dict() if args.json else None,
+                    explanation=None if args.json else outcome.explain(),
+                )
+        counts[record["outcome"]] += 1
+        auto_counts[record.get("auto_action", record["outcome"])] += 1
+        records.append(record)
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "mode": mode.value,
+                    "tools": listing.to_dict()["summary"],
+                    "summary": dict(sorted(counts.items())),
+                    "auto_summary": dict(sorted(auto_counts.items())),
+                    "calls": [{k: v for k, v in r.items() if k != "explanation"} for r in records],
+                },
+                indent=2,
+                default=str,
+            )
+        )
+        return _EXIT_OK
+
+    print(f"Replayed {len(records)} call(s) against {len(registry)} tool(s), {mode.value} mode.")
+    unusable = [str(c.key) for c in listing.unusable]
+    if unusable:
+        print(f"Tools whose schema StateGuard cannot read: {', '.join(unusable)}")
+    print()
+    for record in records:
+        label = f"#{record['index']} {record.get('name', '?')}"
+        if record.get("explanation"):
+            print(label)
+            print("  " + record["explanation"].replace("\n", "\n  "))
+        else:
+            print(f"{label}\n  {record['outcome'].upper()}: {record.get('detail', '')}")
+        print()
+    summary = ", ".join(f"{count} {name}" for name, count in sorted(counts.items()))
+    print(f"Summary: {summary}")
+    if mode is RepairMode.SHADOW:
+        # The shadow review question: what would turning auto mode on change?
+        would = ", ".join(f"{count} {name}" for name, count in sorted(auto_counts.items()))
+        print(f"Auto mode would: {would}")
+    return _EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +664,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0",
+        version=f"%(prog)s {__version__}",
     )
 
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -402,9 +675,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "check",
         help="Validate and repair a payload against a contract.",
         description=(
-            "Validate a JSON payload against a contract (Pydantic model or "
-            "JSON schema file). Attempts to repair any violations found and "
-            "reports the result."
+            "Validate a JSON payload against a contract (Pydantic model, "
+            "StateGuard schema file, or MCP tool definition). Attempts to "
+            "repair any violations found and reports the result."
         ),
     )
 
@@ -423,6 +696,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Path to a JSON contract schema file in StateGuard's simple format. "
             "See 'stateguard/adapters/dict_adapter.py' for the format spec."
+        ),
+    )
+    schema_group.add_argument(
+        "--tool",
+        metavar="FILE",
+        help=(
+            "Path to an MCP tool definition ({'name', 'inputSchema', ...}) or a "
+            "bare JSON Schema. The payload is the call's arguments; the output "
+            "is what a repairing proxy would do: FORWARD, HOLD, ESCALATE or "
+            "REFUSE, and why, field by field. No extra dependencies needed."
         ),
     )
 
@@ -483,6 +766,44 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # -- diff ----------------------------------------------------------------
+    diff = sub.add_parser(
+        "diff",
+        help="What changes for callers when a tool definition changes.",
+        description=(
+            "Compare two versions of an MCP tool definition, a bare JSON Schema, or a "
+            "whole tools/list, and report every structural change and whether it can "
+            "break a call that worked before. Exit 0: nothing breaking; 1: something is."
+        ),
+    )
+    diff.add_argument("before", metavar="BEFORE", help="The old tool / schema / tool list.")
+    diff.add_argument("after", metavar="AFTER", help="The new tool / schema / tool list.")
+    diff.add_argument(
+        "--json", action="store_true", default=False, help="Emit the machine-readable report."
+    )
+
+    # -- replay --------------------------------------------------------------
+    replay = sub.add_parser(
+        "replay",
+        help="Replay recorded tool calls against a tool list.",
+        description=(
+            "Run every call in --calls (a JSON array or JSON lines; each a "
+            "{'name', 'arguments'} object or a JSON-RPC tools/call message) through "
+            "StateGuard against the tools in --tools, and report what it would do."
+        ),
+    )
+    replay.add_argument("--tools", metavar="FILE", required=True, help="A tools/list result.")
+    replay.add_argument("--calls", metavar="FILE", required=True, help="Calls to replay.")
+    replay.add_argument(
+        "--shadow",
+        action="store_true",
+        default=False,
+        help="Shadow mode: record what auto mode would do, forward everything.",
+    )
+    replay.add_argument(
+        "--json", action="store_true", default=False, help="Emit one record per call."
+    )
+
     return parser
 
 
@@ -513,8 +834,21 @@ def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "check":
-        sys.exit(_cmd_check(args))
+    commands = {"check": _cmd_check, "diff": _cmd_diff, "replay": _cmd_replay}
+    if args.command in commands:
+        try:
+            code = commands[args.command](args)
+            sys.stdout.flush()
+        except BrokenPipeError:
+            # The reader went away (``stateguard replay ... | head``). Not
+            # worth a traceback. Point stdout at devnull so the interpreter's
+            # own flush at exit does not raise again, and exit as a process
+            # killed by SIGPIPE would (128 + 13) -- never 0, because the
+            # command's real verdict (``diff``'s "breaking") was not reached.
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+            sys.exit(_EXIT_BROKEN_PIPE)
+        sys.exit(code)
     else:
         # Unreachable: sub.required = True forces argparse to error out
         # before main() is reached if no subcommand is given. Kept as a

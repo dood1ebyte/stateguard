@@ -1,0 +1,1532 @@
+{
+  "description": "Durable MCP drift corpus. 'calls': stale/drifted arguments against a tool's current definition, each classified by what is CORRECT (repairable / unchanged / ambiguous / invalid / unsupported). 'schema_changes': definition changes with the correct compatibility status. Labels are decided first; StateGuard is checked against them.",
+  "tools": {
+    "read_file": {
+      "name": "read_file",
+      "description": "Read a file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "utf-8",
+              "base64"
+            ],
+            "default": "utf-8"
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10485760
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "write_file": {
+      "name": "write_file",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "create_dirs": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ]
+      }
+    },
+    "create_issue": {
+      "name": "create_issue",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "owner": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "assignees": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "milestone": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "title"
+        ]
+      }
+    },
+    "list_issues": {
+      "name": "list_issues",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "owner": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed",
+              "all"
+            ],
+            "default": "open"
+          },
+          "per_page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 30
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "owner",
+          "repo"
+        ]
+      }
+    },
+    "post_message": {
+      "name": "post_message",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "thread_ts": {
+            "type": "string"
+          },
+          "unfurl_links": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "channel_id",
+          "text"
+        ]
+      }
+    },
+    "create_event": {
+      "name": "create_event",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string"
+          },
+          "start_time": {
+            "type": "string"
+          },
+          "end_time": {
+            "type": "string"
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reminder": {
+            "type": "object",
+            "properties": {
+              "minutes_before": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "email",
+                  "popup"
+                ]
+              }
+            },
+            "required": [
+              "minutes_before"
+            ]
+          }
+        },
+        "required": [
+          "summary",
+          "start_time",
+          "end_time"
+        ]
+      }
+    },
+    "transfer_funds": {
+      "name": "transfer_funds",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "from_account": {
+            "type": "string"
+          },
+          "to_account": {
+            "type": "string"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP"
+            ]
+          }
+        },
+        "required": [
+          "from_account",
+          "to_account",
+          "amount_cents",
+          "currency"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "search_users": {
+      "name": "search_users",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string"
+          },
+          "user_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "user_name"
+        ]
+      }
+    },
+    "set_role": {
+      "name": "set_role",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "viewer",
+              "editor",
+              "admin"
+            ]
+          }
+        },
+        "required": [
+          "user_id",
+          "role"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "query_db": {
+      "name": "query_db",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sql": {
+            "type": "string"
+          },
+          "params": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            }
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "default": 5000
+          }
+        },
+        "required": [
+          "sql"
+        ]
+      }
+    },
+    "push_files": {
+      "name": "push_files",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "owner": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "content"
+              ]
+            }
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "branch",
+          "files"
+        ]
+      }
+    },
+    "notify": {
+      "name": "notify",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "email"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "phone": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "phone"
+                ]
+              }
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "message"
+        ]
+      }
+    },
+    "get_issue": {
+      "name": "get_issue",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "owner": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "issue_number": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "issue_number"
+        ]
+      }
+    },
+    "web_search": {
+      "name": "web_search",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 10
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  },
+  "calls": [
+    {
+      "name": "valid call, defaults filled",
+      "class": "unchanged",
+      "tool": "list_issues",
+      "arguments": {
+        "owner": "acme",
+        "repo": "api"
+      },
+      "why": "Valid as sent; declared defaults are filled.",
+      "forward": {
+        "owner": "acme",
+        "repo": "api",
+        "state": "open",
+        "per_page": 30
+      }
+    },
+    {
+      "name": "valid call, open schema extra key",
+      "class": "unchanged",
+      "tool": "write_file",
+      "arguments": {
+        "path": "a.txt",
+        "content": "x",
+        "mode": "0644"
+      },
+      "why": "Open schema: an undeclared key is allowed and passed through.",
+      "forward": {
+        "path": "a.txt",
+        "content": "x",
+        "create_dirs": false,
+        "mode": "0644"
+      }
+    },
+    {
+      "name": "no arguments to a tool that needs some",
+      "class": "invalid",
+      "tool": "read_file",
+      "arguments": null,
+      "why": "MCP allows absent arguments (read as {}); 'path' is required and has no default."
+    },
+    {
+      "name": "camelCase against snake_case",
+      "class": "repairable",
+      "tool": "post_message",
+      "arguments": {
+        "channelId": "C1",
+        "text": "hi"
+      },
+      "why": "Same name, different convention.",
+      "forward": {
+        "channel_id": "C1",
+        "text": "hi"
+      }
+    },
+    {
+      "name": "kebab-case",
+      "class": "repairable",
+      "tool": "post_message",
+      "arguments": {
+        "channel-id": "C1",
+        "text": "hi"
+      },
+      "why": "Same name, different convention.",
+      "forward": {
+        "channel_id": "C1",
+        "text": "hi"
+      }
+    },
+    {
+      "name": "stale name: abbreviation",
+      "class": "repairable",
+      "tool": "read_file",
+      "arguments": {
+        "pth": "/etc/hosts"
+      },
+      "why": "Dropped letter; one plausible target.",
+      "forward": {
+        "path": "/etc/hosts",
+        "encoding": "utf-8"
+      }
+    },
+    {
+      "name": "stale name: prefix truncation",
+      "class": "repairable",
+      "tool": "create_event",
+      "arguments": {
+        "summary": "standup",
+        "start": "09:00",
+        "end_time": "09:15"
+      },
+      "why": "'start' -> 'start_time': the only missing field it fits.",
+      "forward": {
+        "summary": "standup",
+        "start_time": "09:00",
+        "end_time": "09:15"
+      }
+    },
+    {
+      "name": "nested rename",
+      "class": "repairable",
+      "tool": "create_event",
+      "arguments": {
+        "summary": "s",
+        "start_time": "a",
+        "end_time": "b",
+        "reminder": {
+          "minutesBefore": 10
+        }
+      },
+      "why": "Convention change one level down.",
+      "forward": {
+        "summary": "s",
+        "start_time": "a",
+        "end_time": "b",
+        "reminder": {
+          "minutes_before": 10
+        }
+      }
+    },
+    {
+      "name": "number as string",
+      "class": "repairable",
+      "tool": "list_issues",
+      "arguments": {
+        "owner": "a",
+        "repo": "b",
+        "per_page": "50"
+      },
+      "why": "Lossless cast.",
+      "forward": {
+        "owner": "a",
+        "repo": "b",
+        "state": "open",
+        "per_page": 50
+      }
+    },
+    {
+      "name": "integer as 5.0",
+      "class": "repairable",
+      "tool": "list_issues",
+      "arguments": {
+        "owner": "a",
+        "repo": "b",
+        "page": 2.0
+      },
+      "why": "JSON Schema counts 2.0 as an integer; normalised to 2.",
+      "forward": {
+        "owner": "a",
+        "repo": "b",
+        "state": "open",
+        "per_page": 30,
+        "page": 2
+      }
+    },
+    {
+      "name": "boolean as string",
+      "class": "repairable",
+      "tool": "write_file",
+      "arguments": {
+        "path": "p",
+        "content": "c",
+        "create_dirs": "true"
+      },
+      "why": "Exact boolean spelling.",
+      "forward": {
+        "path": "p",
+        "content": "c",
+        "create_dirs": true
+      }
+    },
+    {
+      "name": "scalar where list declared",
+      "class": "repairable",
+      "tool": "create_issue",
+      "arguments": {
+        "owner": "o",
+        "repo": "r",
+        "title": "t",
+        "labels": "bug"
+      },
+      "why": "One label sent bare; wrapped.",
+      "forward": {
+        "owner": "o",
+        "repo": "r",
+        "title": "t",
+        "labels": [
+          "bug"
+        ]
+      }
+    },
+    {
+      "name": "list sent as JSON string",
+      "class": "repairable",
+      "tool": "create_issue",
+      "arguments": {
+        "owner": "o",
+        "repo": "r",
+        "title": "t",
+        "labels": "[\"bug\", \"p1\"]"
+      },
+      "why": "Over-encoded argument parsed.",
+      "forward": {
+        "owner": "o",
+        "repo": "r",
+        "title": "t",
+        "labels": [
+          "bug",
+          "p1"
+        ]
+      }
+    },
+    {
+      "name": "whole arguments as JSON string",
+      "class": "repairable",
+      "tool": "post_message",
+      "arguments": "{\"channel_id\": \"C1\", \"text\": \"hi\"}",
+      "why": "Double-encoded arguments object.",
+      "forward": {
+        "channel_id": "C1",
+        "text": "hi"
+      }
+    },
+    {
+      "name": "enum case drift",
+      "class": "repairable",
+      "tool": "list_issues",
+      "arguments": {
+        "owner": "a",
+        "repo": "b",
+        "state": "Closed"
+      },
+      "why": "Re-spelling of a declared member.",
+      "forward": {
+        "owner": "a",
+        "repo": "b",
+        "state": "closed",
+        "per_page": 30
+      }
+    },
+    {
+      "name": "enum value no longer declared",
+      "class": "invalid",
+      "tool": "list_issues",
+      "arguments": {
+        "owner": "a",
+        "repo": "b",
+        "state": "merged"
+      },
+      "why": "Not a spelling of any member; inventing one would change meaning."
+    },
+    {
+      "name": "currency case on a payment tool",
+      "class": "repairable",
+      "tool": "transfer_funds",
+      "arguments": {
+        "from_account": "a",
+        "to_account": "b",
+        "amount_cents": 100,
+        "currency": "usd"
+      },
+      "why": "Case-only re-spelling of a declared code.",
+      "forward": {
+        "from_account": "a",
+        "to_account": "b",
+        "amount_cents": 100,
+        "currency": "USD"
+      }
+    },
+    {
+      "name": "value above changed maximum",
+      "class": "invalid",
+      "tool": "list_issues",
+      "arguments": {
+        "owner": "a",
+        "repo": "b",
+        "per_page": 500
+      },
+      "why": "No honest value to substitute."
+    },
+    {
+      "name": "amount as float with cents",
+      "class": "invalid",
+      "tool": "transfer_funds",
+      "arguments": {
+        "from_account": "a",
+        "to_account": "b",
+        "amount_cents": 10.5,
+        "currency": "USD"
+      },
+      "why": "Fractional cents: rounding would move money."
+    },
+    {
+      "name": "stale call missing new required field",
+      "class": "invalid",
+      "tool": "create_event",
+      "arguments": {
+        "summary": "s",
+        "start_time": "a"
+      },
+      "why": "'end_time' became required; no default to fill."
+    },
+    {
+      "name": "stale call sending removed field to closed schema",
+      "class": "invalid",
+      "tool": "read_file",
+      "arguments": {
+        "path": "p",
+        "follow_symlinks": true
+      },
+      "why": "Closed schema; no field it could mean."
+    },
+    {
+      "name": "stale optional typo in open schema",
+      "class": "unchanged",
+      "tool": "list_issues",
+      "arguments": {
+        "owner": "a",
+        "repo": "b",
+        "perpage": 50
+      },
+      "why": "Optional-field drift is not repaired: the key is passed through and the default used (documented limitation).",
+      "forward": {
+        "owner": "a",
+        "repo": "b",
+        "state": "open",
+        "per_page": 30,
+        "perpage": 50
+      }
+    },
+    {
+      "name": "nested required field missing",
+      "class": "invalid",
+      "tool": "create_event",
+      "arguments": {
+        "summary": "s",
+        "start_time": "a",
+        "end_time": "b",
+        "reminder": {
+          "method": "email"
+        }
+      },
+      "why": "'reminder.minutes_before' has no default."
+    },
+    {
+      "name": "one key, two plausible fields",
+      "class": "ambiguous",
+      "tool": "search_users",
+      "arguments": {
+        "user": "ada"
+      },
+      "why": "'user' fits user_id and user_name equally."
+    },
+    {
+      "name": "unexplained destination key on a closed payment schema",
+      "class": "invalid",
+      "tool": "transfer_funds",
+      "arguments": {
+        "to_account": "b",
+        "from_acct": "a",
+        "amount_cents": 1,
+        "currency": "EUR",
+        "dest_account": "c"
+      },
+      "why": "'from_acct' plausibly means 'from_account', but 'dest_account' matches no field and the schema is closed: the call cannot be made valid without deleting a value, which is never automatic."
+    },
+    {
+      "name": "role escalation via case",
+      "class": "repairable",
+      "tool": "set_role",
+      "arguments": {
+        "user_id": "u1",
+        "role": "Admin"
+      },
+      "why": "Case-only: 'Admin' means 'admin'. The model asked for admin; nothing is escalated by the repair.",
+      "forward": {
+        "user_id": "u1",
+        "role": "admin"
+      }
+    },
+    {
+      "name": "role not a member",
+      "class": "invalid",
+      "tool": "set_role",
+      "arguments": {
+        "user_id": "u1",
+        "role": "superuser"
+      },
+      "why": "Never mapped onto a different privilege level."
+    },
+    {
+      "name": "permission field swap",
+      "class": "ambiguous",
+      "tool": "search_users",
+      "arguments": {
+        "user_name": "ada",
+        "user_email": "a@b"
+      },
+      "why": "'user_email' -> 'user_id' swaps a word; surfaced, not applied."
+    },
+    {
+      "name": "union param string-or-int",
+      "class": "unchanged",
+      "tool": "query_db",
+      "arguments": {
+        "sql": "select ?",
+        "params": [
+          "a",
+          1
+        ]
+      },
+      "why": "Each element matches a branch.",
+      "forward": {
+        "sql": "select ?",
+        "params": [
+          "a",
+          1
+        ],
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "name": "valid array of objects",
+      "class": "unchanged",
+      "tool": "push_files",
+      "arguments": {
+        "owner": "o",
+        "repo": "r",
+        "branch": "main",
+        "files": [
+          {
+            "path": "a",
+            "content": "x"
+          }
+        ]
+      },
+      "why": "Every element satisfies the item contract.",
+      "forward": {
+        "owner": "o",
+        "repo": "r",
+        "branch": "main",
+        "files": [
+          {
+            "path": "a",
+            "content": "x"
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrong type inside an array element",
+      "class": "invalid",
+      "tool": "push_files",
+      "arguments": {
+        "owner": "o",
+        "repo": "r",
+        "branch": "main",
+        "files": [
+          {
+            "path": 7,
+            "content": "x"
+          }
+        ]
+      },
+      "why": "Element 0's 'path' must be a string; elements are validated, and refused rather than altered."
+    },
+    {
+      "name": "stale key inside an array element",
+      "class": "invalid",
+      "tool": "push_files",
+      "arguments": {
+        "owner": "o",
+        "repo": "r",
+        "branch": "main",
+        "files": [
+          {
+            "filePath": "a",
+            "content": "x"
+          }
+        ]
+      },
+      "why": "'filePath' plausibly means 'path', but repair never reaches inside a list: refused, a missed repair rather than a guess."
+    },
+    {
+      "name": "drifted top-level key beside a valid array",
+      "class": "repairable",
+      "tool": "push_files",
+      "arguments": {
+        "owner": "o",
+        "repo": "r",
+        "branchName": "main",
+        "files": [
+          {
+            "path": "a",
+            "content": "x"
+          }
+        ]
+      },
+      "why": "Convention change at the top level; the array is untouched.",
+      "forward": {
+        "owner": "o",
+        "repo": "r",
+        "branch": "main",
+        "files": [
+          {
+            "path": "a",
+            "content": "x"
+          }
+        ]
+      }
+    },
+    {
+      "name": "two drifted keys at once",
+      "class": "repairable",
+      "tool": "get_issue",
+      "arguments": {
+        "ownr": "o",
+        "rpo": "r",
+        "issue_number": "7"
+      },
+      "why": "Each has exactly one plausible target.",
+      "forward": {
+        "owner": "o",
+        "repo": "r",
+        "issue_number": "7"
+      }
+    },
+    {
+      "name": "issue number sent as an integer",
+      "class": "invalid",
+      "tool": "get_issue",
+      "arguments": {
+        "owner": "o",
+        "repo": "r",
+        "issue_number": 42
+      },
+      "why": "A scalar where a string is declared is a type disagreement StateGuard deliberately does not coerce."
+    },
+    {
+      "name": "single-letter stale name",
+      "class": "repairable",
+      "tool": "web_search",
+      "arguments": {
+        "q": "mcp"
+      },
+      "why": "'q' is the conventional abbreviation and the only missing field.",
+      "forward": {
+        "query": "mcp",
+        "count": 10
+      }
+    },
+    {
+      "name": "object union: neither branch matches",
+      "class": "invalid",
+      "tool": "notify",
+      "arguments": {
+        "target": {
+          "mail": "a@b"
+        },
+        "message": "hi"
+      },
+      "why": "Neither branch accepts {'mail': ...}; the server will reject it.",
+      "known_gap": "Object-typed anyOf branches are type-checked only (any object passes). StateGuard warns at registration; it forwards this call instead of refusing it."
+    }
+  ],
+  "schema_changes": [
+    {
+      "name": "optional parameter added (open schema)",
+      "before": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "q"
+        ]
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "q"
+        ]
+      },
+      "status": "incompatible",
+      "why": "An open schema already accepted 'limit' with any value; declaring it as integer can reject a call that sent a string."
+    },
+    {
+      "name": "optional parameter added (closed schema)",
+      "before": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "additionalProperties": false
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "additionalProperties": false
+      },
+      "status": "compatible",
+      "why": "No valid call could have sent 'limit' before."
+    },
+    {
+      "name": "required parameter added",
+      "before": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          },
+          "index": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "index"
+        ]
+      },
+      "status": "incompatible",
+      "why": "Calls without 'index' are rejected."
+    },
+    {
+      "name": "required parameter made optional",
+      "before": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "q"
+        ]
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        }
+      },
+      "status": "compatible",
+      "why": "Only removes a rejection."
+    },
+    {
+      "name": "parameter renamed",
+      "before": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "q"
+        ]
+      },
+      "status": "incompatible",
+      "why": "A removal and an addition; no rename is inferred."
+    },
+    {
+      "name": "enum member added",
+      "before": {
+        "type": "object",
+        "properties": {
+          "s": {
+            "type": "string",
+            "enum": [
+              "a",
+              "b"
+            ]
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "s": {
+            "type": "string",
+            "enum": [
+              "a",
+              "b",
+              "c"
+            ]
+          }
+        }
+      },
+      "status": "compatible",
+      "why": "Accepts more."
+    },
+    {
+      "name": "enum member removed",
+      "before": {
+        "type": "object",
+        "properties": {
+          "s": {
+            "type": "string",
+            "enum": [
+              "a",
+              "b"
+            ]
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "s": {
+            "type": "string",
+            "enum": [
+              "a"
+            ]
+          }
+        }
+      },
+      "status": "incompatible",
+      "why": "Calls using 'b' are rejected."
+    },
+    {
+      "name": "integer widened to number",
+      "before": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "integer"
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "number"
+          }
+        }
+      },
+      "status": "compatible",
+      "why": "Every integer is a number."
+    },
+    {
+      "name": "string narrowed to integer",
+      "before": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "string"
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "integer"
+          }
+        }
+      },
+      "status": "incompatible",
+      "why": "Strings rejected."
+    },
+    {
+      "name": "made nullable",
+      "before": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "string"
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "status": "compatible",
+      "why": "X -> anyOf[X, null]."
+    },
+    {
+      "name": "maximum tightened",
+      "before": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "integer",
+            "maximum": 100
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "integer",
+            "maximum": 50
+          }
+        }
+      },
+      "status": "incompatible",
+      "why": "51..100 rejected."
+    },
+    {
+      "name": "default changed",
+      "before": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "integer",
+            "default": 10
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "integer",
+            "default": 20
+          }
+        }
+      },
+      "status": "compatible",
+      "why": "Acceptance unchanged; behaviour changed (reported)."
+    },
+    {
+      "name": "array item schema changed",
+      "before": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "status": "incompatible",
+      "why": "String ids rejected."
+    },
+    {
+      "name": "nested object gained a required field",
+      "before": {
+        "type": "object",
+        "properties": {
+          "o": {
+            "type": "object",
+            "properties": {
+              "a": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "o": {
+            "type": "object",
+            "properties": {
+              "a": {
+                "type": "string"
+              },
+              "b": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "b"
+            ]
+          }
+        }
+      },
+      "status": "incompatible",
+      "why": "Nested requirement."
+    },
+    {
+      "name": "schema closed",
+      "before": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "status": "incompatible",
+      "why": "Extra keys rejected."
+    },
+    {
+      "name": "descriptions rewritten",
+      "before": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string",
+            "description": "x"
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string",
+            "description": "y"
+          }
+        }
+      },
+      "status": "equivalent",
+      "why": "Annotations only."
+    },
+    {
+      "name": "definition moved behind $ref",
+      "before": {
+        "type": "object",
+        "properties": {
+          "o": {
+            "type": "object",
+            "properties": {
+              "a": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "o": {
+            "$ref": "#/$defs/O"
+          }
+        },
+        "$defs": {
+          "O": {
+            "type": "object",
+            "properties": {
+              "a": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "status": "equivalent",
+      "why": "Same contract."
+    },
+    {
+      "name": "allOf introduced",
+      "before": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "required": [
+              "a"
+            ]
+          }
+        ]
+      },
+      "status": "unsupported",
+      "why": "StateGuard cannot represent allOf."
+    },
+    {
+      "name": "malformed required",
+      "before": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": "a"
+      },
+      "status": "invalid",
+      "why": "Not valid JSON Schema."
+    },
+    {
+      "name": "pattern added",
+      "before": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        }
+      },
+      "after": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string",
+            "pattern": "^[a-z]+$"
+          }
+        }
+      },
+      "status": "incompatible",
+      "why": "Cannot prove the pattern accepts everything."
+    }
+  ]
+}

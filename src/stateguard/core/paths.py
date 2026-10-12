@@ -23,7 +23,15 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["NOT_FOUND", "get_nested_value"]
+__all__ = [
+    "ELEMENT_OPEN",
+    "MAX_PAYLOAD_DEPTH",
+    "NOT_FOUND",
+    "addresses_array_element",
+    "element_path",
+    "get_nested_value",
+    "nests_deeper_than",
+]
 
 
 class _NotFound:
@@ -70,3 +78,57 @@ def get_nested_value(data: Any, path: str) -> Any:
             return NOT_FOUND
         current = current[part]
     return current
+
+
+#: Opens an array index in a violation path: ``files[0].path``.
+ELEMENT_OPEN = "["
+
+
+def element_path(array_path: str, index: int) -> str:
+    """The path of element *index* of the array at *array_path*: ``files[0]``."""
+    return f"{array_path}{ELEMENT_OPEN}{index}]"
+
+
+def addresses_array_element(path: str) -> bool:
+    """
+    Whether *path* points inside an array element (``files[0].path``).
+
+    Such paths are for *reporting*: the validator checks array elements
+    against their item contract and says where an element is wrong, but no
+    repair strategy addresses a path through a list, so the engine never
+    hands these violations to one. Property names containing ``[`` are
+    refused at extraction, so the marker is unambiguous.
+    """
+    return ELEMENT_OPEN in path
+
+
+#: Deepest payload the engine will walk. The same 100 that bounds schema
+#: resolution (``RefResolver``) and JSON-string parsing (``coerce``): far past
+#: any real tool call -- an MCP arguments object is two or three levels deep --
+#: and well inside the interpreter's recursion limit.
+MAX_PAYLOAD_DEPTH = 100
+
+
+def nests_deeper_than(value: Any, limit: int) -> bool:
+    """
+    Whether *value* contains objects or arrays nested more than *limit* deep.
+
+    Iterative, so it cannot itself overflow the stack it is protecting. The
+    payload arrives from a model -- or from whoever controls the client --
+    and ``json.loads`` happily produces nesting a few thousand levels deep,
+    which ``copy.deepcopy`` and every recursive walk then turn into an
+    unhandled ``RecursionError``.
+    """
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, dict):
+            children: Any = node.values()
+        elif isinstance(node, (list, tuple)):
+            children = node
+        else:
+            continue
+        if depth > limit:
+            return True
+        stack.extend((child, depth + 1) for child in children)
+    return False

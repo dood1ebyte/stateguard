@@ -126,6 +126,32 @@ class TestStrToInt:
         ops = strategy.propose([v], make_contract(), {"count": "5.0"})
         assert ops == []
 
+    @pytest.mark.parametrize("value", [5.0, -3.0, 0.0])
+    def test_integral_float_coerces_exactly(self, value: float) -> None:
+        """
+        JSON Schema counts ``5.0`` as an integer; refusing it reported a
+        payload the tool accepts as unrepairable.
+        """
+        v = _type_mismatch("count", FieldType.INTEGER, value)
+        ops = TypeCoercionStrategy().propose([v], make_contract(), {"count": value})
+        assert len(ops) == 1
+        assert ops[0].op_type is FieldOpType.COERCE
+        assert ops[0].evidence.value_preserved == pytest.approx(1.0)
+        assert ops[0].risk is RepairRisk.REVERSIBLE
+
+    @pytest.mark.parametrize("value", [5.5, float("nan"), float("inf"), float("-inf")])
+    def test_non_integral_float_does_not_coerce(self, value: float) -> None:
+        v = _type_mismatch("count", FieldType.INTEGER, value)
+        ops = TypeCoercionStrategy().propose([v], make_contract(), {"count": value})
+        assert ops == []
+
+    def test_integral_float_end_to_end_yields_an_int(self) -> None:
+        guard = ContractGuard.with_dict_schema()
+        result = guard.repair({"fields": [{"path": "count", "type": "integer"}]}, {"count": 5.0})
+        assert result.status is RepairStatus.SUCCESS
+        assert result.repaired_output == {"count": 5}
+        assert type(result.repaired_output["count"]) is int
+
     def test_negative_sign_alone_does_not_coerce(self) -> None:
         v = _type_mismatch("count", FieldType.INTEGER, "-")
         strategy = TypeCoercionStrategy()

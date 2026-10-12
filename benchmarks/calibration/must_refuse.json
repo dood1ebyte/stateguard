@@ -18,8 +18,7 @@
       },
       "expected_payload": {
         "created_at": "2026-08-16T10:00:00Z"
-      },
-      "known_gap": "Uncontested rename: with one missing field and one unexpected key there is no competitor, so margin is 1.0 and trust collapses to raw name similarity (0.752). See the Phase 7 findings -- the must-refuse ceiling (0.923) sits above the must-apply floor (0.809), so no single threshold on name similarity separates these."
+      }
     },
     {
       "name": "opposites_min_vs_max_price",
@@ -37,8 +36,7 @@
       },
       "expected_payload": {
         "min_price": 10.0
-      },
-      "known_gap": "Uncontested rename; jaro-winkler 0.867 against a must-apply floor of 0.809. Not separable by threshold."
+      }
     },
     {
       "name": "opposites_start_vs_end_date",
@@ -74,8 +72,7 @@
       },
       "expected_payload": {
         "first_name": "Arnav"
-      },
-      "known_gap": "Uncontested rename; jaro-winkler 0.826 against a must-apply floor of 0.809. Not separable by threshold."
+      }
     },
     {
       "name": "opposites_is_active_vs_is_archived",
@@ -93,8 +90,7 @@
       },
       "expected_payload": {
         "is_active": true
-      },
-      "known_gap": "Uncontested rename; jaro-winkler 0.923 -- the worst case in the corpus. Winkler's prefix bonus actively rewards the shared 'is_a' prefix that makes these two opposites look alike."
+      }
     },
     {
       "name": "opposites_sender_vs_receiver_id",
@@ -232,6 +228,24 @@
       },
       "expected_payload": {
         "count": "5.5"
+      }
+    },
+    {
+      "name": "value_fractional_float_to_int",
+      "description": "5.5 is not an integer under any reading; truncating or rounding it would invent a value the model did not send.",
+      "schema": {
+        "fields": [
+          {
+            "path": "count",
+            "type": "integer"
+          }
+        ]
+      },
+      "payload": {
+        "count": 5.5
+      },
+      "expected_payload": {
+        "count": 5.5
       }
     },
     {

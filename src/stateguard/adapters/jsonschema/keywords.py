@@ -79,19 +79,26 @@ REJECTED_KEYWORDS: dict[str, str] = {
     "unevaluatedItems": "depends on evaluation order this adapter does not model",
 }
 
-#: Understood, not representable, dropped with a warning.
-#: An exclusive bound is not an inclusive one -- rounding it would accept a
-#: value the schema forbids -- and there is no ``FieldConstraintType`` for it.
-DROPPED_KEYWORDS: dict[str, str] = {
-    "exclusiveMinimum": "no exclusive-bound constraint type exists",
-    "exclusiveMaximum": "no exclusive-bound constraint type exists",
-}
+#: Understood, not representable, dropped with a warning. Empty today: the
+#: exclusive bounds that used to live here are enforced now. Kept so a
+#: keyword that can only be honoured partially has somewhere to go that is
+#: louder than silence.
+DROPPED_KEYWORDS: dict[str, str] = {}
 
 #: Advisory or already consumed elsewhere. Listed explicitly so that an
 #: unrecognised keyword is still noticed rather than silently tolerated.
 IGNORED_KEYWORDS = frozenset(
     {
         "$comment",
+        # Annotations in 2020-12: they never change what an instance may be.
+        # "$anchor" only names a fragment (a "$ref" to it is refused by the
+        # resolver); the content* keywords are annotation-only unless a
+        # validator opts in; "example" is OpenAPI's descriptive keyword.
+        "$anchor",
+        "contentEncoding",
+        "contentMediaType",
+        "contentSchema",
+        "example",
         "$defs",
         "$id",
         "$schema",
@@ -109,6 +116,8 @@ IGNORED_KEYWORDS = frozenset(
         "const",
         "default",
         "enum",
+        "exclusiveMaximum",
+        "exclusiveMinimum",
         "items",
         "maxItems",
         "maxLength",
@@ -116,11 +125,13 @@ IGNORED_KEYWORDS = frozenset(
         "minItems",
         "minLength",
         "minimum",
+        "multipleOf",
         "oneOf",
         "pattern",
         "properties",
         "required",
         "type",
+        "uniqueItems",
     }
 )
 

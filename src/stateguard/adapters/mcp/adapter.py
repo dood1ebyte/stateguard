@@ -33,8 +33,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from stateguard.adapters.jsonschema.adapter import JSONSchemaAdapter
-from stateguard.adapters.jsonschema.errors import UnsupportedSchemaError
 from stateguard.adapters.mcp.cache import DEFAULT_CACHE_SIZE, SchemaCache
+from stateguard.adapters.mcp.errors import InvalidToolDefinitionError
 from stateguard.core.errors.results import ValidationResult
 from stateguard.core.interfaces.adapter import IContractAdapter
 from stateguard.core.models.contract import ContractSpec
@@ -87,7 +87,7 @@ def split_tool_definition(
     A bare schema yields a name of ``None``.
     """
     if not isinstance(schema, Mapping):
-        raise UnsupportedSchemaError(
+        raise InvalidToolDefinitionError(
             f"MCPToolAdapter expects an MCP tool definition or a JSON Schema "
             f"object (a dict), got {type(schema).__name__}."
         )
@@ -95,7 +95,7 @@ def split_tool_definition(
     present = [key for key in _SCHEMA_KEYS if key in schema]
 
     if len(present) == 2 and schema[INPUT_SCHEMA_KEY] != schema[SNAKE_CASE_KEY]:
-        raise UnsupportedSchemaError(
+        raise InvalidToolDefinitionError(
             f"Tool {_describe(schema)} carries both '{INPUT_SCHEMA_KEY}' and "
             f"'{SNAKE_CASE_KEY}', and they differ. They are two spellings of one "
             f"field, so there is no way to tell which the caller meant. Pass one."
@@ -105,7 +105,7 @@ def split_tool_definition(
         key = present[0]
         input_schema = schema[key]
         if not isinstance(input_schema, Mapping):
-            raise UnsupportedSchemaError(
+            raise InvalidToolDefinitionError(
                 f"Tool {_describe(schema)}: '{key}' must be a JSON Schema object, "
                 f"got {type(input_schema).__name__}."
             )
@@ -118,7 +118,7 @@ def split_tool_definition(
         # unrecognised keyword(s) ['name']``, which sends the reader looking
         # for a JSON Schema problem that is not there. The actual fault is a
         # tool definition whose ``inputSchema`` never arrived.
-        raise UnsupportedSchemaError(
+        raise InvalidToolDefinitionError(
             f"Tool {_describe(schema)} has no '{INPUT_SCHEMA_KEY}' "
             f"(or '{SNAKE_CASE_KEY}'). An MCP tool declares its parameters "
             f"there, so there is no contract to extract. Keys present: "
@@ -193,6 +193,23 @@ class MCPToolAdapter(IContractAdapter):
         if cached is not None:
             return cached
 
+        contract = self._inner.extract_contract(input_schema)
+        self._cache.put(tool_name, input_schema, contract)
+        return contract
+
+    def compile(self, schema: Any) -> ContractSpec:
+        """
+        Extract a fresh contract, bypassing the cache, then cache it.
+
+        ``extract_contract`` returns a cached contract when it has one, so
+        anything that only happens *during* extraction -- the
+        ``SchemaFeatureWarning`` s that say where validation is looser than
+        the schema -- happens once per schema per cache lifetime. A caller
+        that needs to observe those every time it learns of a tool
+        (``ToolRegistry`` does) compiles instead. Same result, same cache
+        entry afterwards.
+        """
+        tool_name, input_schema = split_tool_definition(schema)
         contract = self._inner.extract_contract(input_schema)
         self._cache.put(tool_name, input_schema, contract)
         return contract

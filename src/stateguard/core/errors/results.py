@@ -18,12 +18,15 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from stateguard.core.errors.operations import FieldOperation
 from stateguard.core.errors.violations import ContractViolation
 from stateguard.core.models.config import RepairMode
 from stateguard.logging.logger import RepairLogEntry
+
+if TYPE_CHECKING:
+    from stateguard.core.explain import FieldDecision
 
 __all__ = [
     "AmbiguousRepair",
@@ -178,6 +181,16 @@ class RepairAttempt:
     succeeded:
         ``True`` if revalidation after this attempt found no remaining
         ERROR-severity violations.
+    kept:
+        ``False`` when the engine discarded this attempt -- it made the
+        violation set worse, or returned to a state already seen this run --
+        and rolled back to the data it started from.  Its
+        ``applied_operations`` were really applied to the engine's working
+        copy, which is why they are recorded, but none of them reaches
+        ``repaired_output`` or ``proposed_output``.  Only ever the last
+        attempt.  Without this a discarded attempt was indistinguishable from
+        a kept one, and an audit reading ``applied_operations`` reported
+        repairs that are not in the payload.
     attempt_id:
         UUID4 string, auto-generated at construction.
     attempted_at:
@@ -198,6 +211,7 @@ class RepairAttempt:
     # Optional / auto-generated fields
     abstained_operations: list[FieldOperation] = field(default_factory=list)
     considered_strategies: list[str] = field(default_factory=list)
+    kept: bool = True
     attempt_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     attempted_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
@@ -314,6 +328,13 @@ class RepairResult:
     ----------------------
     ``is_success``, ``is_partial``, ``is_failed``, ``is_already_valid`` —
     boolean shorthands for the four ``RepairStatus`` values.
+
+    Reading it
+    ----------
+    ``field_decisions()`` answers "what happened to each field", ``explain()``
+    renders that as value-free text safe to log, and ``to_dict()`` is the
+    whole record as JSON-ready data.  All three are derived from the fields
+    above; see ``stateguard.core.explain``.
     """
 
     # Required
@@ -383,3 +404,37 @@ class RepairResult:
         candidates worth surfacing.
         """
         return bool(self.ambiguous)
+
+    # ------------------------------------------------------------------
+    # Reading the result
+    # ------------------------------------------------------------------
+
+    def field_decisions(self) -> list[FieldDecision]:
+        """
+        What happened to each field: repaired, held, discarded, or unresolved.
+
+        See ``stateguard.core.explain.field_decisions``.
+        """
+        from stateguard.core.explain import field_decisions  # noqa: PLC0415
+
+        return field_decisions(self)
+
+    def explain(self) -> str:
+        """
+        A short, deterministic, value-free explanation -- safe to log.
+
+        See ``stateguard.core.explain.explain_result``.
+        """
+        from stateguard.core.explain import explain_result  # noqa: PLC0415
+
+        return explain_result(self)
+
+    def to_dict(self) -> dict[str, Any]:
+        """
+        The complete record as JSON-ready data, payloads included.
+
+        See ``stateguard.core.explain.result_to_dict``.
+        """
+        from stateguard.core.explain import result_to_dict  # noqa: PLC0415
+
+        return result_to_dict(self)

@@ -28,6 +28,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from proxy import RepairingClient  # noqa: E402
 
+from stateguard import ContractGuard  # noqa: E402
+from stateguard.adapters.mcp import MCPAction  # noqa: E402
+from stateguard.core.models.config import GuardConfig, RepairMode  # noqa: E402
+
 SERVER = StdioServerParameters(
     command=sys.executable,
     args=[str(Path(__file__).parent / "server.py")],
@@ -59,6 +63,11 @@ CALLS: list[tuple[str, str, dict[str, Any]]] = [
         "search_places",
         {"query": "Chennai", "limit": 999},
     ),
+    (
+        "one city where two are expected -- found, but not trusted",
+        "compare_cities",
+        {"city": "Delhi"},
+    ),
 ]
 
 RULE = "=" * 78
@@ -81,27 +90,41 @@ async def without_stateguard() -> None:
             print(f"  {summarise(response)}")
 
 
-async def with_stateguard() -> None:
-    print(f"\n{RULE}\nWITH StateGuard -- the same calls through the repairing proxy\n{RULE}")
+async def with_stateguard(*, shadow: bool = False) -> None:
+    if shadow:
+        title = "SHADOW MODE -- observe only: every call reaches the server as sent"
+        guard = ContractGuard.with_mcp(config=GuardConfig(mode=RepairMode.SHADOW))
+    else:
+        title = "WITH StateGuard -- the same calls through the repairing proxy"
+        guard = ContractGuard.with_mcp()
+    print(f"\n{RULE}\n{title}\n{RULE}")
     async with Client(SERVER) as client:
-        proxy = RepairingClient(client, on_event=print)
+        proxy = RepairingClient(client, guard=guard, on_event=print)
         await proxy.load_tools()
         for label, tool, arguments in CALLS:
             print(f"\n{label}\n  sent by agent: {arguments}")
             call = await proxy.call_tool(tool, arguments)
             if call.sent is not None and call.sent != arguments:
                 print(f"  sent to server: {call.sent}")
+            if call.outcome.action is MCPAction.ESCALATE:
+                for item in call.outcome.result.ambiguous:
+                    print(f"  held: {item.target_path} -- {item.reason}")
             print(f"  {summarise(call.response)}")
 
 
 async def main() -> None:
     await without_stateguard()
     await with_stateguard()
+    await with_stateguard(shadow=True)
     print(
         f"\n{RULE}\n"
         "Three calls that the server rejected now succeed. The fourth is still\n"
         "refused -- 'limit: 999' violates the schema's maximum and there is no\n"
-        "honest repair for it, so StateGuard does not invent one.\n"
+        "honest repair for it, so StateGuard does not invent one. The fifth has\n"
+        "a repair, but 'city' fits 'city_a' and 'city_b' equally well, so it is\n"
+        "escalated for the agent to restate rather than guessed. In shadow mode\n"
+        "every call reaches the server exactly as sent, and StateGuard only says\n"
+        "what it would have done.\n"
         f"{RULE}"
     )
 

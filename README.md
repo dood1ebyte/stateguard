@@ -40,25 +40,174 @@ result = guard.repair(Weather, {"temp_celsius": 31.5, "humidity": 80})
 An MCP tool declares its parameters as JSON Schema, and models drift against
 it constantly — a renamed parameter, a number sent as a string, an enum in
 the wrong case. StateGuard repairs the arguments at the boundary; the server
-is unmodified and unaware, and so is the agent.
+is unmodified and unaware, and so is the agent. No extra dependencies — a
+tool definition arriving over the wire is just a `dict`.
 
 ```python
 from stateguard import ContractGuard
-from stateguard.adapters.mcp import outcome_for
+from stateguard.adapters.mcp import MCPAction, repair_tool_call
+
+tool = {  # one entry from the server's tools/list
+    "name": "get_forecast",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "location": {"type": "string"},
+            "days": {"type": "integer", "minimum": 1, "maximum": 14},
+            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"], "default": "celsius"},
+        },
+        "required": ["location", "days"],
+    },
+}
 
 guard = ContractGuard.with_mcp()
+outcome = repair_tool_call(guard, tool, {"loc": "Mumbai", "days": "5"})
 
-result = guard.repair(tool, {"loc": "Mumbai", "days": "5"})
-outcome = outcome_for(result, {"loc": "Mumbai", "days": "5"})
-# outcome.action    → MCPAction.FORWARD
-# outcome.arguments → {"location": "Mumbai", "days": 5, "unit": "celsius"}
+outcome.action      # MCPAction.FORWARD
+outcome.arguments   # {"location": "Mumbai", "days": 5, "unit": "celsius"}
+if outcome.should_forward:
+    ...             # send outcome.arguments to the server
 ```
 
-`outcome.action` is one of `FORWARD`, `HOLD` (shadow mode — forward what the
-model sent, log what would have changed), `ESCALATE` (a repair was found but
-not trusted enough to apply unsupervised; the candidates come with it), or
-`REFUSE`. Requires no extra dependencies — a tool definition arriving over
-the wire is just a `dict`.
+### What the proxy should do
+
+`outcome.action` is one of four, and `outcome.arguments` is what to send
+whenever `outcome.should_forward` is true:
+
+| Action | When | `arguments` |
+|---|---|---|
+| `FORWARD` | Valid as sent, or repaired with enough evidence | the (repaired) arguments |
+| `HOLD` | Shadow mode only: auto mode would have done something else (repaired, escalated or refused) | the arguments **as received**; `outcome.auto_action` says what auto would do, `outcome.preview` holds its repair |
+| `ESCALATE` | Auto mode only: a repair was found but not trusted enough to apply unsupervised | `None` — re-prompt with the candidates, or ask a person |
+| `REFUSE` | Auto mode only: no safe repair exists (missing required value, out of range, unknown enum value, …) | `None` — the server would reject it anyway |
+
+Shadow mode never blocks a call: its outcomes are only ever `FORWARD` or
+`HOLD`. `outcome.auto_action` is what auto mode does with the same call, in
+either mode, and `outcome.proposed_arguments` the payload it would send.
+
+A tool whose schema StateGuard cannot read (`allOf`, `not`, a remote `$ref`,
+…) gets no outcome at all: `repair_tool_call` raises `JSONSchemaError` (a
+`ValueError`). Whether such a tool is blocked or passed through unvalidated
+is your policy, decided once per tool — StateGuard will not pretend to have
+checked it.
+
+### What happened to this call?
+
+`outcome.explain()` answers that field by field, from the evidence the
+engine recorded. It contains no payload values, so it is safe to log:
+
+```text
+FORWARD: Repaired 2 field(s) before forwarding.
+status: success (auto)
+  repaired    location <- loc  [rename, trust 0.85, INFERRED]
+              Fuzzy name match: 'loc' -> 'location'.
+                - jaro-winkler similarity 0.854
+  repaired    days  [coerce, trust 1.00, REVERSIBLE]
+              Coerce str at 'days' to integer.
+                - str -> int round-trips at 1.00
+```
+
+When the evidence is not decisive, nothing is guessed:
+
+```text
+ESCALATE: A repair was found but not trusted enough to apply unsupervised (1 ambiguous field(s): 'account_id'). Not forwarded.
+status: ambiguous (auto) -- no payload produced
+  held        account_id <- account  [rename, trust 0.70, INFERRED]
+              trust 0.70 is below the INFERRED threshold of 0.75
+              candidate rename <- account  trust 0.70, INFERRED
+                - jaro-winkler similarity 0.940
+                - closest alternative 'account_name' (another field also wanted this key)
+  unresolved  account_name
+              missing_required_field (error)
+  unresolved  account
+              unexpected_field (warning)
+```
+
+`outcome.to_dict()` is the same record as JSON-ready data — original input,
+every decision with its trust and evidence, every attempt, and the payloads —
+for an audit store. `outcome.result.field_decisions()` is the typed form.
+
+### Shadow mode
+
+Run with `ContractGuard.with_mcp(config=GuardConfig(mode=RepairMode.SHADOW))`
+(`from stateguard.core.models.config import GuardConfig, RepairMode`)
+before turning repair on. Every call is forwarded exactly as the model sent
+it — including calls auto mode would refuse or escalate. A call auto mode
+would have handled differently comes back as `HOLD`: `outcome.auto_action`
+records the decision, and `outcome.preview` holds precisely what auto mode
+would send when that decision was a repair.
+
+### Try it on your own tools
+
+```bash
+stateguard check --tool tool.json --payload arguments.json          # explanation
+stateguard check --tool tool.json --payload arguments.json --json   # full record
+```
+
+`tool.json` is a tool definition from `tools/list` (or a bare
+`inputSchema`); `arguments.json` is a call's `arguments`. Add `--shadow` to
+see the `HOLD` view.
+
+### What it deliberately does not repair
+
+- **Anything it would have to invent.** A missing required parameter with no
+  declared default, a value outside `minimum`/`maximum`, an enum value that
+  is not a re-spelling of a member, a word where a number is declared — all
+  refused.
+- **A scalar where a string is declared** (`42` for `"42"`). That is a
+  type disagreement, not an encoding slip, and is refused.
+- **Drift on an optional parameter.** `maxLength` for an optional
+  `max_length` is not renamed; the key is forwarded as sent and the declared
+  default fills `max_length`. It is listed as `unresolved` in the
+  explanation. A missed repair, never a wrong one.
+- **A different word, even when the names look alike.** `max_price` is not
+  renamed to `min_price`, nor `updated_after` to `created_after`: the names
+  share a word but swap another, which is a different field, not a typo. At
+  most the call escalates with the candidate. Abbreviations (`usr_id`,
+  `src_tz`) and typos (`recieve_date`) still repair.
+- **Inside array elements.** `files[0].path` is validated, and a violation
+  there is refused, not repaired.
+- **Tool results.** Only arguments are repaired, not `outputSchema` /
+  `structuredContent`.
+
+### Tracking a server's tools
+
+In a running proxy the tool definitions are state: learned from
+`tools/list`, changed by later listings. `ToolRegistry` holds them, says
+what changed, and validates each call against the *current* definition:
+
+```python
+from stateguard.adapters.mcp import ToolRegistry
+
+registry = ToolRegistry()
+report = registry.sync(listing["tools"], server="github")   # atomic; returns a SyncReport
+outcome = registry.process_call("search_issues", arguments, server="github")
+```
+
+```text
+tools/list (github): 0 added, 0 removed, 1 updated, 1 unchanged; 1 breaking
+  UPDATED   github/search_issues  BREAKING
+    INCOMPATIBLE
+      ! constraint_changed             limit: 'maximum' tightened: 100 -> 50
+      ! field_added                    repo: new required parameter: calls that omit it are now rejected
+      ~ enum_changed                   state: added ['all']
+```
+
+`COMPATIBLE` is a guarantee — every call the old schema accepted, the new
+one accepts — and anything not provably safe is reported as breaking. A
+tool whose new schema StateGuard cannot read becomes unusable rather than
+silently keeping the old one. The same diff is available on its own as
+`diff_schemas`, and from the command line as `stateguard diff`.
+
+For a proxy that handles raw JSON-RPC, `ToolCallRequest`,
+`forward_message` and `refusal_response` change only `params.arguments`
+and preserve the request `id` and `_meta`. `examples/mcp/stdio_proxy.py`
+puts all of it together as an SDK-free stdio relay.
+
+**The full guide is [`docs/mcp-adapter.md`](docs/mcp-adapter.md)** —
+outcome truth table, registry, schema changes, the JSON-RPC boundary, the
+bounds on hostile input, and what StateGuard deliberately does not do. How
+the layers fit is in [`docs/mcp-architecture.md`](docs/mcp-architecture.md).
 
 A runnable before/after demo, over real MCP stdio, is in
 [`examples/mcp/`](examples/mcp/README.md). The supported JSON Schema subset,
@@ -82,7 +231,8 @@ pip install "sguard[pydantic]"
 > PowerShell, and `cmd.exe` alike.
 
 The core package (`pip install sguard`) has **zero runtime dependencies**.
-Pydantic is an optional extra — the only adapter currently shipped.
+Pydantic is an optional extra — the only adapter that needs a dependency;
+the JSON Schema and MCP adapters use the standard library alone.
 
 ## Command-line interface
 
@@ -92,15 +242,25 @@ Validate and repair a JSON payload against a contract without writing any Python
 # Against a Pydantic model
 stateguard check --model mypackage.models:Weather --payload payload.json
 
-# Against a plain JSON schema (no pydantic required)
+# Against a StateGuard schema file (no pydantic required)
 stateguard check --schema contract.json --payload payload.json
+
+# Against an MCP tool definition: what a repairing proxy would do with the call
+stateguard check --tool tool.json --payload arguments.json
 
 # Machine-readable output, for piping into other tools
 stateguard check --schema contract.json --payload payload.json --json
+
+# Two versions of a tool list (or one tool, or a bare schema): what could break?
+stateguard diff tools-v1.json tools-v2.json        # exit 1 if anything is breaking
+
+# Replay recorded calls against a tool list (add --shadow for the rollout view)
+stateguard replay --tools tools.json --calls calls.jsonl
 ```
 
-Exit codes: `0` = success/already valid, `1` = partially repaired, `2` =
-failed (or a usage error). Run `stateguard check --help` for the full flag
+Exit codes for `check`: `0` = success/already valid, `1` = partially
+repaired, `2` = failed (or a usage error). `diff` exits `1` when a change is
+breaking; `replay` exits `0`, or `2` when its input cannot be read. Run `stateguard check --help` for the full flag
 reference, including `--strict`, `--max-attempts`, and
 `--confidence-threshold`.
 

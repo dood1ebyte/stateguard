@@ -46,6 +46,7 @@ from dataclasses import replace
 from typing import Any
 
 from stateguard.adapters.jsonschema.errors import (
+    MalformedSchemaError,
     SchemaFeatureWarning,
     UnsupportedSchemaError,
 )
@@ -62,6 +63,13 @@ from stateguard.core.models.field_types import (
 from stateguard.core.validator import ContractValidator
 
 __all__ = ["JSONSchemaExtractor"]
+
+#: Draft 4's boolean exclusive flags, by the inclusive keyword they modify.
+_DRAFT4_EXCLUSIVE_BY = {"minimum": "exclusiveMinimum", "maximum": "exclusiveMaximum"}
+_EXCLUSIVE_OF = {
+    FieldConstraintType.MINIMUM: FieldConstraintType.EXCLUSIVE_MINIMUM,
+    FieldConstraintType.MAXIMUM: FieldConstraintType.EXCLUSIVE_MAXIMUM,
+}
 
 
 class JSONSchemaExtractor:
@@ -84,7 +92,7 @@ class JSONSchemaExtractor:
         fields, so a root of any other type has nothing to map.
         """
         if not isinstance(schema, Mapping):
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"A JSON Schema must be an object, got {type(schema).__name__}."
             )
 
@@ -120,9 +128,11 @@ class JSONSchemaExtractor:
                     f"{where}: expected an object schema, got type {declared!r}."
                 )
 
-        properties = schema.get("properties") or {}
+        # ``or {}`` here used to turn a malformed ``properties: []`` into "no
+        # properties" -- an empty list is falsy -- and accept it silently.
+        properties = schema.get("properties", {})
         if not isinstance(properties, Mapping):
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"{where}: 'properties' must be an object, got {type(properties).__name__}."
             )
 
@@ -173,7 +183,7 @@ class JSONSchemaExtractor:
             )
             return False
 
-        raise UnsupportedSchemaError(
+        raise MalformedSchemaError(
             f"{where}: 'additionalProperties' must be a boolean or a schema object, "
             f"got {type(value).__name__}: {value!r}"
         )
@@ -225,13 +235,13 @@ class JSONSchemaExtractor:
         if required is None:
             return frozenset()
         if not isinstance(required, Sequence) or isinstance(required, (str, bytes)):
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"{where}: 'required' must be a list, got {type(required).__name__}."
             )
 
         for name in required:
             if not isinstance(name, str):
-                raise UnsupportedSchemaError(
+                raise MalformedSchemaError(
                     f"{where}: 'required' must contain strings, got "
                     f"{type(name).__name__}: {name!r}. A property name is a string; "
                     f"coercing this one would invent a field the schema never declared."
@@ -250,6 +260,8 @@ class JSONSchemaExtractor:
         path = f"{prefix}.{name}" if prefix else name
         self._check_property_name(name, path)
 
+        if subschema is True:
+            subschema = {}  # the boolean schema `true`: any value
         if not isinstance(subschema, Mapping):
             raise UnsupportedSchemaError(
                 f"Field '{path}': expected a schema object, "
@@ -280,6 +292,10 @@ class JSONSchemaExtractor:
                 else:
                     screen_keywords(effective, path)
 
+                item_spec = None
+                if mapped.field_type is FieldType.ARRAY and mapped.item_type is FieldType.OBJECT:
+                    item_spec = self._item_spec(effective, resolver, path)
+
                 spec = FieldSpec(
                     path=name,
                     field_type=mapped.field_type,
@@ -289,9 +305,30 @@ class JSONSchemaExtractor:
                     item_type=mapped.item_type,
                     nested_spec=nested_spec,
                     union_members=mapped.union_members,
+                    item_spec=item_spec,
                 )
                 spec.default = self._screened_default(spec, path)
                 return spec
+
+    def _item_spec(
+        self, schema: Mapping[str, Any], resolver: RefResolver, path: str
+    ) -> ContractSpec | None:
+        """
+        The contract each element of an array of objects must satisfy.
+
+        Without it, ``{"files": [{"path": 1}]}`` against items requiring a
+        string ``path`` was reported as matching the schema: ``item_type``
+        says "object" and nothing more, so the element's contents were never
+        looked at. ``None`` when the element schema declares no properties
+        and requires nothing -- there is nothing to check beyond "object".
+        """
+        items = schema.get("items")
+        if not isinstance(items, Mapping):
+            return None
+        with resolver.resolved(items) as target:
+            if not target.get("properties") and not target.get("required"):
+                return None
+            return self._spec(target, resolver, f"{path}[]")
 
     def _screened_default(self, spec: FieldSpec, path: str) -> Any:
         """
@@ -354,7 +391,7 @@ class JSONSchemaExtractor:
         the failure mode that damages trust most (§8).
         """
         if not isinstance(name, str):
-            raise UnsupportedSchemaError(
+            raise MalformedSchemaError(
                 f"Property names must be strings, got {type(name).__name__}: {name!r}"
             )
         if "." in name:
@@ -366,6 +403,64 @@ class JSONSchemaExtractor:
             )
         if not name:
             raise UnsupportedSchemaError("Property names must not be empty.")
+        if "[" in name or "]" in name:
+            raise UnsupportedSchemaError(
+                f"Property name {name!r} contains '[' or ']', which StateGuard uses to "
+                f"address array elements in a field path ('files[0].path'), so a "
+                f"violation reported for it could not be told apart from one inside "
+                f"an array."
+            )
+
+    @staticmethod
+    def _exclusive_bounds(schema: Mapping[str, Any], path: str) -> list[FieldConstraint]:
+        """
+        ``exclusiveMinimum`` / ``exclusiveMaximum`` in their numeric form.
+
+        These used to be dropped with a warning -- there was no constraint
+        type for them -- and ``mcp-server-fetch`` really uses one: its
+        ``max_length`` accepted ``0`` through StateGuard and was rejected by
+        the server. The boolean draft-4 form is handled where the inclusive
+        bound it modifies is read; ``false`` means "inclusive", and adds
+        nothing here.
+        """
+        constraints: list[FieldConstraint] = []
+        for keyword, constraint_type in (
+            ("exclusiveMinimum", FieldConstraintType.EXCLUSIVE_MINIMUM),
+            ("exclusiveMaximum", FieldConstraintType.EXCLUSIVE_MAXIMUM),
+        ):
+            if keyword not in schema:
+                continue
+            bound = schema[keyword]
+            if isinstance(bound, bool):
+                continue  # draft-4 modifier, applied to minimum/maximum
+            if not isinstance(bound, (int, float)):
+                raise MalformedSchemaError(
+                    f"Field '{path}': '{keyword}' must be a number, got "
+                    f"{type(bound).__name__}: {bound!r}"
+                )
+            constraints.append(FieldConstraint(constraint_type, bound))
+        return constraints
+
+    @staticmethod
+    def _multiple_and_unique(schema: Mapping[str, Any], path: str) -> list[FieldConstraint]:
+        """``multipleOf`` (a number > 0) and ``uniqueItems`` (a boolean)."""
+        constraints: list[FieldConstraint] = []
+        if "multipleOf" in schema:
+            factor = schema["multipleOf"]
+            if isinstance(factor, bool) or not isinstance(factor, (int, float)) or factor <= 0:
+                raise MalformedSchemaError(
+                    f"Field '{path}': 'multipleOf' must be a number greater than 0, got {factor!r}"
+                )
+            constraints.append(FieldConstraint(FieldConstraintType.MULTIPLE_OF, factor))
+        if "uniqueItems" in schema:
+            unique = schema["uniqueItems"]
+            if not isinstance(unique, bool):
+                raise MalformedSchemaError(
+                    f"Field '{path}': 'uniqueItems' must be a boolean, got {unique!r}"
+                )
+            if unique:
+                constraints.append(FieldConstraint(FieldConstraintType.UNIQUE_ITEMS, True))
+        return constraints
 
     @staticmethod
     def _default(schema: Mapping[str, Any]) -> Any:
@@ -416,8 +511,14 @@ class JSONSchemaExtractor:
                     # The only keyword whose value gets *executed*, and it
                     # comes from an untrusted schema. See patterns.py.
                     bound = screen_pattern(bound, path)
+                elif schema.get(_DRAFT4_EXCLUSIVE_BY.get(keyword, "")) is True:
+                    # Draft 4 spelled an exclusive bound as a boolean beside
+                    # the inclusive one; the bound is exclusive, not both.
+                    constraint_type = _EXCLUSIVE_OF[constraint_type]
                 constraints.append(FieldConstraint(constraint_type, bound))
 
+        constraints.extend(self._exclusive_bounds(schema, path))
+        constraints.extend(self._multiple_and_unique(schema, path))
         warn_dropped_keywords(schema, path)
 
         if mapped.enum_values is not None:

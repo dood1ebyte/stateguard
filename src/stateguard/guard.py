@@ -152,7 +152,7 @@ class ContractGuard:
         Construct a ``ContractGuard`` using ``PydanticAdapter``.
 
         Requires the ``pydantic`` extra to be installed
-        (``pip install stateguard[pydantic]``).
+        (``pip install "sguard[pydantic]"``).
 
         Raises
         ------
@@ -160,11 +160,18 @@ class ContractGuard:
             If ``pydantic`` is not installed, with installation guidance.
         """
         try:
+            # ``pydantic`` itself is checked here, not left to the adapter:
+            # the adapter imports it lazily, so without this the guard was
+            # built happily and the first ``repair()`` died with a bare
+            # ``ModuleNotFoundError`` -- the error this method promises to
+            # replace with installation guidance.
+            import pydantic  # noqa: F401, PLC0415
+
             from stateguard.adapters.pydantic import PydanticAdapter  # noqa: PLC0415
         except ImportError as exc:
             raise ImportError(
                 "ContractGuard.with_pydantic() requires pydantic to be "
-                "installed. Install it with: pip install stateguard[pydantic]"
+                'installed. Install it with: pip install "sguard[pydantic]"'
             ) from exc
 
         return cls(
@@ -302,6 +309,16 @@ class ContractGuard:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    @property
+    def adapter(self) -> IContractAdapter:
+        """The adapter this guard translates schemas with. Read-only."""
+        return self._adapter
+
+    @property
+    def config(self) -> GuardConfig:
+        """The configuration this guard was built with. Read-only."""
+        return self._config
 
     def repair(self, schema: Any, data: Any) -> RepairResult:
         """

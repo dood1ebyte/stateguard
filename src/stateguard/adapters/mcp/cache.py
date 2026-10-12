@@ -37,13 +37,13 @@ eviction keeps the working set -- the handful of tools actually being called
 
 from __future__ import annotations
 
-import hashlib
-import json
 import threading
 from collections import OrderedDict
 from collections.abc import Mapping
 from typing import Any
 
+from stateguard.adapters.jsonschema.errors import JSONSchemaError
+from stateguard.adapters.jsonschema.identity import document_fingerprint
 from stateguard.core.models.contract import ContractSpec
 
 __all__ = ["DEFAULT_CACHE_SIZE", "SchemaCache"]
@@ -119,6 +119,14 @@ class SchemaCache:
         """
         Build the cache key, or ``None`` if *schema* cannot be hashed.
 
+        The schema half is ``document_fingerprint`` -- the same identity the
+        registry and change detection use, so "same document" means one
+        thing everywhere. Document rather than contract identity on purpose:
+        two documents that differ only in a ``description`` normalise alike,
+        but ``ContractSpec.source_ref`` points back at the document, and
+        handing one tool the other's document would be wrong in a way no
+        test of the contract would see.
+
         A schema that arrived as JSON always serialises. One built in Python
         might hold something that does not, and a cache miss is a much
         better answer there than an exception thrown from inside what the
@@ -136,7 +144,6 @@ class SchemaCache:
         to the extractor, which refuses it in its own vocabulary.
         """
         try:
-            canonical = json.dumps(schema, sort_keys=True, separators=(",", ":"))
-        except (TypeError, ValueError, RecursionError):
+            return tool_name, document_fingerprint(schema)
+        except JSONSchemaError:
             return None
-        return tool_name, hashlib.sha256(canonical.encode("utf-8")).hexdigest()

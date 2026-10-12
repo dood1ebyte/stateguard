@@ -102,8 +102,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # ``mcp`` is here so tests/examples/test_mcp_demo.py runs: it is the
+      # only test that drives the documented proxy over real MCP stdio, and
+      # it skips itself without the SDK. ``stateguard.adapters.mcp`` itself
+      # must not need it -- the isolation job checks that with core alone.
       - name: Install all deps
-        run: pip install -e ".[pydantic,dev]"
+        run: pip install -e ".[pydantic,mcp,dev]"
 
       - name: Run unit + integration tests with coverage
         run: |
@@ -123,9 +127,31 @@ jobs:
           echo '{"fields": [{"path": "x", "type": "string"}]}' > /tmp/schema.json
           echo '{"x": "hello"}' > /tmp/payload.json
           stateguard check --schema /tmp/schema.json --payload /tmp/payload.json
+          echo '{"name": "t", "inputSchema": {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]}}' > /tmp/tool.json
+          echo '{"n": "5"}' > /tmp/arguments.json
+          stateguard check --tool /tmp/tool.json --payload /tmp/arguments.json
+          echo '{"tools": [{"name": "t", "inputSchema": {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]}}]}' > /tmp/tools.json
+          echo '{"name": "t", "arguments": {"n": "5"}}' > /tmp/calls.jsonl
+          stateguard replay --tools /tmp/tools.json --calls /tmp/calls.jsonl
+          stateguard diff /tmp/tools.json /tmp/tools.json
 
       - name: Benchmark harness smoke test
         run: python benchmarks/runner.py --no-write
+
+      - name: MCP adapter benchmark smoke test
+        run: python benchmarks/mcp_bench.py --repeat 1
+
+      - name: Runtime failure measurement (synthetic, quick)
+        run: python benchmarks/runtime/measure.py --per-fault 1
+
+      - name: Session recovery workload (synthetic, quick)
+        run: python benchmarks/runtime/recovery.py --per-type 1
+
+      - name: Record/replay measurement (fault-injection corpus, quick)
+        run: python benchmarks/runtime/replay.py --no-determinism --overhead-runs 0
+
+      - name: Mid-restart race regression (T14, fault injection)
+        run: python benchmarks/runtime/race.py --runs 5
 
       # Gates on regressions and on stale known_gap markers only -- a
       # documented gap failing is the corpus doing its job, not CI breaking.

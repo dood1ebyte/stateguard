@@ -117,6 +117,10 @@ class TestFieldConstraintType:
         expected = {
             "minimum",
             "maximum",
+            "exclusive_minimum",
+            "exclusive_maximum",
+            "multiple_of",
+            "unique_items",
             "min_length",
             "max_length",
             "pattern",
@@ -126,7 +130,7 @@ class TestFieldConstraintType:
         assert {fct.value for fct in FieldConstraintType} == expected
 
     def test_member_count(self) -> None:
-        assert len(FieldConstraintType) == 7
+        assert len(FieldConstraintType) == 11
 
     def test_string_equality_minimum(self) -> None:
         assert FieldConstraintType.MINIMUM == "minimum"

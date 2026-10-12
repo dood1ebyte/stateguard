@@ -25,6 +25,7 @@ import pytest
 from stateguard import ContractGuard
 from stateguard.adapters.jsonschema.errors import JSONSchemaError, SchemaReferenceError
 from stateguard.adapters.mcp import MCPToolAdapter, SchemaCache
+from stateguard.adapters.jsonschema import identity as identity_module
 from stateguard.adapters.mcp import cache as cache_module
 from stateguard.core.models.contract import ContractSpec
 from stateguard.core.models.field_types import FieldType
@@ -249,7 +250,9 @@ class TestSchemaTooDeepToKey:
         def too_deep(*_args: Any, **_kwargs: Any) -> str:
             raise RecursionError("maximum recursion depth exceeded while encoding a JSON object")
 
-        monkeypatch.setattr(cache_module.json, "dumps", too_deep)
+        # The key is ``document_fingerprint``, which serialises in the identity
+        # module; the RecursionError has to come from there.
+        monkeypatch.setattr(identity_module.json, "dumps", too_deep)
 
         cache = SchemaCache()
         schema = {"type": "object", "properties": {}}

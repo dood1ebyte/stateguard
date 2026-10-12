@@ -11,6 +11,8 @@ top-level API.
 
 from __future__ import annotations
 
+import pytest
+
 import stateguard
 
 
@@ -57,3 +59,48 @@ class TestPublicExports:
     def test_version_exported(self) -> None:
         assert hasattr(stateguard, "__version__")
         assert isinstance(stateguard.__version__, str)
+
+
+class TestPackageMetadata:
+    """
+    The distribution is ``sguard``; the import package is ``stateguard``.
+
+    Those two names differing is ordinary, but it made it easy to write the
+    import name where the distribution name belongs -- and ``stateguard`` on
+    PyPI is an unrelated project, so every such slip installs someone else's
+    code. These pin the places that slip has already happened once.
+    """
+
+    @staticmethod
+    def _pyproject() -> dict[str, object]:
+        import tomllib
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+
+    def test_the_version_is_declared_once(self) -> None:
+        project = self._pyproject()["project"]
+        assert isinstance(project, dict)
+        assert stateguard.__version__ == project["version"]
+
+    def test_the_cli_reports_the_package_version(self, capsys: pytest.CaptureFixture[str]) -> None:
+
+        from stateguard.cli import main
+
+        with pytest.raises(SystemExit):
+            main(["--version"])
+        assert capsys.readouterr().out.strip() == f"stateguard {stateguard.__version__}"
+
+    def test_self_referencing_extras_name_this_distribution(self) -> None:
+        project = self._pyproject()["project"]
+        assert isinstance(project, dict)
+        name = project["name"]
+        for extra, requirements in project["optional-dependencies"].items():
+            for requirement in requirements:
+                if requirement.split("[", 1)[0] in ("stateguard", name):
+                    assert requirement.startswith(f"{name}["), (
+                        f"extra {extra!r} requires {requirement!r}, which names a "
+                        f"different distribution than this one ({name!r})"
+                    )

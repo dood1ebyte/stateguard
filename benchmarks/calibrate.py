@@ -126,9 +126,7 @@ def identical(left: Any, right: Any) -> bool:
     if type(left) is not type(right):
         return False
     if isinstance(left, dict):
-        return left.keys() == right.keys() and all(
-            identical(left[k], right[k]) for k in left
-        )
+        return left.keys() == right.keys() and all(identical(left[k], right[k]) for k in left)
     if isinstance(left, list):
         return len(left) == len(right) and all(
             identical(a, b) for a, b in zip(left, right, strict=True)

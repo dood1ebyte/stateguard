@@ -21,6 +21,6 @@ def __getattr__(name: str) -> Any:
         except ImportError as exc:
             raise ImportError(
                 "PydanticAdapter requires pydantic to be installed. "
-                'Install it with: pip install "stateguard[pydantic]"'
+                'Install it with: pip install "sguard[pydantic]"'
             ) from exc
     raise AttributeError(f"module 'stateguard.adapters.pydantic' has no attribute {name!r}")

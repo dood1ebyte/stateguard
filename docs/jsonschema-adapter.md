@@ -128,7 +128,12 @@ must not do.
 | `minLength` / `maxLength` | `MIN_LENGTH` / `MAX_LENGTH` |
 | `minItems` / `maxItems` | `MIN_LENGTH` / `MAX_LENGTH` (the validator sizes lists too) |
 | `pattern` | `PATTERN`, after a ReDoS screen — see [Patterns](#patterns) |
+| `exclusiveMinimum` / `exclusiveMaximum` | `EXCLUSIVE_MINIMUM` / `EXCLUSIVE_MAXIMUM` (numeric, or draft 4's boolean form) |
+| `multipleOf` | `MULTIPLE_OF` (a number > 0; exact for integers) |
+| `uniqueItems: true` | `UNIQUE_ITEMS` (JSON equality: `1` equals `1.0`, `true` does not equal `1`) |
 | `additionalProperties: false` | `ContractSpec.strict_mode = True` |
+| boolean schema `true` | `ANY` (accepts every instance, like `{}`) |
+| `allOf: [X]` beside annotation-only siblings | exactly `X`, siblings (`description`, `default`, ...) on top |
 
 Every non-nullable field also picks up a `NOT_NULL` constraint (except those
 typed `ANY` or `null`, which accept it legitimately). The Pydantic
@@ -140,7 +145,10 @@ which JSON Schema plainly forbids.
 ### Ignored, harmlessly
 
 `$comment`, `$schema`, `deprecated`, `description`, `examples`, `format`,
-`readOnly`, `title`, `writeOnly`, and any keyword prefixed `x-`.
+`readOnly`, `title`, `writeOnly`, any keyword prefixed `x-`, and the 2020-12
+annotations `$anchor`, `contentEncoding`, `contentMediaType` and
+`contentSchema`, plus OpenAPI's descriptive `example`. None of these can
+change what an instance may be.
 
 `format` is advisory in practice and ignored without a warning. `description`
 is ignored for now and is the obvious signal for semantic repair later.
@@ -154,7 +162,7 @@ truth nothing downstream would catch it.
 
 | Keyword | Why |
 |---|---|
-| `allOf` | conjunction of subschemas has no single contract shape |
+| `allOf` (two or more branches, or beside an asserting sibling) | conjunction of subschemas has no single contract shape |
 | `not` | negation cannot be expressed as a field contract |
 | `if` / `then` / `else` | conditional subschemas have no static contract shape |
 | `dependentSchemas` / `dependentRequired` | conditional requirements, same reason |
@@ -166,6 +174,14 @@ truth nothing downstream would catch it.
 anticipated is noticed rather than silently tolerated. Use an `x-` prefix for
 extensions.
 
+This is stricter than JSON Schema 2020-12, which says unknown keywords
+SHOULD be treated as annotations (core §4.3.1). The strictness is deliberate.
+Some keywords this adapter does not know *loosen* validation. OpenAPI's
+`nullable: true` is the common one. Ignoring it would make StateGuard refuse
+a `null` the server accepts. A refused schema is not a blocked call: the
+relay forwards calls to such tools unvalidated. Keywords that provably
+cannot assert are read as annotations (see above).
+
 The screen runs on every subschema *after* `$ref` resolution — including
 inside `anyOf`/`oneOf` branches and inside array `items`, which two walkers
 reach and only one used to screen.
@@ -176,7 +192,8 @@ Also refused:
   Following one would turn schema extraction into an outbound request to a URL
   chosen by whoever wrote the schema. This is not a limitation to be lifted
   later; it is the correct behaviour.
-- **`$anchor` / plain-name fragments.** Use a JSON Pointer (`#/$defs/Name`).
+- **A `$ref` to a plain-name fragment** (`#name`). `$anchor` itself is read as
+  an annotation; refer with a JSON Pointer (`#/$defs/Name`).
 - **`$id` on a subschema.** It rebases reference resolution; this adapter
   resolves against the document root only, so honouring it is impossible and
   ignoring it would silently resolve to the wrong schema. Root-level `$id` is
@@ -191,7 +208,8 @@ Also refused:
 - **Property names containing `.`**, which StateGuard's dot-notation paths
   cannot tell apart from a nested path. Accepting one would let a repair write
   to the wrong field.
-- **Boolean schemas** (`true` / `false` in place of a schema object).
+- **The boolean schema `false`** (accepts nothing) in place of a schema object.
+  `true` is supported.
 - **`enum` with `const`**, **`anyOf` with `oneOf`**, and empty `enum`,
   `anyOf`/`oneOf`, or `type: []` — each accepts nothing or means two things.
 
@@ -210,12 +228,16 @@ warnings.simplefilter("error", SchemaFeatureWarning)
 
 | Situation | Effect |
 |---|---|
-| `exclusiveMinimum` / `exclusiveMaximum` | dropped — an exclusive bound is not an inclusive one, and rounding it would accept a value the schema forbids |
 | `additionalProperties` as a *schema object* | undeclared properties are accepted untyped; StateGuard can require the declared set be exhaustive, not type the members it has no name for |
 | tuple-form `items` (a positional list) | element typing widened to `ANY`; one element type applies to the whole array |
 | a `default` that fails its own field | the default is dropped, and the field is not auto-filled |
 
-`exclusiveMinimum` is not hypothetical: `mcp-server-fetch` ships it today.
+`exclusiveMinimum` / `exclusiveMaximum` used to head this table. They are
+enforced now, in both the numeric (2019-09+) form and the draft-4 boolean
+form that makes `minimum` / `maximum` exclusive. It mattered:
+`mcp-server-fetch` ships `max_length` with `exclusiveMinimum: 0`, and a
+differential run against the `jsonschema` reference validator caught `0`
+passing StateGuard and failing the server.
 
 ---
 
@@ -337,9 +359,9 @@ wire — not by transcribing their source.
 | `mcp-server-time` | 2026.8.18 | 2 |
 | `mcp-server-fetch` | 2026.8.18 | 1 |
 
-**21 tool schemas, all extracting without refusal**, producing exactly two
-`SchemaFeatureWarning`s (both `mcp-server-fetch`'s `exclusiveMinimum` /
-`exclusiveMaximum`). Every one round-trips: a payload built to satisfy the
+**21 tool schemas, all extracting without refusal**, producing no dropped-keyword
+`SchemaFeatureWarning`s (the two `mcp-server-fetch` exclusive bounds that
+used to warn are enforced now). Every one round-trips: a payload built to satisfy the
 extracted contract comes back `ALREADY_VALID`, and the output survives
 `validate`.
 

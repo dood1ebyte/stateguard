@@ -403,3 +403,36 @@ class TestPolicyConfiguration:
             evidence=RepairEvidence(value_preserved=1.0, signals=(("structure_preserved", 0.0),)),
         )
         assert "structure_preserved" in policy.explain(*policy.evaluate(op))
+
+
+class TestContradiction:
+    """A contradicted operation is surfaced, never applied; scores stay as measured."""
+
+    @staticmethod
+    def _op(name_match: float, contradiction: str | None) -> FieldOperation:
+        return FieldOperation(
+            FieldOpType.RENAME,
+            "min_price",
+            "rename",
+            risk=RepairRisk.INFERRED,
+            evidence=RepairEvidence(name_match=name_match, contradiction=contradiction),
+            source_path="max_price",
+        )
+
+    def test_an_apply_becomes_ambiguous(self) -> None:
+        scored, decision = TrustPolicy().evaluate(self._op(0.87, "swaps a word"))
+        assert decision is TrustDecision.AMBIGUOUS
+        assert scored.trust == pytest.approx(0.87)
+
+    def test_a_reject_stays_rejected(self) -> None:
+        _scored, decision = TrustPolicy().evaluate(self._op(0.40, "swaps a word"))
+        assert decision is TrustDecision.REJECT
+
+    def test_without_one_the_same_score_applies(self) -> None:
+        _scored, decision = TrustPolicy().evaluate(self._op(0.87, None))
+        assert decision is TrustDecision.APPLY
+
+    def test_the_explanation_names_it(self) -> None:
+        policy = TrustPolicy()
+        scored, decision = policy.evaluate(self._op(0.87, "swaps a word"))
+        assert "contradiction     swaps a word" in policy.explain(scored, decision)
