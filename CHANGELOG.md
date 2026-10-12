@@ -41,6 +41,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `5e-324` against `2`) is no longer accepted as a multiple.
 
 ### Added
+- **Real MCP capture in shadow mode (evidence collection).** See
+  `docs/runtime/REAL_CAPTURE.md`. No real capture has been taken yet; the
+  tests use local fixtures only and say they are a harness.
+  - **Shadow only.** A `real_capture` recorder in auto or passthrough mode is
+    refused by `StdioRelay` (`ValueError`); the relay CLI exits 2, before
+    starting the server, without `--shadow` and `--record`, with
+    `--passthrough`, or with `--record-redaction secrets_only`.
+  - **Mask only.** `Recorder` refuses `real_capture` with any redaction but
+    `mask`; the parser refuses such a file.
+  - **No ground truth on observed traffic.** `fault()` / `label()` write
+    nothing for `local_development`, `real_capture` and the new `replay`
+    provenance (counted as `ground_truth_refused` in `end`); the parser
+    refuses a file that has them.
+  - **Provenance `replay`.** Recordings made while replaying (recording
+    overhead) were labelled `synthetic`; they are now `replay`.
+  - **Recording fields.** Header `started_at` (UTC) and `diag.digest` (a keyed
+    HMAC of the raw line, key never written) on live recordings;
+    `serverInfo.name` / `.version` kept when identifier-shaped; more
+    one-time-code key names treated as credentials (`passcode`,
+    `verification_code`, `mfa_code`, ...).
+  - **Audit.** The relay's `call` event has `would_modify`: whether auto mode
+    would have changed or refused the call. With `real_capture`,
+    `relay_started` names the server program and argument count only.
+  - **`summarize_evidence`** (`stateguard.adapters.mcp`) and
+    `examples/mcp/evidence_report.py`: wire facts, observed failures,
+    StateGuard's observations, hypothetical proposals and unknown outcomes,
+    kept apart, with what the numbers do not claim.
+  - **Replay of observed traffic** says it has no ground truth and counts
+    nothing as prevented or recovered.
 - **Auth-failure classification (T11).** `classify_response`,
   `classify_http_status`, `FailureClass` and `FailureClassification` in
   `stateguard.adapters.mcp`.

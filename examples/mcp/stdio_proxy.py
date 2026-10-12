@@ -167,7 +167,11 @@ cannot add, drop, delay past the write, or reorder a message. A recorder
 that fails stops recording, the audit log says so once
 (``recording_stopped``), and the traffic carries on exactly as without it.
 ``--record-provenance`` (default ``local_development``) is written into the
-file; claim ``real_capture`` only for real use.
+file; claim ``real_capture`` only for real use. ``real_capture`` is
+shadow-only and mask-only: the relay refuses to start otherwise, and refuses
+a real-capture recorder in auto or passthrough mode. In shadow mode the
+``call`` audit event's ``would_modify`` says whether auto mode would have
+changed or refused the call -- a proposal, never what was sent.
 
 Scope
 -----
@@ -276,6 +280,16 @@ class StdioRelay:
         recorder: Recorder | None = None,
     ) -> None:
         self.registry = ToolRegistry(guard)
+        if (
+            recorder is not None
+            and getattr(recorder, "provenance", None) is Provenance.REAL_CAPTURE
+            and (guard.config.mode is not RepairMode.SHADOW or passthrough)
+        ):
+            # Real traffic is captured in shadow mode only: StateGuard
+            # observes and proposes; the client's payload is what is sent.
+            raise ValueError(
+                "a real_capture recording requires shadow mode (not auto, not passthrough)"
+            )
         # Observes only; see "Recording" in the module docstring.
         self._recorder = recorder
         self._recording_reported = False
@@ -981,6 +995,7 @@ class StdioRelay:
                     reason="could not confirm the tool listing is current; "
                     "forwarded unchanged rather than act on a possibly stale schema",
                     listing="unconfirmed",
+                    would_modify=False,
                 )
                 return True, line
             evaluated = self._evaluate(line, request)
@@ -996,6 +1011,9 @@ class StdioRelay:
             auto_action=(outcome.auto_action or outcome.action).value,
             reason=outcome.reason,
             listing=listing,
+            # What auto mode would do to this call (change or refuse it):
+            # in shadow, a proposal -- the call is forwarded as received.
+            would_modify=_intervenes(request, outcome),
             decisions=[
                 {
                     "path": d.path,
@@ -1502,9 +1520,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--record-provenance",
-        choices=[p.value for p in Provenance],
+        # ``replay`` is what a replay engine writes; the relay never replays.
+        choices=[p.value for p in Provenance if p is not Provenance.REPLAY],
         default=Provenance.LOCAL_DEVELOPMENT.value,
-        help="Provenance written into the recording (default: local_development).",
+        help="Provenance written into the recording (default: local_development). "
+        "real_capture requires --record, --shadow and mask redaction.",
     )
     parser.add_argument(
         "--record-redaction",
@@ -1522,6 +1542,18 @@ def main(argv: list[str] | None = None) -> int:
     command = args.server[1:] if args.server[:1] == ["--"] else args.server
     if not command:
         parser.error("give the server command after --")
+    real_capture = args.record_provenance == Provenance.REAL_CAPTURE.value
+    if real_capture:
+        # Checked before the server starts: a refused real capture runs nothing.
+        if not args.record:
+            parser.error("--record-provenance real_capture needs --record FILE")
+        if not args.shadow or args.passthrough:
+            parser.error(
+                "--record-provenance real_capture is shadow-only: add --shadow "
+                "(and drop --passthrough)"
+            )
+        if args.record_redaction != RecordRedaction.MASK.value:
+            parser.error("--record-provenance real_capture requires --record-redaction mask")
 
     mode = RepairMode.SHADOW if args.shadow else RepairMode.AUTO
     audit = open(args.audit, "a", encoding="utf-8") if args.audit else sys.stderr  # noqa: SIM115
@@ -1587,7 +1619,13 @@ def main(argv: list[str] | None = None) -> int:
     relay._log(
         "relay_started",
         mode="passthrough" if args.passthrough else mode.value,
-        server=command,
+        # The audit log is not redacted. A real capture's server command may
+        # carry credentials (``--token ...``): name the program only.
+        **(
+            {"server_program": os.path.basename(command[0]), "server_args": len(command) - 1}
+            if real_capture
+            else {"server": command}
+        ),
     )
     to_server = threading.Thread(target=relay.pump_client, daemon=True)
     to_server.start()

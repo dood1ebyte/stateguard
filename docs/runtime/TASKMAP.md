@@ -81,6 +81,7 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Property tests (repair layer) | COMPLETE | `test_mcp_properties.py`, `test_diff.py` | — | None for runtime primitives (do not exist). |
 | Replay / benchmark | PARTIAL (T13) | `stateguard replay`, `mcp_bench.py`, `calibrate.py`, `measure.py`, `recovery.py`, **`replay.py` (recorded sessions × raw / shadow / auto / auto_ops / as-recorded)** | — | Record/replay works end to end (M11). **No real-traffic recording exists yet**: the committed corpus is fault injection. |
 | Traffic recording + redaction | COMPLETE (T13) | `adapters/mcp/recording.py`; relay `--record`; `test_recording.py`, `test_relay_recording.py`, `test_replay.py` | observe only, every mode | Deterministic rule-based redaction, mask by default. Recorder never raises; background mode never blocks the relay. |
+| Real-capture readiness | COMPLETE (RC) — **no capture taken** | `recording.py` provenance families, `evidence.py`, relay/CLI refusals; `test_real_capture.py` ×2 | **shadow only**, mask only | Evidence collection, not proof of reliability improvement. Procedure: `docs/runtime/REAL_CAPTURE.md`. |
 | Category Z tracking | PARTIAL (T2, T4) | relay logs `category: "Z"`; `measure.py` counts StateGuard-induced failures, incorrect repair/refusal, duplicates, crashes per category | — | Counted per measurement run; not yet exported as runtime telemetry. |
 
 **Contradictions found.** The docs claimed applied precision of 100%
@@ -118,6 +119,7 @@ list-changed delivery at 2026-07-28.
 | T12 | Safe server restart: idle death only by default; in-flight → UNKNOWN, never replayed; re-initialize + re-list + registry reset; bounded; session recovery workload | 5 | DONE (`9d1f401`, `24011f5`, + measurement commit) | T6, T8 |
 | T13 | Record/replay with redaction: versioned format, deterministic redaction, fail-open relay taps, replay engine + A–H fault-injection corpus, provenance-labelled report | 6 | DONE (`bbb660b` + replay commit) | T4, T12 |
 | T14 | Mid-restart race: gate `tools/call` on a live, listed server; bind every decision to its server generation | 1 | DONE (see T14 section) | T12, T13 |
+| RC | Real-capture readiness: shadow-only + mask-only `real_capture`, no ground truth on observed traffic, `replay` provenance, evidence summary, first-capture procedure | 6 | DONE (see Real capture section); **no capture taken** | T11, T13, T14 |
 
 ## Primitive records
 
@@ -576,7 +578,7 @@ header. The server command line is never written.
   T13 path.
 
 **Provenance classes:** `synthetic`, `fault_injection`, `local_development`,
-`real_capture`.
+`real_capture`; `replay` added by the real-capture task (see that section).
 
 - Only `real_capture` is real traffic.
 - The report's first line states the corpus's evidence class, and mixed
@@ -1040,6 +1042,83 @@ and the recording's own audit has the K event.
 - **The corpus is synthetic.** Real servers' auth error shapes have not been
   sampled (needs a `real_capture` corpus).
 
+### Real capture (shadow-mode evidence collection)
+
+**Objective.** Make it safe to record real MCP traffic through the relay
+in shadow mode, and keep what happened apart from what StateGuard only
+proposed. Procedure and privacy guarantees: `docs/runtime/REAL_CAPTURE.md`.
+**real_capture provides evidence collection, not proof of reliability
+improvement.**
+
+**Found before the change** (VERIFIED by reading code and running it):
+
+- `real_capture` was a provenance label only. It recorded in auto mode,
+  with `secrets_only` redaction, and accepted `fault()` / `label()` ground
+  truth; the parser accepted fault records in a real capture.
+- Replay's recording-overhead files were labelled `synthetic`.
+- No wall-clock start time; the server's `serverInfo.name` was masked.
+- Shadow `call` events said `action` and `auto_action` but not whether auto
+  mode would have changed the arguments (`auto_action: forward` covers both).
+- Nothing summarized a recording; replay's limitation text always said the
+  corpus came from `record_corpus.py`.
+
+**Decisions** (conservative; documented in REAL_CAPTURE.md):
+
+- **Shadow only, enforced twice:** `StdioRelay` raises on a `real_capture`
+  recorder outside shadow (or with passthrough); the CLI exits 2 before
+  starting the server. `--retry auto` / `--restart N` / `--call-deadline` stay
+  allowed: in shadow they only add *proposals* (tested with them on).
+- **Mask only:** `Recorder` raises `ValueError` at construction for
+  `real_capture` + `secrets_only` (the one place a recorder raises); the
+  parser refuses such a header. One redaction path; a test checks a real
+  capture's records equal a fault-injection recording's of the same traffic.
+- **Ground truth refused, not faked:** `fault()` / `label()` are no-ops on
+  `local_development`, `real_capture`, `replay`, counted in `end`
+  (`ground_truth_refused`); the parser refuses such files.
+- **Byte identity without content:** `diag.digest` = HMAC-SHA256 under a
+  per-recorder random key never written. Found necessary by a flaky test:
+  redaction is stateful (schemas are learned mid-session), so comparing
+  redacted bodies called an identical call "changed" when it was recorded
+  before the listing arrived.
+- **Audit log:** with `real_capture`, `relay_started` names only the
+  server program and argument count. The audit log stays unredacted
+  otherwise (documented, pre-existing).
+
+**Evidence summary** (`adapters/mcp/evidence.py`, schema
+`stateguard.mcp.evidence/1`): `wire`, `observed` (T11 classes of server
+answers), `stateguard_observed`, `proposed` (`hypothetical: true` in shadow;
+`acted` must be zero), `unknown` (never success or failure;
+`answer_seen_later` kept apart), `not_claimed`.
+
+**Tests** (VERIFIED, 53): `tests/adapters/mcp/test_real_capture.py` (33:
+provenance families, mask requirement, ground-truth refusal in recorder and
+parser, truncated capture, identical redaction, secret fragments absent,
+one-time-code keys, server identity, digest, evidence separation and
+determinism) and `tests/examples/test_real_capture.py` (20, **harness, not
+production evidence**: in-process shadow session with repairable,
+refusable, transient, auth, dropped and late calls and a server death,
+`retry="auto"` and `max_restarts=1` set; byte-identical forwarding, no
+retry/restart/drop/invented answer, K event, UNKNOWN unsurfaced and
+unretried, recording real_capture with no fault/label and no secrets,
+replay of the capture; relay refusal in auto/passthrough; five CLI refusal
+combinations with the server never started; defaults never claim
+real_capture; CLI capture against the local fake server with a credential in
+the server command line, absent from recording and audit log).
+
+**Benchmarks after the change** (VERIFIED, synthetic, not real-world
+evidence):
+
+- `replay.py`: outcome table identical to main (fail raw 31 / shadow 31 /
+  auto 11 / auto_ops 8; prevented auto 20; Z 0; duplicate executions 0);
+  fidelity 68/68 answers, 58/58 decisions; determinism 40 runs, 0
+  mismatched. Tapes re-recorded only for the new fields (`would_modify`,
+  server name kept).
+- `race.py --runs 20`: 0 unsafe bypasses.
+- `auth.py`: 32/32 classified, 0 auth retried, 0 UNKNOWN retried.
+
+**Not done:** no real capture has been taken. Nothing connected to a public
+MCP server or external service.
+
 ## Measured results
 
 (Populated as tasks land. Synthetic corpora are labelled as such; nothing here
@@ -1400,8 +1479,12 @@ How to read it:
   p50 per call in-process. A synchronous recorder (library default) waits
   for its sink.
 - **The relay's own audit log is not redacted** (`internal_error` exception
-  text, `relay_started` server command). Pre-existing; only the recording
-  path is redacted.
+  text, decision reasons; `relay_started` server command except under
+  `real_capture`). Pre-existing; only the recording path is redacted. For a
+  real capture it must be kept private (REAL_CAPTURE.md).
+- **Mask-mode residuals matter more for real capture:** integers below
+  1,000,000 and floats are kept, so a numeric one-time code under an
+  innocuous key persists; string lengths persist.
 - **Mid-restart refresh race:** RESOLVED in T14 (0 unsafe bypasses across 60
   race-provoking replays; 83 across the same 60 before the fix). See the T14 section for the
   residual limits.
@@ -1410,7 +1493,7 @@ How to read it:
 
 Recommended next:
 
-- **Real capture:** run the relay with
-  `--record --record-provenance real_capture` in shadow mode against real
-  MCP servers, then `replay.py --tapes`. This needs a deployment, not code.
+- **First real capture:** follow `docs/runtime/REAL_CAPTURE.md`
+  ("Procedure") against a stdio MCP server you control. This needs a
+  deployment and an operator decision, not code.
 - **T9:** circuit breaker.

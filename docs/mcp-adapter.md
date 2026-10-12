@@ -722,9 +722,15 @@ recording = read_recording("session.jsonl")  # raises RecordingError, never anyt
 - **Failure.** A recorder never raises into its host. If it fails, it stops,
   and the file is marked incomplete; replay refuses incomplete files by
   default.
-- **Provenance.** `synthetic`, `fault_injection`, `local_development` or
-  `real_capture`. Only `real_capture` is real traffic, and the replay report
-  says so on its first line.
+- **Provenance.** `synthetic`, `fault_injection`, `replay`,
+  `local_development` or `real_capture`. Only `real_capture` is real
+  traffic, and the replay report says so on its first line. Only
+  `synthetic` and `fault_injection` may carry ground truth (`fault`,
+  `label`); the recorder refuses it for the others, and the parser refuses a
+  file that has it. `real_capture` requires mask redaction, and the relay
+  records it in shadow mode only (`docs/runtime/REAL_CAPTURE.md`).
+  `summarize_evidence(recording)` separates observed facts from
+  StateGuard's hypothetical proposals and from unknown outcomes.
 
 ---
 

@@ -36,8 +36,13 @@ Three kinds of content are kept apart:
   ``message``. Deterministic: recording the same traffic twice gives the
   same records.
 * **Diagnostic** -- everything under ``diag`` (line length; with
-  ``deterministic=False`` also a monotonic timestamp). Never needed to
-  replay, and dropped by nothing that replays.
+  ``deterministic=False`` also a monotonic timestamp and ``digest``, an
+  HMAC-SHA256 of the raw line under a random key that lives only in the
+  recorder's memory and is never written). Never needed to replay, and
+  dropped by nothing that replays. The digest shows two lines in one
+  recording were byte-identical -- that a call reached the server exactly
+  as the client sent it -- without the content, and is meaningless
+  across recordings: without the key it cannot be checked against a guess.
 * **Sensitive** -- never written. Redaction happens before anything
   reaches the sink; the header says which policy ran and ``end`` how many
   values it changed.
@@ -90,10 +95,13 @@ Zero external dependencies.
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import hmac
 import json
 import math
 import queue
 import re
+import secrets
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -147,16 +155,42 @@ REDACTED = "[redacted]"
 
 
 class Provenance(StrEnum):
-    """Where the traffic in a recording came from. Only REAL_CAPTURE is real traffic."""
+    """
+    Where the traffic in a recording came from. Only REAL_CAPTURE is real traffic.
+
+    Two families, never mixed in one file:
+
+    * **Generated** -- ``synthetic``, ``fault_injection``, ``replay``: a
+      harness or a replay produced the traffic. The first two may carry
+      ground truth (``fault`` and ``label`` records) because their builder
+      knows it.
+    * **Observed** -- ``local_development``, ``real_capture``: the relay saw
+      traffic it did not generate. Nobody knows its ground truth, so these
+      files carry no ``fault`` or ``label`` records: the recorder refuses to
+      write them and the parser refuses a file that has them.
+    """
 
     SYNTHETIC = "synthetic"
     FAULT_INJECTION = "fault_injection"
+    #: Traffic produced by replaying a recording through a model server
+    #: (the TapeServer): a derivative of its source, never new evidence.
+    REPLAY = "replay"
     LOCAL_DEVELOPMENT = "local_development"
     REAL_CAPTURE = "real_capture"
 
     @property
     def is_real_traffic(self) -> bool:
         return self is Provenance.REAL_CAPTURE
+
+    @property
+    def observed(self) -> bool:
+        """Traffic the relay saw rather than generated: it has no ground truth."""
+        return self in (Provenance.LOCAL_DEVELOPMENT, Provenance.REAL_CAPTURE)
+
+    @property
+    def admits_ground_truth(self) -> bool:
+        """Whether ``fault`` / ``label`` records may appear: only where a harness made them."""
+        return self in (Provenance.SYNTHETIC, Provenance.FAULT_INJECTION)
 
     @property
     def evidence(self) -> str:
@@ -166,11 +200,18 @@ class Provenance(StrEnum):
             Provenance.FAULT_INJECTION: (
                 "deterministic fault injection on a synthetic workload -- not real-world evidence"
             ),
+            Provenance.REPLAY: (
+                "replay of a recording through a model server -- a derivative of its source "
+                "recording, not new evidence"
+            ),
             Provenance.LOCAL_DEVELOPMENT: (
                 "local development traffic -- real servers, not production use; "
                 "not representative evidence"
             ),
-            Provenance.REAL_CAPTURE: "captured real traffic",
+            Provenance.REAL_CAPTURE: (
+                "captured real traffic (shadow mode) -- evidence of what happened, "
+                "not proof of reliability improvement"
+            ),
         }[self]
 
 
@@ -219,6 +260,13 @@ _SENSITIVE_PARTS = (
     "bearer",
     "signature",
     "sessionid",
+    "passcode",
+    "verificationcode",
+    "securitycode",
+    "recoverycode",
+    "backupcode",
+    "mfacode",
+    "otpcode",
     "creditcard",
     "cardnumber",
     "socialsecurity",
@@ -661,6 +709,8 @@ class Redactor:
                 out[k] = [self.identifier(x) for x in v]
             elif k == "tools" and isinstance(v, list):
                 out[k] = [self.tool_definition(t) for t in v]
+            elif k == "serverInfo" and isinstance(v, Mapping):
+                out[k] = self.server_info(v)
             elif k == "content" and isinstance(v, list):
                 out[k] = [self._content(item) for item in v]
             elif k == "_meta":
@@ -691,6 +741,22 @@ class Redactor:
                 out[k] = v
             elif k == "data" and isinstance(v, Mapping):
                 out[k] = self._meta(v)
+            elif self._sensitive(str(k)):
+                self._put(out, k, self._scrub(v))
+            else:
+                self._put(out, k, self.value(v))
+        return out
+
+    def server_info(self, info: Mapping[str, Any]) -> dict[str, Any]:
+        """
+        The server's self-description: ``name`` and ``version`` kept when they
+        look like identifiers (they say which server a recording is evidence
+        about); everything else (title, description, URLs, icons) redacted.
+        """
+        out: dict[str, Any] = {}
+        for k, v in info.items():
+            if k in ("name", "version") and isinstance(v, str):
+                out[k] = self.identifier(v)
             elif self._sensitive(str(k)):
                 self._put(out, k, self._scrub(v))
             else:
@@ -882,6 +948,17 @@ class Recorder:
     the queue is full the record is dropped and recording stops (the file is
     then incomplete). Without it, each call redacts and writes before it
     returns -- simplest, and deterministic, but the host waits for the sink.
+
+    Construction is the one place it does raise (``ValueError``), for a
+    configuration that must never record at all: ``real_capture`` with any
+    redaction but ``mask``. Real traffic holds user text; ``secrets_only``
+    would persist it.
+
+    On a provenance that admits no ground truth -- the observed ones
+    (``local_development``, ``real_capture``) and ``replay`` -- ``fault()``
+    and ``label()`` write nothing: nobody knows the ground truth of traffic
+    the relay did not generate, so none may be attached. Each refused call
+    is counted (``ground_truth_refused`` in ``end``).
     """
 
     def __init__(
@@ -897,13 +974,25 @@ class Recorder:
         background: bool = False,
         queue_size: int = 10_000,
         close_timeout: float = 5.0,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
+        policy = policy or RedactionPolicy()
+        provenance = Provenance(provenance)
+        if provenance is Provenance.REAL_CAPTURE and policy.mode is not RedactionMode.MASK:
+            raise ValueError(
+                "real_capture recordings require mask redaction: real traffic holds user text, "
+                f"and redaction mode {policy.mode.value!r} would persist it"
+            )
         self._sink = sink
         self._lock = threading.RLock()
         self._failure_lock = threading.Lock()
         self.redactor = Redactor(policy)
-        self.provenance = Provenance(provenance)
+        self.provenance = provenance
+        #: fault()/label() calls refused (see the class docstring).
+        self.ground_truth_refused = 0
         self._deterministic = deterministic
+        # Never written, never exposed: see "Diagnostic" in the module docs.
+        self._digest_key = None if deterministic else secrets.token_bytes(32)
         self._clock = clock
         self._start = clock()
         self._seq = 0
@@ -917,18 +1006,21 @@ class Recorder:
         self._close_timeout = close_timeout
         self._queue: queue.Queue[Any] | None = None
         self._writer: threading.Thread | None = None
-        self._emit(
-            {
-                "type": "header",
-                "format": FORMAT,
-                "version": FORMAT_VERSION,
-                "provenance": self.provenance.value,
-                "session": str(session),
-                "deterministic": deterministic,
-                "redaction": self.redactor.policy.describe(),
-                "config": self._config(config or {}),
-            }
-        )
+        header: dict[str, Any] = {
+            "type": "header",
+            "format": FORMAT,
+            "version": FORMAT_VERSION,
+            "provenance": self.provenance.value,
+            "session": str(session),
+            "deterministic": deterministic,
+            "redaction": self.redactor.policy.describe(),
+            "config": self._config(config or {}),
+        }
+        if not deterministic:
+            # Diagnostic: when the session began (UTC, to the second). The
+            # ``t_ms`` offsets in ``diag`` count from here.
+            header["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(wall_clock()))
+        self._emit(header)
         if background:
             self._queue = queue.Queue(maxsize=queue_size)
             self._writer = threading.Thread(
@@ -1033,6 +1125,10 @@ class Recorder:
             "gen": int(generation),
             "diag": self._diag(at, bytes=len(line)),
         }
+        if self._digest_key is not None:
+            record["diag"]["digest"] = hmac.new(
+                self._digest_key, line.rstrip(b"\r\n"), hashlib.sha256
+            ).hexdigest()[:32]
         try:
             message = json.loads(line)
         except (ValueError, UnicodeDecodeError, RecursionError):
@@ -1077,16 +1173,28 @@ class Recorder:
         event = dict(event)
         self._guard(lambda: {"type": "audit", "event": self.redactor.audit(event)})
 
+    def _refuse_ground_truth(self) -> bool:
+        """True (and counted) when this provenance may carry no ground truth."""
+        if self.provenance.admits_ground_truth:
+            return False
+        with self._failure_lock:
+            self.ground_truth_refused += 1
+        return True
+
     def fault(self, fault: str, **fields: Any) -> None:
-        """A failure a harness injected. Ground truth for replay."""
+        """A failure a harness injected. Ground truth for replay; refused on observed traffic."""
+        if self._refuse_ground_truth():
+            return
         self._guard(lambda: {"type": "fault", "fault": str(fault), **self.redactor.audit(fields)})
 
     def label(self, identifier: Any, *, tool: str | None = None, **fields: Any) -> None:
         """
         Ground truth for one request (e.g. ``intended=`` arguments). Argument
         values go through the same redaction as the request's own arguments,
-        so they stay comparable.
+        so they stay comparable. Refused on observed traffic.
         """
+        if self._refuse_ground_truth():
+            return
 
         def build() -> dict[str, Any]:
             record: dict[str, Any] = {
@@ -1133,6 +1241,8 @@ class Recorder:
             "failure_types": list(self.failure_types),
             "values_redacted": self.redactor.redactions,
         }
+        if self.ground_truth_refused:
+            end["ground_truth_refused"] = self.ground_truth_refused
         with self._lock:
             # A sink that failed takes no more writes; one that did not still
             # gets the end record, which says recording stopped early.
@@ -1233,6 +1343,12 @@ def _check_header(record: dict[str, Any], number: int) -> None:
         raise _malformed(number, "header redaction policy missing or unknown")
     if record.get("seq") != 0:
         raise _malformed(number, "header seq must be 0")
+    if "started_at" in record and not isinstance(record["started_at"], str):
+        raise _malformed(number, "header started_at must be a string")
+    if record["provenance"] == Provenance.REAL_CAPTURE.value and redaction["mode"] != (
+        RedactionMode.MASK.value
+    ):
+        raise _malformed(number, "a real_capture recording must use mask redaction")
 
 
 def _check_record(record: dict[str, Any], number: int) -> None:
@@ -1311,6 +1427,15 @@ def parse_recording(lines: Iterable[str | bytes], *, source: str = "") -> Record
             if end is not None:
                 raise _malformed(number, "record after end")
             _check_record(record, number)
+            if (
+                record["type"] in ("fault", "label")
+                and not Provenance(header["provenance"]).admits_ground_truth
+            ):
+                raise _malformed(
+                    number,
+                    f"a {record['type']} record in a {header['provenance']} recording: "
+                    "observed and replayed traffic carries no ground truth",
+                )
             seq = record.get("seq")
             if not isinstance(seq, int) or isinstance(seq, bool) or seq <= last_seq:
                 raise _malformed(number, "seq must increase strictly")

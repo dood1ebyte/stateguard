@@ -37,6 +37,7 @@ from stateguard.adapters.mcp.errors import (
     ToolNotFoundError,
     ToolSchemaUnusableError,
 )
+from stateguard.adapters.mcp.evidence import summarize_evidence
 from stateguard.adapters.mcp.failures import (
     FailureClass,
     FailureClassification,
@@ -106,6 +107,7 @@ __all__ = [
     "Redactor",
     "parse_recording",
     "read_recording",
+    "summarize_evidence",
     "ResultCheck",
     "ResultIssue",
     "ResultIssueKind",

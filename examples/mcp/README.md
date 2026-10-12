@@ -277,9 +277,14 @@ from the recording, never against the original.
   stops and is logged once as `recording_stopped`; traffic carries on
   unchanged.
 - **Provenance is part of the file.** `--record-provenance` defaults to
-  `local_development`. Claim `real_capture` only for real use.
-  `--record-redaction secrets_only` keeps free-form text and is meant for
-  traffic known to hold no personal data.
+  `local_development`. Claim `real_capture` only for real use; it requires
+  `--shadow` and mask redaction, and the relay refuses to start otherwise
+  (see `docs/runtime/REAL_CAPTURE.md`). `--record-redaction secrets_only`
+  keeps free-form text and is meant for traffic known to hold no personal
+  data.
+- **Evidence report.** `python examples/mcp/evidence_report.py FILE` keeps
+  what happened (wire, observed failures), what StateGuard observed, what it
+  would have done (hypothetical in shadow), and unknown outcomes apart.
 
 **Auth failures** are recognised and never retried. A server answer that
 deterministically signals one is logged as category K (`auth_failure`) and

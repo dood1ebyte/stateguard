@@ -421,7 +421,9 @@ def test_a_real_capture_is_reported_as_one() -> None:
     recorder = Recorder(sink, provenance=Provenance.REAL_CAPTURE, session="captured")
     recorder.close()
     env = derive(parse_recording(sink.getvalue().splitlines()))
-    assert replay._corpus([env], {})["evidence"] == "captured real traffic"
+    evidence = replay._corpus([env], {})["evidence"]
+    assert evidence.startswith("captured real traffic")
+    assert "not proof of reliability improvement" in evidence
     mixed = derive(read_recording(TAPES / "A_success.jsonl"))
     assert replay._corpus([env, mixed], {})["evidence"].startswith("NOT real-world evidence")
 
