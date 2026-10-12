@@ -25,6 +25,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from stateguard.adapters.mcp.failures import AUTH_CODES, signal_spans
 from stateguard.adapters.mcp.recording import (
     FORMAT,
     MAX_DEPTH,
@@ -753,7 +754,11 @@ def test_property_mask_mode_persists_no_free_text(tree: Any) -> None:
         return [value] if isinstance(value, str) else []
 
     for text in strings(out):
-        assert text == REDACTED or all(not ch.isalnum() or ch in "aA1" for ch in text)
+        if text == REDACTED or text in AUTH_CODES:
+            continue
+        # Kept verbatim: only the auth classifier's fixed-vocabulary spans (T11).
+        kept = {i for start, end in signal_spans(text) for i in range(start, end)}
+        assert all(not ch.isalnum() or ch in "aA1" for i, ch in enumerate(text) if i not in kept)
 
 
 @settings(max_examples=500, deadline=None)
@@ -896,3 +901,80 @@ def test_background_failures_are_reported_and_never_raised() -> None:
     recorder.close()
     assert recorder.stopped and recorder.failure_types == ["OSError"]
     assert not parse_recording(sink.getvalue().splitlines()).complete
+
+
+# ---------------------------------------------------------------------------
+# T11: a recording classifies as the live traffic did
+# ---------------------------------------------------------------------------
+
+_AUTH_TEXTS = [
+    "Unauthorized: token expired",
+    "GET https://api.example.com/v1/items: 401 Unauthorized",
+    "HTTP Error 403: Forbidden",
+    "401 Client Error: Unauthorized for url: https://x",
+    'upstream refused: WWW-Authenticate: Bearer error="invalid_token"',
+    "Forbidden",
+]
+_NOT_AUTH_TEXTS = [
+    "Permission denied: field 'token' needs access_level=admin",
+    "403 Forbidden City tours are sold out",
+    "Order rejected: the card's authorization hold expired",
+    "Request timed out",
+    "retry after 401 seconds",
+]
+
+
+def _rpc(message: str, data: Any = None, code: int = -32603) -> dict[str, Any]:
+    error: dict[str, Any] = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    return {"jsonrpc": "2.0", "id": 1, "error": error}
+
+
+def _tool_error(text: str) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {"content": [{"type": "text", "text": text}], "isError": True},
+    }
+
+
+@pytest.mark.parametrize("mode", list(RedactionMode))
+@pytest.mark.parametrize(
+    "message",
+    [
+        *[_rpc(t) for t in _AUTH_TEXTS + _NOT_AUTH_TEXTS],
+        *[_tool_error(t) for t in _AUTH_TEXTS + _NOT_AUTH_TEXTS],
+        _rpc("Request failed", {"status": 401, "error": "invalid_token"}),
+        _rpc("Request failed", {"status": 403, "error": "insufficient_scope"}),
+        _rpc("Request failed", {"error": "access_denied"}),
+        _rpc("401 Unauthorized", {"io.stateguard/executionState": "unknown"}, code=-32000),
+    ],
+)
+def test_redaction_preserves_the_failure_class(
+    message: dict[str, Any], mode: RedactionMode
+) -> None:
+    from stateguard.adapters.mcp import classify_response
+
+    redacted = Redactor(RedactionPolicy(mode=mode)).message(message)
+    assert classify_response(redacted) == classify_response(message)
+
+
+def test_auth_signals_survive_masking_and_nothing_else_does() -> None:
+    redacted = Redactor().message(
+        _tool_error("GET https://api.acme.example/v1/u/jane: 401 Unauthorized")
+    )
+    text = redacted["result"]["content"][0]["text"]
+    assert text.endswith("401 Unauthorized")
+    assert "acme" not in text and "jane" not in text
+
+
+@settings(max_examples=300, deadline=None)
+@given(text=st.text(max_size=60))
+def test_property_redaction_never_creates_or_destroys_an_auth_class(text: str) -> None:
+    from stateguard.adapters.mcp import classify_response
+
+    for message in (_rpc(text), _tool_error(text)):
+        redacted = Redactor().message(message)
+        if secret_pattern(text) is None:  # a secret-shaped string is replaced whole
+            assert classify_response(redacted) == classify_response(message)

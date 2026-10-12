@@ -47,10 +47,11 @@ def _tool(name: str, annotations: dict[str, Any] | None = None) -> ServerTool:
 
 TOOLS = [
     _tool("search"),
+    _tool("upsert"),
     _tool("pay"),
     _tool("hinted", {"readOnlyHint": True, "idempotentHint": True}),
 ]
-EFFECTS = EffectPolicy({"search": "read_only", "pay": "non_idempotent"})
+EFFECTS = EffectPolicy({"search": "read_only", "upsert": "idempotent", "pay": "non_idempotent"})
 
 
 def _rig(
@@ -95,11 +96,43 @@ def test_a_declared_read_only_tool_is_retried_after_a_transient_error() -> None:
         rig.close()
 
 
-def test_a_hang_on_a_read_only_tool_is_retried_after_the_deadline() -> None:
-    rig = _rig({0: ServerAction.HANG_BEFORE_EXECUTE}, deadline=0.2)
+def _unknown(response: dict[str, Any] | None) -> bool:
+    error = (response or {}).get("error") or {}
+    return (error.get("data") or {}).get("io.stateguard/executionState") == "unknown"
+
+
+def _calls_sent(rig: Rig) -> int:
+    return sum(1 for line in rig.all_received if b'"tools/call"' in line)
+
+
+@pytest.mark.parametrize("tool", ["search", "upsert", "pay", "hinted"])
+@pytest.mark.parametrize("action", [ServerAction.HANG_BEFORE_EXECUTE, ServerAction.DROP_RESPONSE])
+def test_an_unknown_outcome_is_never_retried_whatever_the_declared_effect(
+    tool: str, action: ServerAction
+) -> None:
+    """read_only, idempotent, non_idempotent, undeclared: the deadline passes
+    with no answer, the outcome is UNKNOWN -- surfaced, never re-sent."""
+    rig = _rig({0: action}, deadline=0.2)
     try:
-        assert _ok(rig.call("search", {"q": "x"}, timeout=2.0))
-        assert len(rig.server.executed) == 1
+        response = rig.call(tool, {"q": "x"}, timeout=2.0)
+        time.sleep(0.3)
+        assert _unknown(response)
+        assert _calls_sent(rig) == 1  # sent once, never again
+        executed = 1 if action is ServerAction.DROP_RESPONSE else 0
+        assert len(rig.server.executed) == executed  # no duplicate execution
+        (decision,) = _decisions(rig)
+        assert decision["decision"] == "ambiguous" and decision["acted"] is False
+        assert decision["observed"] == "unknown_deadline"
+    finally:
+        rig.close()
+
+
+@pytest.mark.parametrize("tool", ["search", "upsert"])
+def test_a_known_tool_error_on_a_safe_tool_is_still_retried(tool: str) -> None:
+    rig = _rig({0: ServerAction.TRANSIENT_ERROR})
+    try:
+        assert _ok(rig.call(tool, {"q": "x"}))
+        assert _calls_sent(rig) == 2 and len(rig.server.executed) == 1
     finally:
         rig.close()
 

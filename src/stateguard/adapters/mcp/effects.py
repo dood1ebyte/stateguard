@@ -39,17 +39,19 @@ vocabulary:
 The rules, in order:
 
 1. Success, or a call StateGuard itself answered: nothing to retry.
-2. An authorization signal: never retried -- it is the operator's (or the
-   user's) to resolve, and repeating it cannot help.
+2. An authentication or authorization failure: never retried -- it is the
+   operator's (or the user's) to resolve, and repeating it cannot help.
 3. A JSON-RPC protocol error: never retried -- the server rejected the
    request itself; sending it again gets the same answer.
-4. The attempt budget is spent: escalate if the outcome is unknown,
-   otherwise deliver the error.
-5. The effect is not declared READ_ONLY or IDEMPOTENT by the operator:
-   escalate if the outcome is unknown (it may have executed), otherwise
+4. An unknown outcome (no answer by the deadline, or the connection lost
+   with the request in flight): **never retried, whatever the declared
+   effect** -- escalated. It may have executed; replaying an uncertain side
+   effect is not StateGuard's call, even for a tool declared safe to repeat.
+5. From here the attempt failed *knowingly* (a tool error). The attempt
+   budget is spent: deliver the error.
+6. The effect is not declared READ_ONLY or IDEMPOTENT by the operator:
    deliver the error.
-6. Declared safe to repeat: retry -- unless there is no connection to send it
-   on, in which case escalate.
+7. Declared safe to repeat: retry.
 
 ``TrustPolicy`` itself scores *evidence* for field repairs. Retry safety is
 not a matter of evidence strength, so it is not scored; it reuses the
@@ -182,7 +184,8 @@ class Observed(StrEnum):
     ANSWERED_LOCALLY = "answered_locally"  # StateGuard refused / escalated; never sent
     TOOL_ERROR = "tool_error"  # the server answered with isError: true
     PROTOCOL_ERROR = "protocol_error"  # the server answered with a JSON-RPC error
-    AUTH_ERROR = "auth_error"  # an authorization signal (classified by the host)
+    # authentication or authorization failure (stateguard.adapters.mcp.failures)
+    AUTH_ERROR = "auth_error"
     UNKNOWN_DEADLINE = "unknown_deadline"  # sent, unanswered in time; may have executed
     UNKNOWN_TRANSPORT = "unknown_transport"  # sent, connection lost; may have executed
 
@@ -212,7 +215,12 @@ def decide_retry(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     connection_available: bool = True,
 ) -> RetryVerdict:
-    """Whether to send an attempt again. See the module docstring for the rules."""
+    """
+    Whether to send an attempt again. See the module docstring for the rules.
+
+    ``connection_available`` is accepted for compatibility; since an unknown
+    outcome is never retried, no remaining rule depends on it.
+    """
     reject, ambiguous, apply = TrustDecision.REJECT, TrustDecision.AMBIGUOUS, TrustDecision.APPLY
     if observed is Observed.SUCCESS:
         return RetryVerdict(reject, "succeeded; nothing to retry")
@@ -224,12 +232,15 @@ def decide_retry(
         )
     if observed is Observed.PROTOCOL_ERROR:
         return RetryVerdict(reject, "the server rejected the request itself; it would again")
+    if observed.outcome_unknown:
+        # Whatever the declared effect: an unknown outcome is never replayed.
+        return RetryVerdict(
+            ambiguous,
+            "outcome unknown: it may have executed, and an unknown outcome is never re-sent "
+            "automatically, whatever the tool's declared effect; escalated",
+        )
+    # From here on the attempt failed *knowingly* (a tool error).
     if attempts_made >= max_attempts:
-        if observed.outcome_unknown:
-            return RetryVerdict(
-                ambiguous,
-                f"outcome unknown after {attempts_made} attempt(s), the most allowed; escalated",
-            )
         return RetryVerdict(reject, f"{attempts_made} attempt(s) made, the most allowed")
     if not effect.repeatable:
         why = (
@@ -237,13 +248,7 @@ def decide_retry(
             if effect.declared and effect.effect is Effect.NON_IDEMPOTENT
             else "not declared safe to repeat by the operator"
         )
-        if observed.outcome_unknown:
-            return RetryVerdict(ambiguous, f"may have executed and is {why}; escalated")
         return RetryVerdict(reject, f"the tool is {why}; the error is delivered as-is")
-    if observed is Observed.UNKNOWN_TRANSPORT and not connection_available:
-        return RetryVerdict(
-            ambiguous, "declared safe to repeat, but there is no connection to retry on"
-        )
     return RetryVerdict(
         apply, f"declared {effect.effect.value} by the operator; repeating it is safe"
     )

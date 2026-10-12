@@ -37,6 +37,12 @@ from stateguard.adapters.mcp.errors import (
     ToolNotFoundError,
     ToolSchemaUnusableError,
 )
+from stateguard.adapters.mcp.failures import (
+    FailureClass,
+    FailureClassification,
+    classify_http_status,
+    classify_response,
+)
 from stateguard.adapters.mcp.jsonrpc import (
     ToolCallRequest,
     ToolListAccumulator,
@@ -86,6 +92,10 @@ from stateguard.adapters.mcp.results import (
 
 __all__ = [
     "DEFAULT_CACHE_SIZE",
+    "FailureClass",
+    "FailureClassification",
+    "classify_http_status",
+    "classify_response",
     "Direction",
     "Provenance",
     "Recorder",

@@ -153,3 +153,33 @@ client sending as soon as it has its previous answer
 - **unsafe bypasses**, i.e. the T13 path (`replay.unsafe_bypasses`).
 
 This is fault injection on a synthetic workload.
+
+## Auth-failure classification
+
+```bash
+python benchmarks/runtime/auth.py
+```
+
+This runs 16 cases through the relay in two configurations: `auto`, and
+`auto_retry` (retry on, a 0.3 s deadline, `search` declared read-only). The
+cases are:
+
+- auth failures in each wire shape: a structured 401/403, OAuth codes, an
+  upstream 401 as a tool result, a `WWW-Authenticate` echo, a bare
+  reason phrase;
+- non-auth failures dressed in auth words: "permission", "authorization
+  hold", "access", "403 Forbidden City", the SDK's `-32001` timeout, a
+  transport failure and an UNKNOWN outcome mentioning auth, a successful
+  call with a `token_budget` argument;
+- a 401 that arrives after the deadline, on an undeclared tool and on a
+  tool declared read-only (it must stay UNKNOWN and is never retried).
+
+For each case it reports:
+
+- the class the relay logged;
+- retries and executions;
+- whether the client got exactly what the server sent;
+- whether anything turned an auth failure into a success.
+
+It exits non-zero if any case is misclassified. This is fault injection on
+a synthetic workload.

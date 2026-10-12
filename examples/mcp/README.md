@@ -281,6 +281,19 @@ from the recording, never against the original.
   `--record-redaction secrets_only` keeps free-form text and is meant for
   traffic known to hold no personal data.
 
+**Auth failures** are recognised and never retried. A server answer that
+deterministically signals one is logged as category K (`auth_failure`) and
+is never sent again, even for a tool declared safe to repeat. It reaches the
+client unchanged. The signals are:
+
+- an HTTP 401/403 status or an RFC 6750 OAuth code in `error.data`;
+- `401 Unauthorized`, `HTTP 403` or `error="invalid_token"` in the error
+  text;
+- a message that is just `Unauthorized` or `Forbidden`.
+
+Auth-like words alone ("permission", "token", "access") never count.
+StateGuard never handles credentials.
+
 `--restart N` (off by default) restarts a server process that exits, at most
 N times.
 
