@@ -182,7 +182,8 @@ class Observed(StrEnum):
     ANSWERED_LOCALLY = "answered_locally"  # StateGuard refused / escalated; never sent
     TOOL_ERROR = "tool_error"  # the server answered with isError: true
     PROTOCOL_ERROR = "protocol_error"  # the server answered with a JSON-RPC error
-    AUTH_ERROR = "auth_error"  # an authorization signal (classified by the host)
+    # authentication or authorization failure (stateguard.adapters.mcp.failures)
+    AUTH_ERROR = "auth_error"
     UNKNOWN_DEADLINE = "unknown_deadline"  # sent, unanswered in time; may have executed
     UNKNOWN_TRANSPORT = "unknown_transport"  # sent, connection lost; may have executed
 

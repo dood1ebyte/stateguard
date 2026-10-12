@@ -102,6 +102,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import IO, Any, TypeVar
 
+from stateguard.adapters.mcp.failures import AUTH_CODES, signal_spans
+
 _T = TypeVar("_T")
 
 __all__ = [
@@ -300,6 +302,31 @@ def mask_string(text: str) -> str:
     return "".join(out)
 
 
+def _mask_keeping_auth_signals(text: str) -> str:
+    """
+    Mask *text*, except the spans the auth classifier's text rules match
+    (``401 Unauthorized``, ``HTTP 403``, ``error="invalid_token"``, a leading
+    ``Forbidden:`` ...). Those are fixed vocabulary, never user data, and
+    keeping them means a recording classifies as the live traffic did.
+    Masking cannot create such a span: masked text holds only a / A / 1.
+    """
+    spans = sorted(signal_spans(text))
+    if not spans:
+        return mask_string(text)
+    out: list[str] = []
+    at = 0
+    for start, end in spans:
+        if start < at:
+            start = at
+        if start >= end:
+            continue
+        out.append(mask_string(text[at:start]))
+        out.append(text[start:end])
+        at = end
+    out.append(mask_string(text[at:]))
+    return "".join(out)
+
+
 def _osa_distance(a: str, b: str, limit: int) -> int:
     """Optimal string alignment distance, cut off just above *limit*."""
     if abs(len(a) - len(b)) > limit:
@@ -380,7 +407,7 @@ class RedactionPolicy:
         return {
             "mode": self.mode.value,
             "rules": ["key_names", "value_patterns"]
-            + (["mask_free_form"] if self.mode is RedactionMode.MASK else []),
+            + (["mask_free_form", "keep_auth_signals"] if self.mode is RedactionMode.MASK else []),
             "patterns": [name for name, _ in _SECRET_PATTERNS],
             "extra_sensitive_keys": sorted(_normalize_key(k) for k in self.extra_sensitive_keys),
         }
@@ -475,9 +502,9 @@ class Redactor:
     def string(self, text: str, *, keep: bool = False) -> str:
         if secret_pattern(text) is not None:
             return self._changed(REDACTED)
-        if keep or not self._mask:
+        if keep or not self._mask or text in AUTH_CODES:
             return text
-        masked = mask_string(text)
+        masked = _mask_keeping_auth_signals(text)
         return self._changed(masked) if masked != text else masked
 
     def _number(self, value: int | float) -> int | float:
@@ -775,6 +802,8 @@ class Redactor:
             "description_changed",
             "paths",
             "tools",
+            "failure",
+            "signal",
         }
     )
 

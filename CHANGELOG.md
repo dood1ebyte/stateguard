@@ -26,6 +26,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `5e-324` against `2`) is no longer accepted as a multiple.
 
 ### Added
+- **Auth-failure classification (T11).** `classify_response`,
+  `classify_http_status`, `FailureClass` and `FailureClassification` in
+  `stateguard.adapters.mcp`.
+  - **Classes.** A deterministic classifier that separates authentication
+    and authorization failures from protocol, transport and tool failures,
+    and from UNKNOWN outcomes.
+  - **What counts.** Structured signals: `error.data` HTTP 401/403 and the
+    RFC 6749/6750 OAuth codes. A narrow text fallback: an RFC status line,
+    an HTTP-prefixed status, `requests`' "Client Error" form, a
+    `WWW-Authenticate` `error=` parameter, or a bare `Unauthorized` /
+    `Forbidden` reason phrase.
+  - **What never counts.** JSON-RPC codes; `-32001` is the MCP SDK's
+    request timeout.
+  - **StateGuard's own markers win.** An upstream "outcome unknown" or
+    "not sent" marker is never reclassified as auth.
+  - **The relay.** It logs auth failures as category K (`auth_failure`;
+    K on `retry_decision` and `tools_list_failed`) and never retries them.
+    Auth delivered as an `isError` tool result was retried for tools
+    declared read-only/idempotent before.
+  - **Recordings keep the auth signals.** Mask-mode redaction now keeps the
+    classifier's fixed-vocabulary spans and the OAuth codes verbatim, so
+    recorded traffic classifies as the live traffic did.
+  - **Measurement:** `benchmarks/runtime/auth.py`.
 - `benchmarks/runtime/race.py`: a regression measurement that replays the
   race session in the T13 race-provoking order and counts restart-gated,
   repaired, forwarded, refused, UNKNOWN, duplicate-execution and

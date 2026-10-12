@@ -153,6 +153,9 @@ jobs:
       - name: Mid-restart race regression (T14, fault injection)
         run: python benchmarks/runtime/race.py --runs 5
 
+      - name: Auth-failure classification (T11, fault injection)
+        run: python benchmarks/runtime/auth.py
+
       # Gates on regressions and on stale known_gap markers only -- a
       # documented gap failing is the corpus doing its job, not CI breaking.
       - name: Calibration corpus

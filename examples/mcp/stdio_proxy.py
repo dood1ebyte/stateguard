@@ -69,6 +69,22 @@ tool is escalated as "outcome unknown". Tool annotations
 (``readOnlyHint`` ...) are recorded as hints and never decide anything. The
 default, ``--retry shadow``, logs every decision and retries nothing.
 
+Auth failures
+-------------
+Every error answer to a request is classified by
+``stateguard.adapters.mcp.classify_response``, which applies only fixed,
+documented rules. These are structured ``error.data`` fields (an HTTP
+status of 401 / 403, or an RFC 6749 / 6750 OAuth code) and a few exact text
+shapes (``401 Unauthorized``, ``HTTP 403``, ``error="invalid_token"``, a bare
+``Unauthorized:``). No JSON-RPC code counts -- MCP has none for auth.
+
+An authentication or authorization failure is logged as category K
+(``auth_failure``, naming the rule that fired). It is **never retried**,
+whatever the operator declared about the tool, and is delivered exactly as
+the server sent it. StateGuard never touches credentials. A late answer to a
+request already resolved "outcome unknown" is dropped unread: UNKNOWN stays
+UNKNOWN.
+
 Server restart (opt-in)
 -----------------------
 With ``--restart N`` the relay restarts a server process that exits, at most
@@ -175,6 +191,7 @@ from typing import IO, Any
 from stateguard import ContractGuard
 from stateguard.adapters.mcp import (
     EffectPolicy,
+    FailureClassification,
     ForwardingInvariantError,
     InvocationLedger,
     MalformedMessageError,
@@ -188,6 +205,7 @@ from stateguard.adapters.mcp import (
     ToolRegistry,
     ToolSchemaUnusableError,
     check_tool_result,
+    classify_response,
     decide_retry,
     forward_message,
     refusal_response,
@@ -794,7 +812,7 @@ class StdioRelay:
         acted = verdict.retry and self._retry_mode == "auto"
         self._log(
             "retry_decision",
-            category="F" if observed is Observed.TOOL_ERROR else "I",
+            category={Observed.TOOL_ERROR: "F", Observed.AUTH_ERROR: "K"}.get(observed, "I"),
             id=client_id,
             tool=tool,
             observed=observed.value,
@@ -1267,6 +1285,19 @@ class StdioRelay:
                 self._listing_ready.set()
             self._send(self._client_out, self._to_client, line)  # untouched
 
+    def _note_failure(self, client_id: Any, failure: FailureClassification | None) -> None:
+        """Log an auth failure as category K: never retried, the operator's to resolve."""
+        if failure is None or not failure.is_auth:
+            return
+        invocation = self.ledger.get(client_id)
+        self._log(
+            "auth_failure",
+            category="K",
+            id=client_id,
+            tool=invocation.tool if invocation is not None else None,
+            **failure.to_dict(),
+        )
+
     def _deliverable(self, message: dict[str, Any]) -> bool:
         """Whether a server response goes to the client: not if it already has its answer."""
         identifier = message["id"]
@@ -1275,12 +1306,17 @@ class StdioRelay:
             is_error = "error" in message or (
                 isinstance(result, dict) and result.get("isError") is True
             )
-            observed = Observed.PROTOCOL_ERROR if "error" in message else Observed.TOOL_ERROR
+            # What kind of failure (auth, protocol, tool ...): deterministic
+            # rules only, see stateguard.adapters.mcp.failures. Decides the
+            # retry verdict; never the answer, which is delivered as sent.
+            failure = classify_response(message) if is_error else None
+            observed = failure.observed if failure is not None else Observed.TOOL_ERROR
             disposition = self.ledger.response(identifier, is_error=is_error)
             if isinstance(identifier, str) and identifier.startswith(RETRY_ID_PREFIX):
                 # Never delivered raw: the client knows its own id, not ours.
                 client_id = self._client_of.get(identifier)
                 if disposition is ResponseDisposition.DELIVER and client_id is not None:
+                    self._note_failure(client_id, failure)
                     if not (is_error and self._consider_retry(client_id, observed)):
                         self._deliver_as(client_id, message)
                 else:
@@ -1292,6 +1328,7 @@ class StdioRelay:
                     )
                 return False
             if disposition is ResponseDisposition.DELIVER:
+                self._note_failure(identifier, failure)
                 if is_error and self._consider_retry(identifier, observed):
                     return False
                 self._forget(identifier)
@@ -1328,7 +1365,12 @@ class StdioRelay:
         if isinstance(cursor, str) and cursor:
             self._request_listing(cursor, epoch)
         elif "error" in message:
-            self._log("tools_list_failed", error=message["error"])
+            self._log(
+                "tools_list_failed",
+                category="K" if classify_response(message).is_auth else None,
+                error=message["error"],
+                **classify_response(message).to_dict(),
+            )
             self._finish_epoch(epoch, ok=False)
             self._listing_ready.set()  # do not hold calls forever
 

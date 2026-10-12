@@ -76,7 +76,7 @@ Baseline before any change: 3,538 tests pass, 97% line coverage of `src/`
 | Retry decision logic | COMPLETE (T8, `ad6f041`, `88a5afa`) | `decide_retry`; relay `--retry`; `test_relay_retry.py` (server ledger checked) | **Shadow by default**; Auto opt-in with `--effects` | Never after auth/protocol error; one retry max; undeclared + unknown outcome → ESCALATE. |
 | Circuit breaking | MISSING | — | — | |
 | Result validation (`outputSchema`) | COMPLETE, detection only (T10) | `adapters/mcp/results.py`; `test_results.py`, `test_relay_results.py`; M8: 8/8 injected detected, 0 elsewhere | observe in all modes; **never alters** | Missing `structuredContent` = advisory (2026-07-28 text: optional). Non-object `outputSchema` not checked (advisory). |
-| Auth signal classification | MISSING | — | — | |
+| Auth signal classification | COMPLETE (T11) | `adapters/mcp/failures.py`; `test_failures.py` (174), `test_relay_auth.py` (36), `auth.py` (M13) | both: classified and logged in shadow and auto; never retried | Deterministic signals only; text fallback deliberately narrow. Classification, not resolution: credentials are never touched. |
 | Fault injection | PARTIAL (T4, `198aa25`) | `benchmarks/runtime/harness.py`: 11 server fault actions; StateGuard-internal faults in `test_relay_fail_open.py` | — | Seeded; one fault per invocation. Missing: 429/Retry-After (no HTTP transport), delayed-but-arriving responses, session faults (D). |
 | Property tests (repair layer) | COMPLETE | `test_mcp_properties.py`, `test_diff.py` | — | None for runtime primitives (do not exist). |
 | Replay / benchmark | PARTIAL (T13) | `stateguard replay`, `mcp_bench.py`, `calibrate.py`, `measure.py`, `recovery.py`, **`replay.py` (recorded sessions × raw / shadow / auto / auto_ops / as-recorded)** | — | Record/replay works end to end (M11). **No real-traffic recording exists yet**: the committed corpus is fault injection. |
@@ -114,7 +114,7 @@ list-changed delivery at 2026-07-28.
 | T8 | Retry decision (TrustDecision vocabulary + Shadow/Auto): operator-declared read-only/idempotent only; UNKNOWN on undeclared → ESCALATE; relay integration | 5 | DONE `88a5afa` | T6, T7 |
 | T9 | Circuit breaker per (server, tool), Shadow-first | 5 | TODO | T6 |
 | T10 | Result integrity: `outputSchema` / `structuredContent` validation, detection only | 4 | DONE | T4 |
-| T11 | Auth-signal classification + operator callback | 4 | TODO | T6 |
+| T11 | Auth-failure classification: authentication / authorization vs protocol / transport / tool / UNKNOWN; never retried; category K | 4 | DONE (see T11 section) | T6, T8, T13 |
 | T12 | Safe server restart: idle death only by default; in-flight → UNKNOWN, never replayed; re-initialize + re-list + registry reset; bounded; session recovery workload | 5 | DONE (`9d1f401`, `24011f5`, + measurement commit) | T6, T8 |
 | T13 | Record/replay with redaction: versioned format, deterministic redaction, fail-open relay taps, replay engine + A–H fault-injection corpus, provenance-labelled report | 6 | DONE (`bbb660b` + replay commit) | T4, T12 |
 | T14 | Mid-restart race: gate `tools/call` on a live, listed server; bind every decision to its server generation | 1 | DONE (see T14 section) | T12, T13 |
@@ -818,6 +818,186 @@ evidence.
 - **Session state beyond tools** (resources, subscriptions) is still not
   re-established after a restart (T12 limit).
 
+### T11 Auth-failure classification
+
+**Objective.** Recognise authentication and authorization failures as their
+own class, so the runtime never retries them, repairs around them, counts
+them as transient or as ordinary tool failures, or claims to have recovered
+them. StateGuard does not authenticate, authorize, or handle credentials.
+
+**Ground truth found before the change** (VERIFIED by reading the code and
+the SDK):
+
+- **The retry rule already existed; its input did not.** `Observed.AUTH_ERROR`
+  existed and `decide_retry` already rejected it, but nothing produced it
+  (its comment said "classified by the host").
+- **How the relay mapped errors:**
+  - every JSON-RPC error became `PROTOCOL_ERROR` (never retried, but logged
+    as category I, not K);
+  - every `isError` result became `TOOL_ERROR`. This **was retried** for
+    tools declared read-only/idempotent under `--retry auto`, even when the
+    result was an upstream 401.
+- **MCP defines no JSON-RPC error code for auth.** Authorization is
+  HTTP-transport-level: 401 with `WWW-Authenticate: Bearer
+  error="invalid_token"`, 403 with `error="insufficient_scope"` (RFC 6750),
+  as in the SDK's bearer middleware and OAuth client.
+- **`-32001` is a timeout, not auth.** It is the SDK's `REQUEST_TIMEOUT`,
+  yet this repository's harness fault `AUTH_EXPIRED` sent `-32001
+  "Unauthorized: token expired"`. Classifying by that code would have been
+  wrong.
+- **Recordings lost the signal.** T13's mask-mode redaction rewrote the
+  auth signals ("Unauthorized", "invalid_token") into `Aaaaa`, so a recording
+  could not classify as the live traffic did.
+
+**Classes** (`FailureClass`): `AUTHENTICATION`, `AUTHORIZATION`,
+`PROTOCOL`, `TRANSPORT`, `TOOL`, `UNKNOWN`, `NONE`.
+
+**Signals**, in precedence order. Every result names the rule that fired
+(`signal`, value-free):
+
+1. **StateGuard's own marker wins.** An `error.data["io.stateguard/executionState"]`
+   of `unknown` is UNKNOWN, and `not_sent` is TRANSPORT. Auth-like text or
+   fields never override it.
+2. **Structured `error.data` fields:**
+   - an HTTP status under `status` / `statusCode` / `status_code` /
+     `httpStatus` / `http_status`, integer 401 or 403 only;
+   - an OAuth code under `error` / `error_code` / `errorCode`: exactly
+     `invalid_token` / `invalid_client` / `invalid_grant` (authentication),
+     or `insufficient_scope` / `access_denied` / `unauthorized_client`
+     (authorization).
+
+   A tool's `structuredContent` is never read: it is the tool's data, and a
+   status there may describe another resource.
+3. **HTTP metadata, for hosts that have it** (`classify_http_status`): 401 /
+   403, refined by the `WWW-Authenticate` `error` parameter. The stdio
+   relay has none.
+4. **Narrow text fallback.** It reads only a JSON-RPC `error.message` or the
+   text items of an `isError` result, at most 4096 characters. It matches
+   only:
+   - `401 Unauthorized` / `403 Forbidden`, not followed by a capitalised
+     word;
+   - `HTTP 401`, `HTTP/1.1 403`, `HTTP Error 401`;
+   - `401 Client Error: Unauthorized`;
+   - `error="invalid_token"` / `error="insufficient_scope"`;
+   - a message that *is* `Unauthorized` / `Unauthenticated` / `Forbidden`,
+     optionally followed by punctuation.
+5. **JSON-RPC codes never count.**
+
+If both kinds are present, the result is AUTHENTICATION (`…+conflicting`).
+If no rule fires, the pre-T11 class stands: PROTOCOL for an error, TOOL for
+an `isError` result.
+
+**Retry behaviour.** `classification.observed` feeds the unchanged
+`decide_retry`; the effect semantics are not changed.
+
+| Class | `Observed` | Retried |
+|---|---|---|
+| AUTHENTICATION / AUTHORIZATION | `AUTH_ERROR` | **never**, whatever the declared effect, attempt count or connection |
+| PROTOCOL / TRANSPORT / upstream UNKNOWN | `PROTOCOL_ERROR` | never (as before) |
+| TOOL | `TOOL_ERROR` | only if declared read-only/idempotent under `--retry auto` (as before) |
+| local UNKNOWN (deadline, transport loss) | `UNKNOWN_*` | unchanged T8 rule; see the note below |
+
+- **What the relay logs.** Every delivered auth failure is logged as
+  `auth_failure` (category K: id, tool, failure, signal). `retry_decision`
+  for it carries category K, and `tools_list_failed` carries the class.
+- **The answer is never altered.** A late answer to a request already
+  resolved UNKNOWN is dropped as before and is never classified.
+
+**Note on UNKNOWN and retry (not changed).** The T11 brief says "UNKNOWN →
+never automatically retry".
+
+- **Current rule (T8):** an unknown *outcome* is retried only when the
+  operator declared the tool read-only or idempotent, and only under opt-in
+  `--retry auto`. Undeclared tools are never retried.
+- **Why it is kept.** Changing it would undo M6's measured recoveries, and
+  the brief forbids redesigning retry.
+- **What T11 does guarantee:** UNKNOWN is never *reclassified* (as auth or
+  anything else).
+- **If UNKNOWN must never be retried at all,** that is a one-line policy
+  change in `decide_retry`; it needs the operator's call.
+
+**Recording.** Mask-mode redaction now keeps two things verbatim, both
+fixed vocabulary and never data:
+
+- the spans the text rules match (`failures.signal_spans`);
+- the six OAuth codes.
+
+Masking cannot create a match, because masked text holds only a / A / 1.
+The audit fields `failure` and `signal` are kept as well. Property-tested:
+redaction neither creates nor destroys an auth class. In secrets-only or
+mask mode, a whole string replaced because it matches a credential shape
+(e.g. `auth: 401 Unauthorized` meets the `auth:` assignment rule) loses its
+signal. That is intentional: secret safety first.
+
+**Tests** (VERIFIED):
+
+- `tests/adapters/mcp/test_failures.py`, 174 tests:
+  - structured signals (13 positive, 13 negative shapes);
+  - JSON-RPC codes never auth (including -32001);
+  - `structuredContent` never read;
+  - the execution-state marker beats every auth signal;
+  - 18 text positives in both carriers, and **21 adversarial false
+    positives**: "permission", "authorization hold", "access", "token
+    budget", "403 Forbidden City", "401 Unauthorized Biography", "retry
+    after 401 seconds", auth words in docs and logs, and more;
+  - the scan limit, conflicts, HTTP metadata (10 cases), malformed shapes;
+  - a never-raises / deterministic property;
+  - an auth-word-soup property;
+  - auth is never retried for every effect × attempts × connection (72
+    combinations);
+  - non-auth tool errors keep the T8 policy.
+- `tests/examples/test_relay_auth.py`, 36 tests:
+  - every `auth.py` case × both arms;
+  - the clean-measurement assertion;
+  - shadow logs and changes nothing;
+  - `retry_decision` is K;
+  - an auth failure on the *retry* attempt ends there (2 attempts, no
+    third);
+  - the relay's own `tools/list` 401 is K;
+  - a late 401 after the deadline stays UNKNOWN, is dropped and is not
+    classified.
+  - Against the pre-T11 relay, 18 of the 36 fail.
+- `tests/adapters/mcp/test_recording.py`, +54: redaction preserves the
+  class (both modes), auth signals survive masking while the surrounding
+  data does not, and a property.
+- The existing `test_an_auth_error_is_never_retried` (T8) still passes.
+
+**Measurement M13** (`benchmarks/runtime/auth.py`; 15 cases × 2 arms; fault
+injection on a synthetic workload, not real-world evidence):
+
+| | pre-T11 relay | T11 relay |
+|---|---|---|
+| auth runs retried | **3** (all three auth-as-tool-result cases, `auto_retry`) | **0** |
+| auth failures turned into a client-visible success | 3 (the fixture's retry succeeds, to make a retry visible) | **0** |
+| auth answers delivered exactly as sent | 10/13 | **13/13** |
+| K events logged | 0 | 13 |
+| non-auth runs classified as auth (false positives) | 0 | **0** |
+| UNKNOWN reclassified as auth | 0 | **0** |
+| runs classified as expected | — | **30/30** |
+
+The committed T13 corpus, re-recorded with auth signals kept, has 33
+failure responses: 31 tool, 1 protocol and **1 authentication** (G's
+injected auth fault, `text:reason_phrase`). There are no false positives,
+and the recording's own audit has the K event.
+
+**Known limitations:**
+
+- **The stdio relay has no HTTP metadata.** Auth reaches it only as JSON-RPC
+  errors or tool results, so coverage depends on servers using a
+  structured field or one of the narrow text shapes. Servers that say
+  "Bad credentials", "invalid API key" or "Resource not accessible" are
+  **not** classified. They are treated as before: PROTOCOL (never retried)
+  or TOOL (retried only if declared safe). That is the deliberate fail-safe
+  cost of not guessing.
+- **A tool's report of someone else's 401 is classified as auth.** An
+  `isError` text with `401 Unauthorized` may describe a third-party
+  resource a tool fetched; it is still treated as auth. The effect is no
+  retry, which is the safe direction.
+- **No operator callback.** `auth_failure` in the audit log is the signal;
+  routing it anywhere is the host's job.
+- **The corpus is synthetic.** Real servers' auth error shapes have not been
+  sampled (needs a `real_capture` corpus).
+
 ## Measured results
 
 (Populated as tasks land. Synthetic corpora are labelled as such; nothing here
@@ -1144,8 +1324,8 @@ How to read it:
     in-flight deaths are contained as UNKNOWN.
   - **F / G / H / I:** only operator-declared read-only/idempotent tools are
     recovered. The rest is surfaced, not resolved.
-  - **K:** the server's error is passed through, with no classification
-    (T11).
+  - **K:** classified (T11) and never retried; still resolved only by the
+    operator. No operator callback exists; the audit event is the signal.
 - **Real process restart** is verified for one idle exit (VERIFIED). Not
   covered:
   - a server that ignores `terminate` (the `kill` path);
@@ -1191,5 +1371,4 @@ Recommended next:
 - **Real capture:** run the relay with
   `--record --record-provenance real_capture` in shadow mode against real
   MCP servers, then `replay.py --tapes`. This needs a deployment, not code.
-- **T11:** auth-signal classification + operator callback.
 - **T9:** circuit breaker.
