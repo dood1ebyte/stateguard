@@ -248,6 +248,21 @@ Things that escalate rather than repair:
   alike. `max_price` is not renamed to `min_price`, and `updated_after` is
   not renamed to `created_after`.
 - **A fuzzy match below the threshold for its risk band.**
+- **A list or object where a string is declared.** Rendering it as JSON text
+  is exact, but whether the field holds JSON text (a file's content) or a
+  single value (a path, a commit message, a timestamp) is not something the
+  schema says. A real server accepted `'{"days": 30}'` as a `git log`
+  timestamp and returned the wrong history, so this is offered, not applied.
+- **A string containing `,` `;` or a line break where a list is declared.**
+  `"a.txt, b.txt"` most likely names two items; wrapping it makes one. A
+  single value (`"notes.txt"`) is still wrapped automatically. Whitespace is
+  not treated as a delimiter, so `"a.txt b.txt"` is still wrapped as one
+  item.
+- **A numeric string the float cannot hold exactly**
+  (`"12345678901234567891"`): the cast changes the number.
+
+These carry a *semantic objection* on the candidate (`evidence.contradiction`):
+its trust is still reported as measured, and the reason says why it was held.
 
 Things that are refused:
 

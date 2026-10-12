@@ -1111,6 +1111,10 @@ class StdioRelay:
                     "decision": d.kind.value,
                     "op": d.operation.op_type.value if d.operation else None,
                     "trust": round(d.operation.trust, 3) if d.operation else None,
+                    # For an unresolved decision: "error" is a violation;
+                    # "warning" is an undeclared key an open schema allows,
+                    # passed through -- observed, not invalid.
+                    "severity": d.violation.severity.value if d.violation else None,
                 }
                 for d in outcome.result.field_decisions()
             ],

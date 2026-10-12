@@ -1262,6 +1262,15 @@ remaining `LOSSY` path (dict → JSON string) still scores 1.0, and the corpus
 contains no case where that is the wrong answer, so there is nothing to
 recalibrate against yet. Recorded rather than guessed at.
 
+*Addendum (Git/MCP domain closure).* Both producers still scored a fixed
+1.0, and the wrap still did for delimited strings. Real traffic then
+supplied the missing counter-examples: a path rendered as JSON text, a
+comma-separated list wrapped as one bogus element, and a JSON-text timestamp
+a real server accepted and misread. Neither was recalibrated. Both casts now
+carry a `contradiction` where nothing measurable separates the right reading
+from the wrong one, so they surface as `AMBIGUOUS`. See
+`docs/runtime/TASKMAP.md` (Git/MCP domain closure) and `must_abstain.json`.
+
 ---
 
 ### Original plan

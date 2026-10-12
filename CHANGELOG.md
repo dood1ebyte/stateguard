@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Three exact-but-wrong casts are held for confirmation instead of applied.**
+  `TypeCoercionStrategy` records a semantic objection (`evidence.contradiction`,
+  the mechanism opposed-name renames already use) on:
+  - a list or object rendered as JSON text for a `string`/`bytes` field,
+    directly or through a union member;
+  - a string containing `,` `;` or a line break wrapped as a one-element
+    array.
+
+  A string -> float cast that changes the number (more significant digits
+  than a double holds) is now `LOSSY` instead of `REVERSIBLE`.
+
+  Each of these is `AMBIGUOUS` (MCP `ESCALATE`) with its candidate surfaced
+  and its trust reported as measured. Before, the two `LOSSY` casts reported
+  a fixed `value_preserved = 1.0`, so the `LOSSY` tier's 0.95 bar never
+  fired. Real traffic showed the cost:
+  - **Capture 1b:** a path sent as a list became `'["…"]'` (Z01), and a
+    comma-separated file list became one bogus path (Z02).
+  - **Targeted capture Z-T:** a real server accepted the JSON-text timestamp
+    `'{"days": 30}'` and returned the wrong history.
+
+  The openai-python#2702 shape (file content parsed into an object) is held
+  too; the schema cannot tell file content from a path or a message. Single
+  values are still wrapped, JSON text is still parsed, and every other cast
+  is unchanged. Three calibration cases were added to `must_abstain.json`.
+- **Evidence counts what it names.** Capture 1b reported
+  `calls_with_schema_violations` 19 against 15 calls the server's validator
+  rejected: the count included schema-valid calls whose only decision was an
+  undeclared key on an open schema, and `calls_decided` included a call for a
+  tool the listing does not name (filed under listing `"None"`). Relay `call`
+  decisions now carry `severity` (`error` = violation, `warning` = undeclared
+  key passed through), and `summarize_evidence` reports:
+  - `calls_with_field_violations` and `calls_with_undeclared_fields`, both
+    `null` for older recordings, which cannot separate them;
+  - `calls_unvalidated`, with `calls_decided` and `decided_on_listing` now
+    covering validated calls only.
+
+  `calls_with_schema_violations` is unchanged and documented as legacy.
+  Historical recordings are not rewritten.
 - **The MCP boundary no longer writes declared defaults into tool calls.**
   `MCPToolAdapter.wrap` returns arguments exactly as the repair produced
   them. A valid call that omits an optional parameter with a `default` is

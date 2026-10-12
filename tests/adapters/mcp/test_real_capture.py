@@ -805,3 +805,99 @@ def test_a_default_fill_is_not_counted_as_a_repair_or_a_mismatch() -> None:
     }
     assert proposed["would_repair_call"] == 1  # default fills are not repairs
     assert summary["stateguard_observed"]["calls_with_schema_violations"] == 2
+
+
+def _decision(path: str, kind: str, severity: str | None = None, **extra: Any) -> dict[str, Any]:
+    entry: dict[str, Any] = {"path": path, "decision": kind, "op": None, "trust": None}
+    if severity is not None or "severity" in extra:
+        entry["severity"] = severity
+    return {**entry, **{k: v for k, v in extra.items() if k != "severity"}}
+
+
+def test_violations_undeclared_fields_and_unvalidated_calls_are_counted_apart() -> None:
+    """Capture 1b reported calls_with_schema_violations 19 against 15 calls the
+    server's validator rejected: it counted any call with a field decision,
+    including schema-valid calls whose only decision was an undeclared key on
+    an open schema (S05, S06), and calls_decided counted an unvalidated call
+    (U01, under listing "None"). Each is now its own, defined count."""
+    recorder, sink = _capture(config={"mode": "shadow"})
+    repaired = {"path": "n", "decision": "repaired", "op": "coerce", "trust": 1.0, "severity": None}
+    recorder.audit(_call_event(1, proposal="repair", would_modify=True, decisions=[repaired]))
+    recorder.audit(
+        _call_event(
+            2,
+            auto_action="refuse",
+            proposal="refuse",
+            would_modify=True,
+            decisions=[_decision("n", "unresolved", "error")],
+        )
+    )
+    # Schema-valid: an undeclared key an open schema allows (S05/S06).
+    recorder.audit(
+        _call_event(
+            3,
+            action="forward",
+            proposal="none",
+            decisions=[_decision("verbose", "unresolved", "warning")],
+        )
+    )
+    # Both on one call: a violation, and an extra key.
+    recorder.audit(
+        _call_event(
+            4,
+            proposal="repair",
+            would_modify=True,
+            decisions=[repaired, _decision("extra", "unresolved", "warning")],
+        )
+    )
+    recorder.audit(_call_event(5, action="forward", proposal="none"))  # valid, nothing to say
+    # A tool the listing does not name (U01): not decided.
+    recorder.audit(
+        _call_event(
+            6, action="unvalidated", auto_action="unvalidated", proposal="unvalidated", listing=None
+        )
+    )
+    recorder.close()
+    observed = summarize_evidence(parse_recording(sink.getvalue().splitlines()))[
+        "stateguard_observed"
+    ]
+    assert observed["calls_decided"] == 5 and observed["calls_unvalidated"] == 1
+    assert observed["decided_on_listing"] == {"current": 5}  # no "None" bucket
+    assert observed["calls_with_field_violations"] == 3  # 1, 2, 4
+    assert observed["calls_with_undeclared_fields"] == 2  # 3, 4
+    assert observed["calls_with_schema_violations"] == 4  # legacy: any decision (1-4)
+
+
+def test_a_recording_without_severities_reports_the_split_as_unknown() -> None:
+    """Recordings made before the relay recorded severities (Capture 1a, 1b)
+    cannot tell an undeclared key from a violation: the new counts are None,
+    never a guess. The legacy count is still computed as it always was."""
+    recorder, sink = _capture(config={"mode": "shadow"})
+    recorder.audit(
+        _call_event(
+            1,
+            action="forward",
+            proposal="none",
+            decisions=[{"path": "verbose", "decision": "unresolved", "op": None, "trust": None}],
+        )
+    )
+    recorder.close()
+    observed = summarize_evidence(parse_recording(sink.getvalue().splitlines()))[
+        "stateguard_observed"
+    ]
+    assert observed["calls_with_field_violations"] is None
+    assert observed["calls_with_undeclared_fields"] is None
+    assert observed["calls_with_schema_violations"] == 1
+
+
+def test_severity_survives_redaction() -> None:
+    """``severity`` is fixed vocabulary (error / warning), kept verbatim."""
+    recorder, sink = _capture(config={"mode": "shadow"})
+    recorder.audit(_call_event(1, decisions=[_decision("p", "unresolved", "warning")]))
+    recorder.close()
+    (event,) = [
+        r["event"]
+        for r in parse_recording(sink.getvalue().splitlines()).of_type("audit")
+        if r["event"].get("event") == "call"
+    ]
+    assert event["decisions"][0]["severity"] == "warning"

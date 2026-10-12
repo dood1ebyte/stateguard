@@ -91,6 +91,38 @@ def _events(recording: Recording, name: str) -> list[dict[str, Any]]:
     return [r["event"] for r in recording.of_type("audit") if r["event"].get("event") == name]
 
 
+def _field_findings(decided: list[dict[str, Any]]) -> tuple[int | None, int | None]:
+    """
+    ``(calls_with_field_violations, calls_with_undeclared_fields)``.
+
+    A *violation* is a field StateGuard's own validator found invalid: any
+    repaired, held or discarded decision (those exist only for violations),
+    or an unresolved one of severity ``error``. An *undeclared field* is an
+    unresolved decision of severity ``warning``: a key the schema does not
+    declare but, being open, allows -- passed through, observed, not invalid.
+
+    Both are StateGuard's contract model, not the server's validator: a call
+    can violate one and satisfy the other (an integral float for an integer).
+
+    ``(None, None)`` when an unresolved decision carries no ``severity``
+    (recordings made before the relay recorded it): the two cannot be told
+    apart, and a guess would be a number with no meaning.
+    """
+    violations = undeclared = 0
+    for event in decided:
+        decisions = [d for d in event.get("decisions") or [] if isinstance(d, dict)]
+        unresolved = [d for d in decisions if d.get("decision") == "unresolved"]
+        if any(d.get("severity") is None for d in unresolved):
+            return None, None
+        if any(d.get("decision") != "unresolved" for d in decisions) or any(
+            d.get("severity") == "error" for d in unresolved
+        ):
+            violations += 1
+        if any(d.get("severity") == "warning" for d in unresolved):
+            undeclared += 1
+    return violations, undeclared
+
+
 def summarize_evidence(recording: Recording) -> dict[str, Any]:
     """The recording's evidence, by kind. Deterministic; reads nothing but *recording*."""
     header = recording.header
@@ -155,8 +187,13 @@ def summarize_evidence(recording: Recording) -> dict[str, Any]:
     answered_any = {_key(r.get("id")) for r in from_server if r["kind"] in ("response", "error")}
 
     # -- proposals: what auto mode would have done -----------------------------
-    decided = _events(recording, "call")
+    calls = _events(recording, "call")
+    # A call for a tool the listing does not name is forwarded unvalidated:
+    # StateGuard decided nothing about it, so it is counted apart.
+    unvalidated = [e for e in calls if e.get("action") == "unvalidated"]
+    decided = [e for e in calls if e.get("action") != "unvalidated"]
     would_modify = [e for e in decided if e.get("would_modify") is True]
+    field_violations, undeclared_fields = _field_findings(decided)
     retry_decisions = _events(recording, "retry_decision")
 
     servers = sorted(
@@ -228,7 +265,10 @@ def summarize_evidence(recording: Recording) -> dict[str, Any]:
             "not_sent": len(_events(recording, "not_sent")),
         },
         "stateguard_observed": {
+            # Calls StateGuard checked against a listed schema.
             "calls_decided": len(decided),
+            # Calls for a tool the listing did not name: forwarded unchecked.
+            "calls_unvalidated": len(unvalidated),
             "decided_on_listing": dict(
                 sorted(Counter(str(e.get("listing")) for e in decided).items())
             ),
@@ -250,9 +290,20 @@ def summarize_evidence(recording: Recording) -> dict[str, Any]:
                 if isinstance(c, dict) and c.get("breaking") is True
             ),
             "internal_errors": len(_events(recording, "internal_error")),
-            # Calls with at least one field StateGuard found invalid (repaired,
-            # held, discarded or unresolved): the schema mismatches. A valid
-            # call that only omitted optional fields is not one.
+            # Calls with at least one field StateGuard's validator found
+            # invalid -- its contract model, which is stricter than JSON Schema
+            # in places (an integral float for an integer), so this is not
+            # "calls the server would reject". None for recordings without
+            # decision severities.
+            "calls_with_field_violations": field_violations,
+            # Calls carrying a key the schema does not declare but, being
+            # open, allows: passed through as sent. An observation, not a
+            # violation -- StateGuard cannot tell a harmless extra from a
+            # misnamed optional parameter the server will silently ignore.
+            "calls_with_undeclared_fields": undeclared_fields,
+            # Legacy, kept so summaries stay comparable with earlier reports:
+            # calls with *any* field decision, which also counts calls whose
+            # only decision is an undeclared field. Prefer the two above.
             "calls_with_schema_violations": sum(1 for e in decided if e.get("decisions")),
         },
         "proposed": {

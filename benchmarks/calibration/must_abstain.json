@@ -243,6 +243,65 @@
       "expected_payload": {
         "code": "X"
       }
+    },
+    {
+      "name": "list_rendered_as_text_for_a_path",
+      "description": "A list where a string is declared. JSON-serialising it is exact as an encoding but wrong as a meaning for a path, a commit message or a timestamp: Capture 1b (Z01) saw a repository path rendered '[\"...\"]' at trust 1.0, and capture Z-T saw a real server accept a JSON-text timestamp and return the wrong history. The schema cannot tell such a field from one that holds JSON text, so the cast is surfaced, not applied.",
+      "schema": {
+        "fields": [
+          {
+            "path": "repo_path",
+            "type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "repo_path": [
+          "/srv/repo"
+        ]
+      },
+      "expected_payload": {
+        "repo_path": [
+          "/srv/repo"
+        ]
+      }
+    },
+    {
+      "name": "delimited_string_wrapped_as_one_element",
+      "description": "A comma-separated string where a list of strings is declared. Wrapping makes one element of what most likely names two (Capture 1b, Z02: git failed on the bogus path). Splitting would be a guess at the delimiter; wrapping is a guess at the cardinality. Surfaced, not applied.",
+      "schema": {
+        "fields": [
+          {
+            "path": "files",
+            "type": "array",
+            "item_type": "string"
+          }
+        ]
+      },
+      "payload": {
+        "files": "notes.txt, README.txt"
+      },
+      "expected_payload": {
+        "files": "notes.txt, README.txt"
+      }
+    },
+    {
+      "name": "float_cast_that_changes_the_number",
+      "description": "A numeric string with more significant digits than a double holds. The cast is deterministic but the float is a different number than the text names: information destroyed (LOSSY), not reformatted.",
+      "schema": {
+        "fields": [
+          {
+            "path": "amount",
+            "type": "float"
+          }
+        ]
+      },
+      "payload": {
+        "amount": "12345678901234567891"
+      },
+      "expected_payload": {
+        "amount": "12345678901234567891"
+      }
     }
   ]
 }

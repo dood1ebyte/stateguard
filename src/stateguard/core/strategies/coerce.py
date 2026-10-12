@@ -8,7 +8,10 @@ represents a value of the target type:
   sequence, e.g. ``"30"`` or ``"-5"``.
 * ``float`` → ``int``  — only if the float has no fractional part
   (``5.0``), which JSON Schema already counts as an integer.
-* ``str`` → ``float``  — only if ``float(value)`` succeeds.
+* ``str`` → ``float``  — only if ``float(value)`` succeeds.  A string whose
+  numeric value the float cannot hold (``"12345678901234567891"``, more
+  significant digits than a double carries) is ``LOSSY``, not
+  ``REVERSIBLE``: the cast is deterministic, but it changes the number.
 * ``int`` → ``float``  — always safe.
 * ``str`` → ``bool``   — only for the exact strings (case-insensitive)
   ``"true"``, ``"false"``, ``"1"``, ``"0"``.
@@ -17,6 +20,12 @@ represents a value of the target type:
   and round-trippable; repairs harness-side over-parsing of JSON text
   arguments).  ``BYTES`` targets also yield a ``str`` — the framework's
   native validation encodes it (e.g. Pydantic's lax str -> bytes).
+  **Proposed, never applied unsupervised**: the operation carries a
+  ``contradiction``, so the best it can be is ``AMBIGUOUS``.  Whether a
+  string field holds JSON text (a file's content) or one value (a path, a
+  commit message, a timestamp) is not something the schema says, and
+  rendering a list as text is right for the first and silently wrong for the
+  second -- see "Semantic objections" below.
 * ``str`` → ``dict``/``list`` — JSON-*parse*, for ``OBJECT`` and ``ARRAY``
   targets, when the string parses to the declared shape.  This is the more
   common direction in practice: a model asked for an object returns it as a
@@ -30,12 +39,35 @@ represents a value of the target type:
   first**: a JSON array string satisfies ``item_type=string`` as a single
   element, so wrapping would turn ``'["a","b"]'`` into ``['["a","b"]']`` --
   which validates cleanly as a list of strings and is silently wrong.
+  A string holding a list delimiter (``,`` ``;`` or a line break) is still
+  proposed as one element but carries a ``contradiction``: ``"a.txt,
+  b.txt"`` most likely names two items, and wrapping it names one.
 * value → union        — for ``UNION`` targets, each member is tried with
   the rules above; the coercion is proposed only when exactly one member
   yields the highest-confidence candidate (ties are ambiguous and refused).
+  The chosen member's evidence -- contradiction included -- is the
+  operation's evidence.
 
 All other combinations are left unrepaired by this strategy (no operation
 is proposed; ``confidence`` is never fabricated for unsafe casts).
+
+Semantic objections
+-------------------
+Round-trip fidelity measures whether a cast is *deterministic and
+lossless as an encoding*; it says nothing about whether the result means
+what the caller meant.  For the two ``LOSSY`` casts it is 1.0 by
+construction, so the ``LOSSY`` tier's bar was always cleared (recorded in
+``CORE_HARDENING_PLAN.md``, Phase 6).  Real traffic showed the cost: a list
+sent for a repository path was rendered ``'["/repo"]'`` at trust 1.0, a
+comma-separated file list was wrapped as one bogus path, and a JSON-text
+timestamp was *accepted* by a real server and silently returned the wrong
+history (``docs/runtime/TASKMAP.md``, Git/MCP domain closure).
+
+Where no measurable signal separates the right reading from the wrong one,
+the operation records a ``contradiction`` -- the mechanism
+``FuzzyFieldMatchStrategy`` uses for opposed names.  It never creates or
+alters a repair: ``TrustPolicy`` turns an ``APPLY`` into ``AMBIGUOUS`` and
+the candidate is surfaced for a caller to confirm (an MCP ``ESCALATE``).
 
 This strategy determines *feasibility and confidence* only.  The actual
 cast is performed by the engine when applying the ``COERCE`` operation,
@@ -46,6 +78,7 @@ using ``ContractSpec`` to look up the target ``FieldType`` (and, for
 from __future__ import annotations
 
 import json
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from stateguard.core.errors.operations import (
@@ -97,6 +130,23 @@ _FIDELITY_NORMALISED = FIDELITY_NORMALISED
 
 #: ``"1"`` -> ``True`` is a reading of the string, not a re-encoding of it.
 _FIDELITY_BOOL_NUMERIC = 0.80
+
+#: Recorded on a container -> JSON-text cast. Value-free, like every
+#: contradiction: it ends up in the reason a caller reads.
+_JSON_TEXT_OBJECTION = (
+    "rendering a structured value as JSON text changes what the field says; "
+    "the schema does not state that this field holds JSON text"
+)
+
+#: Characters that separate list items in text. Deliberately not whitespace:
+#: a file name with a space is ordinary, a file name with a comma is not.
+_LIST_DELIMITERS = (",", ";", "\n", "\r")
+
+#: Recorded on a wrap-in-list whose string contains a list delimiter.
+_DELIMITED_WRAP_OBJECTION = (
+    "the value contains a list delimiter, so it may name several items; "
+    "wrapping it makes exactly one"
+)
 
 # Strings accepted for str -> bool coercion (case-insensitive).
 _BOOL_TRUE_WORDS = {"true"}
@@ -187,6 +237,7 @@ def _coercion_evidence(
                 # union offering both this and a wrap-in-list prefers the wrap.
                 signals=(("structure_preserved", 0.0),),
                 notes=(f"{type(value).__name__} serialises to JSON and parses back equal",),
+                contradiction=_JSON_TEXT_OBJECTION,
             ),
             RepairRisk.LOSSY,
         )
@@ -230,6 +281,18 @@ def _coercion_evidence(
             )
         if isinstance(value, str) and _is_float_string(value):
             fidelity = _roundtrip_fidelity(value, float(value))
+            if _float_changes_value(value):
+                # Deterministic, and wrong about the number: the double holds
+                # a different value than the text named. That is information
+                # destroyed, which is what LOSSY means -- not a formatting
+                # difference like "1.50" -> 1.5, which REVERSIBLE covers.
+                return (
+                    RepairEvidence(
+                        value_preserved=fidelity,
+                        notes=("str -> float changes the numeric value",),
+                    ),
+                    RepairRisk.LOSSY,
+                )
             return (
                 RepairEvidence(
                     value_preserved=fidelity,
@@ -299,6 +362,11 @@ def _coercion_evidence(
                     # stays a dict. Only cardinality is invented.
                     signals=(("structure_preserved", 1.0),),
                     notes=("value matches the declared item_type; wrapped as a single element",),
+                    contradiction=(
+                        _DELIMITED_WRAP_OBJECTION
+                        if isinstance(value, str) and any(d in value for d in _LIST_DELIMITERS)
+                        else None
+                    ),
                 ),
                 RepairRisk.LOSSY,
             )
@@ -698,6 +766,25 @@ def _is_float_string(value: str) -> bool:
     except ValueError:
         return False
     return parsed == parsed and parsed not in (float("inf"), float("-inf"))
+
+
+def _float_changes_value(value: str) -> bool:
+    """
+    ``True`` if ``float(value)`` holds a different number than *value* names.
+
+    Compared as exact decimals: ``Decimal`` equality is numeric and ignores
+    formatting, so ``"1.50"``, ``"1e3"`` and ``"0.1"`` -- which name exactly
+    what their doubles print as (``repr`` is the shortest text that reads
+    back as the same double) -- are unchanged. ``"12345678901234567891"`` and
+    a 37-digit decimal are not: the double rounded them. No ``normalize()``:
+    it rounds to the context's 28 digits and would hide a difference past
+    the 28th. Only called on text ``_is_float_string`` accepted; anything
+    ``Decimal`` does not parse is treated as unchanged rather than raised.
+    """
+    try:
+        return Decimal(value.strip()) != Decimal(repr(float(value)))
+    except (InvalidOperation, ValueError):
+        return False
 
 
 # ---------------------------------------------------------------------------
