@@ -955,6 +955,7 @@ class Redactor:
             "failure",
             "signal",
             "proposal",
+            "severity",
         }
     )
 

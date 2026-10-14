@@ -1256,6 +1256,120 @@ call; only forwarded payloads lose keys the model never sent.
   The two staleness tests that raced the relay's first listing (flaky 1/40
   since F1) now wait for it.
 
+### Git/MCP domain closure (mcp-server-git)
+
+One server (mcp-server-git 2026.8.18, MCP SDK 1.30.0), scripted workloads,
+synthetic fixtures, shadow mode, `real_capture` provenance. Nothing here is a
+rate, and nothing generalises beyond this server without a second domain.
+
+**Evidence inventory (all kept, outside the repository, never rewritten).**
+
+| Capture | Calls | What it established |
+|---|---|---|
+| 1a (superseded, pre-PR #16) | 18 valid | F1 (relay listed before `initialize`), F2 (default fills reported as repairs) |
+| 1a corrected (`6c233ee`) | 18 valid | 0 proposals; F1 fixed in real traffic; live schemas = corpus snapshot 12/12 |
+| 1b | 34 (18 faults, 6 semantic, 10 controls) | Z01/Z02 unsafe repairs at trust 1.0; R08/R09; S03/S06 blind spots; metric over-count |
+| Z-T (targeted) | 8 read-only `git_log` | a JSON-text proposal accepted *and wrong* (`'{"days": 30}'`: 0 commits vs 1 intended); `'["2026-09-01"]'` coincidentally right; two dates silently resolved to the later |
+
+**Unsafe-repair boundary -- root cause.** The two `LOSSY` casts in
+`TypeCoercionStrategy` (container -> JSON text; scalar -> one-element array)
+reported a fixed `value_preserved = 1.0`, the only scored signal, so trust
+was 1.0 and the `LOSSY` 0.95 bar was inert (recorded in
+`CORE_HARDENING_PLAN.md` Phase 6, deferred for lack of a counter-example).
+Round-trip fidelity measures *determinism of the encoding*, not intent.
+
+**18-case offline experiment** (6 safe, 6 dangerous, 6 ambiguous; real git
+schemas where a git tool has the field shape, otherwise a minimal synthetic
+tool; `with_mcp()`, auto):
+
+| Policy | Dangerous applied | Safe lost | Ambiguous escalated |
+|---|---|---|---|
+| before | 6/6 | 0/6 | 1/6 |
+| R3 (LOSSY never auto) | 2/6 | 0/6 | 4/6 (also the single-token wrap) |
+| R1 (JSON-text objection) | 3/6 | 0/6 | 3/6 |
+| R2 (delimiter objection) | 5/6 | 0/6 | 1/6 |
+| R1+R2+R4 (adopted) | 1/6 | 0/6 | 3/6 |
+
+Full-suite impact of R1+R2+R4 (scratch patch): 3 tests, all the
+openai-python#2702 JSON-serialise integration tests. Two labels were not
+supported by the evidence: `"00123"` -> 123 under an *integer* schema (the
+integer value is unambiguous; kept), and the single-token wrap (it matched
+the intended baseline in 1b; kept).
+
+**Adopted (core, `coerce.py`; reuses the `contradiction` channel, so it can
+only turn APPLY into AMBIGUOUS):**
+- **R1:** a container rendered as JSON text for a `string`/`bytes` field,
+  directly or through a union member.
+- **R2:** a string holding `,` `;` or a line break, wrapped as one element.
+- **R4:** a string -> float cast that changes the number is `LOSSY`, not
+  `REVERSIBLE`.
+
+Shadow proposals become `escalate`, and auto escalates (the server receives
+nothing).
+
+- **Cost.** The openai-python#2702 file-content shape is held too: no schema
+  signal separates file content from a path or a message.
+- **Not adopted.** R3 as a default (it loses correct single-token wraps; it
+  remains an operator setting via `TrustPolicy` bands).
+
+**R08/R09 -- unchanged, by decision.** StateGuard's INTEGER excludes integral
+floats (stricter than JSON Schema 2020-12) and coerces them exactly.
+- **R08:** `3.0` was valid for the server and ran: an unnecessary but
+  value-identical proposal.
+- **R09:** `2.0` was valid for the server's schema and failed in git; the
+  coercion matched the working baseline.
+
+Both outcomes are real, the coercion never changes a value, and it is pinned
+by calibration (`coerce_integral_float_to_int`) and the drift corpus.
+DEFERRED: reporting "schema-valid normalisation" apart from repairs needs a
+JSON-Schema-conformant second validator and more than one server.
+
+**S03/S06 boundary.**
+- **S03** (`Invalid branch type` returned as a success) is *not detectable*.
+  It is free text in a result with no `outputSchema`, and result checks are
+  structural. It is an explicit non-goal for this wedge.
+- **S06** (misnamed optional silently ignored) is *partly observed.*
+  - The undeclared key is now counted (`calls_with_undeclared_fields`), but
+    StateGuard cannot tell it from a harmless extra (S05).
+  - Flagging likely-misnamed optionals on open schemas would block valid
+    calls. That is a product decision, and it is DEFERRED.
+- **U01** (unknown tool) is forwarded unvalidated, never renamed. The
+  server's SDK also skipped validation. It is now counted as
+  `calls_unvalidated`.
+
+**Evidence metrics.**
+- Relay decisions carry `severity`.
+- New counts: `calls_with_field_violations` (StateGuard's contract model, not
+  the server's validator), `calls_with_undeclared_fields` and
+  `calls_unvalidated`.
+- `calls_decided` and `decided_on_listing` now cover validated calls only.
+- `calls_with_schema_violations` is legacy and unchanged.
+- Recomputed from Capture 1b (file untouched): `calls_decided` 33 +
+  `calls_unvalidated` 1. The new split is `null` because 1b predates
+  severities; the legacy count is still 19.
+
+**Validation.**
+- Full suite: 5776 passed, 0 failed. Ruff and `mypy --strict` are clean.
+- `measure.py`: 0 per-call outcome changes across 775 results versus
+  `d4b4abb`; only latency moved.
+- Replay: outcome table unchanged, fidelity 68/68 answers and 58/58
+  decisions, determinism 40 runs with 0 mismatched. The tapes were
+  re-recorded; the only difference is the `severity` key.
+- Race: 0 unsafe bypasses and 0 duplicate executions.
+- Auth: 32/32 classified, 0 retried.
+
+**Deferred.**
+- `contentMediaType: application/json` as the authority that would let
+  JSON-text rendering apply. No real server here declares it, and the
+  extractor ignores annotations.
+- Whitespace-separated lists (`"a.txt b.txt"` is still wrapped as one item).
+- `"1"`/`"0"` -> bool on consequential flags.
+- Enum collisions refusing at 0.595 rather than escalating.
+- Consequence by tool effect or field role (effect declarations feed retries
+  only).
+- A full separation of likelihood, determinism and consequence in the trust
+  model.
+
 ## Measured results
 
 (Populated as tasks land. Synthetic corpora are labelled as such; nothing here
@@ -1602,9 +1716,10 @@ How to read it:
 - **Opposite lexicon is finite.** Pairs outside it and outside the affix rule
   (e.g. `buy`/`sell` as single tokens) fall back to similarity, which is
   usually low for true antonyms. This is measured, not assumed.
-- **Measurement is synthetic throughout.** Record/replay infrastructure
-  enables real-traffic measurement but does not itself constitute
-  real-traffic evidence. No `real_capture` recording exists yet.
+- **Measurement is mostly synthetic.** Four `real_capture` recordings exist
+  (one server, scripted workloads; see "Git/MCP domain closure"). They are
+  evidence about that server's behaviour, not rates; everything else is
+  synthetic.
 - **Replay limits** (T13): sequential only; timing not replayed (deadline
   effects not reproduced); counterfactual answers are model predictions;
   decisions that depend on masked values can differ (fidelity is measured,
@@ -1633,7 +1748,9 @@ How to read it:
 
 Recommended next:
 
-- **First real capture:** follow `docs/runtime/REAL_CAPTURE.md`
-  ("Procedure") against a stdio MCP server you control. This needs a
-  deployment and an operator decision, not code.
+- **A second MCP domain** that differs from mcp-server-git where the Git
+  findings could not generalise. It should have declared `outputSchema`
+  (result integrity), enums and bounds, closed schemas
+  (`additionalProperties: false`), and the SDK 2.x lifecycle. The Git/MCP
+  domain is closed.
 - **T9:** circuit breaker.

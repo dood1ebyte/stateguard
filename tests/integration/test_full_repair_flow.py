@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 
+from stateguard.core.errors.operations import FieldOpType, RepairRisk
 from stateguard.core.errors.results import RepairStatus
 
 
@@ -481,13 +482,29 @@ class TestUnionRepair:
 class TestJsonSerializeRepair:
     """dict where str / bytes is expected -> json.dumps'd back into a
     string (the openai-agents @function_tool write_file shape: an agent
-    harness parses the LLM's raw JSON text argument into an object)."""
+    harness parses the LLM's raw JSON text argument into an object).
+
+    The serialisation is still *found*, but held rather than applied: the
+    schema cannot tell file content (where JSON text is right) from a path,
+    a commit message or a timestamp (where it is silently wrong -- a real
+    server accepted ``'{"days": 30}'`` as a timestamp and returned the wrong
+    history). The candidate is surfaced for the caller to confirm.
+    """
 
     PACKAGE_JSON = {"name": "hello_world", "dependencies": {"express": "^5.1.0"}}
 
-    def test_dict_payload_for_str_field_repairs(self) -> None:
-        import json
+    @staticmethod
+    def _held_serialisation(result: Any) -> None:
+        assert result.status is RepairStatus.AMBIGUOUS
+        (held,) = result.ambiguous
+        assert held.target_path == "content"
+        best = held.candidates[0]
+        assert best.op_type is FieldOpType.COERCE and best.risk is RepairRisk.LOSSY
+        assert best.trust == 1.0  # the cast is exact; that is not what holds it
+        assert best.evidence.contradiction is not None
+        assert "JSON text" in best.evidence.contradiction
 
+    def test_dict_payload_for_str_field_is_held_not_applied(self) -> None:
         ContractGuard = _require_guard()
         from pydantic import BaseModel
 
@@ -500,13 +517,9 @@ class TestJsonSerializeRepair:
             WriteFileArgs, {"file_path": "package.json", "content": self.PACKAGE_JSON}
         )
 
-        assert result.status is RepairStatus.SUCCESS
-        assert isinstance(result.repaired_output, WriteFileArgs)
-        assert result.repaired_output.content == json.dumps(self.PACKAGE_JSON)
+        self._held_serialisation(result)
 
-    def test_dict_payload_for_bytes_field_repairs(self) -> None:
-        import json
-
+    def test_dict_payload_for_bytes_field_is_held_not_applied(self) -> None:
         ContractGuard = _require_guard()
         from pydantic import BaseModel
 
@@ -519,11 +532,9 @@ class TestJsonSerializeRepair:
             WriteFileArgs, {"file_path": "package.json", "content": self.PACKAGE_JSON}
         )
 
-        # Pydantic's lax str -> bytes encoding turns the serialised str
-        # into bytes when the repaired output is rehydrated.
-        assert result.status is RepairStatus.SUCCESS
-        assert isinstance(result.repaired_output, WriteFileArgs)
-        assert result.repaired_output.content == json.dumps(self.PACKAGE_JSON).encode()
+        # BYTES maps like STRING (the framework would encode the text), and
+        # is held for the same reason.
+        self._held_serialisation(result)
 
     def test_genuine_bytes_value_stays_already_valid(self) -> None:
         """Regression guard for the BYTES mapping: a real (even non-UTF-8)
@@ -543,9 +554,7 @@ class TestJsonSerializeRepair:
         assert result.status is RepairStatus.ALREADY_VALID
         assert result.attempts == []
 
-    def test_dict_schema_bytes_type_parses_and_repairs(self) -> None:
-        import json
-
+    def test_dict_schema_bytes_type_parses_and_is_held(self) -> None:
         ContractGuard = _require_guard()
 
         guard = ContractGuard.with_dict_schema()
@@ -557,8 +566,4 @@ class TestJsonSerializeRepair:
         }
         result = guard.repair(contract, {"file_path": "package.json", "content": self.PACKAGE_JSON})
 
-        assert result.status is RepairStatus.SUCCESS
-        assert result.repaired_output == {
-            "file_path": "package.json",
-            "content": json.dumps(self.PACKAGE_JSON),
-        }
+        self._held_serialisation(result)
