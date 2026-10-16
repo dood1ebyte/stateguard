@@ -1,0 +1,10 @@
+{
+  "name": "stateguard-domain2-mcp-server-filesystem",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pinned environment for StateGuard's second MCP domain (Week 2). Install with: npm ci --ignore-scripts",
+  "engines": { "node": "22.22.0", "npm": "10.9.4" },
+  "dependencies": {
+    "@modelcontextprotocol/server-filesystem": "2026.8.31"
+  }
+}
