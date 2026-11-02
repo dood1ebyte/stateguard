@@ -23,7 +23,14 @@ registry: ``(tool name, server)``, with no guessing across servers. MCP tool
 annotations (``readOnlyHint``, ``idempotentHint``, ``destructiveHint``) are
 **hints from the server, not facts**: the specification itself calls them
 untrusted unless the server is. They are recorded on the declaration for
-display and audit, and they never change it.
+display and audit, and by default they never change it.
+
+The one opt-in exception: ``of(..., trust_read_only_hints=True)`` -- the
+operator saying "I trust this server's annotations" -- reads
+``readOnlyHint: true`` on a tool the operator did not declare as READ_ONLY,
+with ``source="server_hint"`` on the declaration so the audit shows where it
+came from. No other hint is ever trusted (``idempotentHint`` and
+``destructiveHint`` included), and an operator declaration always wins.
 
 ``decide_retry`` -- a rule, not a score
 ---------------------------------------
@@ -44,11 +51,27 @@ The rules, in order:
 3. A JSON-RPC protocol error: never retried -- the server rejected the
    request itself; sending it again gets the same answer.
 4. An unknown outcome (no answer by the deadline, or the connection lost
-   with the request in flight): **never retried, whatever the declared
-   effect** -- escalated. It may have executed; replaying an uncertain side
-   effect is not StateGuard's call, even for a tool declared safe to repeat.
+   with the request in flight): **never retried** -- escalated. It may have
+   executed; replaying an uncertain side effect is not StateGuard's call,
+   even for a tool declared IDEMPOTENT (idempotent is not the same as safe
+   to run twice *concurrently*, and a deadline-expired call may still be
+   running).
+
+   Two exceptions, both opt-in:
+
+   * ``reread_unknown=True``: a tool the operator declared **READ_ONLY** is
+     requested once more. A read has no side effect to repeat, so asking
+     again is a new read, not a replay of an effect -- and an original still
+     running beside it changes nothing either. The declaration is the
+     operator's; annotations never count.
+   * ``keyed=True``: the call carries an idempotency key its server says it
+     honours. The resend is the same request with the same key; the server
+     answers it from its own durable record (the recorded result, or "in
+     doubt") and never executes it twice. See ``idempotency``.
 5. From here the attempt failed *knowingly* (a tool error). The attempt
-   budget is spent: deliver the error.
+   budget is spent: deliver the error. A keyed call (see below) is resent
+   once: the server answers a recorded error from its record, and executes
+   only a key it never claimed.
 6. The effect is not declared READ_ONLY or IDEMPOTENT by the operator:
    deliver the error.
 7. Declared safe to repeat: retry.
@@ -105,17 +128,30 @@ class EffectDeclaration:
     """A tool's effect, and where that came from."""
 
     effect: Effect
-    #: True only when the operator declared it. A default is never a declaration.
+    #: True only when the operator declared it (or, opted in, trusted the
+    #: server's readOnlyHint for it). A default is never a declaration.
     declared: bool
-    #: The server's annotations, as sent. Untrusted; recorded, never used.
+    #: The server's annotations, as sent. Untrusted; recorded, never used
+    #: unless the operator opted in to trusting readOnlyHint.
     hints: Mapping[str, Any] = field(default_factory=dict)
+    #: Where a declaration came from: "operator", "server_hint", or "" (none).
+    source: str = ""
 
     @property
     def repeatable(self) -> bool:
         return self.declared and self.effect.repeatable
 
     def to_dict(self) -> dict[str, Any]:
-        return {"effect": self.effect.value, "declared": self.declared, "hints": dict(self.hints)}
+        out: dict[str, Any] = {
+            "effect": self.effect.value,
+            "declared": self.declared,
+            "hints": dict(self.hints),
+        }
+        # Only a trusted hint says where it came from: every other declaration
+        # is the operator's (or none), and its record is unchanged.
+        if self.source == "server_hint":
+            out["source"] = self.source
+        return out
 
 
 class EffectPolicy:
@@ -165,13 +201,22 @@ class EffectPolicy:
         *,
         server: str | None = None,
         annotations: Mapping[str, Any] | None = None,
+        trust_read_only_hints: bool = False,
     ) -> EffectDeclaration:
-        """The tool's declaration. *annotations* are recorded as hints only."""
+        """
+        The tool's declaration. *annotations* are recorded as hints only --
+        unless *trust_read_only_hints*, and then only ``readOnlyHint: true``
+        on a tool the operator declared nothing for.
+        """
         hints = {k: annotations[k] for k in _HINT_KEYS if annotations and k in annotations}
         effect = self._declared.get((name, server))
-        if effect is None:
-            return EffectDeclaration(Effect.UNKNOWN, declared=False, hints=hints)
-        return EffectDeclaration(effect, declared=True, hints=hints)
+        if effect is not None:
+            return EffectDeclaration(effect, declared=True, hints=hints, source="operator")
+        if trust_read_only_hints and hints.get("readOnlyHint") is True:
+            return EffectDeclaration(
+                Effect.READ_ONLY, declared=True, hints=hints, source="server_hint"
+            )
+        return EffectDeclaration(Effect.UNKNOWN, declared=False, hints=hints)
 
     def __len__(self) -> int:
         return len(self._declared)
@@ -214,12 +259,20 @@ def decide_retry(
     attempts_made: int,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     connection_available: bool = True,
+    reread_unknown: bool = False,
+    keyed: bool = False,
 ) -> RetryVerdict:
     """
     Whether to send an attempt again. See the module docstring for the rules.
 
-    ``connection_available`` is accepted for compatibility; since an unknown
-    outcome is never retried, no remaining rule depends on it.
+    ``connection_available`` is accepted for compatibility; no rule depends
+    on it (where a re-read goes after a lost connection is the caller's).
+    ``reread_unknown`` enables rule 4's first exception: an unknown outcome
+    of a tool the operator declared READ_ONLY is requested once more.
+    ``keyed``: the call carries an idempotency key that its server says it
+    honours (``stateguard.adapters.mcp.idempotency``) -- a resend is then
+    answered from the server's record and never executed twice, so rule 4's
+    second exception resends it once, with the same key.
     """
     reject, ambiguous, apply = TrustDecision.REJECT, TrustDecision.AMBIGUOUS, TrustDecision.APPLY
     if observed is Observed.SUCCESS:
@@ -233,7 +286,31 @@ def decide_retry(
     if observed is Observed.PROTOCOL_ERROR:
         return RetryVerdict(reject, "the server rejected the request itself; it would again")
     if observed.outcome_unknown:
-        # Whatever the declared effect: an unknown outcome is never replayed.
+        if keyed:
+            if attempts_made >= max_attempts:
+                return RetryVerdict(
+                    ambiguous,
+                    f"outcome unknown after {attempts_made} keyed attempt(s), the most "
+                    "allowed; escalated",
+                )
+            return RetryVerdict(
+                apply,
+                "outcome unknown, and the server honours this call's idempotency key: a "
+                "resend with the same key is answered from its record, never executed twice",
+            )
+        if reread_unknown and effect.declared and effect.effect is Effect.READ_ONLY:
+            if attempts_made >= max_attempts:
+                return RetryVerdict(
+                    ambiguous,
+                    f"outcome unknown after {attempts_made} attempt(s), the most allowed; "
+                    "escalated",
+                )
+            return RetryVerdict(
+                apply,
+                "outcome unknown, and the tool is declared read_only by the operator: "
+                "requesting it again repeats no side effect",
+            )
+        # Otherwise, whatever the declared effect: an unknown outcome is never replayed.
         return RetryVerdict(
             ambiguous,
             "outcome unknown: it may have executed, and an unknown outcome is never re-sent "
@@ -242,6 +319,12 @@ def decide_retry(
     # From here on the attempt failed *knowingly* (a tool error).
     if attempts_made >= max_attempts:
         return RetryVerdict(reject, f"{attempts_made} attempt(s) made, the most allowed")
+    if keyed:
+        return RetryVerdict(
+            apply,
+            "the server honours this call's idempotency key: a resend with the same key is "
+            "answered from its record if the error was recorded, executed only if it never was",
+        )
     if not effect.repeatable:
         why = (
             "declared non-idempotent by the operator"

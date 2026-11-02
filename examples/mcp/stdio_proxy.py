@@ -80,10 +80,57 @@ and only with ``--retry auto``. The rule is ``decide_retry``: never after an
 authorization or protocol error, never past the attempt budget (one retry),
 never for a tool not declared safe to repeat, and **never after an unknown
 outcome** (no answer by the deadline, or the connection lost with the
-request in flight) -- whatever the declared effect, that is escalated as
-"outcome unknown" and never re-sent. Tool annotations
-(``readOnlyHint`` ...) are recorded as hints and never decide anything. The
-default, ``--retry shadow``, logs every decision and retries nothing.
+request in flight) -- that is escalated as "outcome unknown" and never
+re-sent. Tool annotations (``readOnlyHint`` ...) are recorded as hints and
+never decide anything. The default, ``--retry shadow``, logs every decision
+and retries nothing.
+
+One exception, for reads (with ``--retry auto``; ``--no-reread-unknown``
+turns it off): a call whose outcome is unknown **and whose tool the operator
+declared READ_ONLY** is requested once more. A read repeats no side effect,
+so this is a new read, never the replay of an effect. After a deadline it
+goes to the same server, and the client gets whichever answer comes first --
+the original's late success or the re-read's -- and never both. After a lost
+connection it waits (bounded) for the restarted server, and goes only to a
+server whose own tool listing has been synced. When no answer can come, the
+client is answered "outcome unknown", as before. IDEMPOTENT, NON_IDEMPOTENT
+and undeclared tools are never re-sent after an unknown outcome.
+
+Idempotency keys (with ``--retry auto``; ``--no-idempotency-keys`` turns them
+off) are the one way a *mutating* call is ever resent, and only to a server
+that asks for them: a tool whose own listing carries ``_meta``
+``io.stateguard/idempotency: {"version": 1}`` gets a key
+(``io.stateguard/idempotencyKey`` in ``params._meta``) on every call, and
+after an unknown outcome the same request, with the same key, is resent once
+-- after a deadline to the same server, after a lost connection to the
+restarted server (if its own listing still says so). A keyed call answered
+with a tool error (``isError``) is resent the same way, within the retry
+budget: if the server recorded that error it answers it again from its
+record, and it executes only a key it never saw. The server answers a key it
+has seen from its record and never executes it twice; a key it recorded but
+never finished it answers "in doubt" -- unless its own recovery check proves
+what that attempt did (``recovered``, or executed now because it never
+acted) -- and the client is told "outcome unknown".
+``stateguard.adapters.mcp.idempotency`` has the contract and a reference
+store; ``stateguard.adapters.mcp.idempotency_sdk`` adapts it to the Python MCP
+SDK. A server that advertises the capability and does not honour it can
+duplicate effects: the advertisement is the server's promise.
+
+Two opt-ins widen or narrow what that applies to, and neither is on by default:
+
+* ``--trust-read-only-hints``: a tool the server annotates ``readOnlyHint:
+  true`` counts as declared READ_ONLY unless ``--effects`` says otherwise --
+  for a server the operator trusts (the specification calls annotations
+  untrusted otherwise). A wrong hint would let a mutating call be re-sent, so
+  this is the operator's statement of trust, recorded as ``source:
+  server_hint`` in every retry decision. No other hint is ever trusted.
+* ``--deadline-scope recoverable``: ``--call-deadline`` applies only to calls
+  the relay could resend (declared reads; calls with an honoured idempotency
+  key). Any other call waits for its answer, as without a deadline, so a slow
+  but healthy mutation is never cut short into "outcome unknown" -- for such
+  a call a deadline can only turn success into a failure. A keyed call whose
+  resend is answered "in doubt" after a deadline waits one more deadline for
+  the original's late answer before the client is told "outcome unknown".
 
 Auth failures
 -------------
@@ -117,7 +164,10 @@ N times in its lifetime, and only when it is safe:
   exited stdio server may leave work running, and starting a second one
   beside it is not something the relay can prove safe.
   ``--restart-policy after-unknown`` restarts anyway, after every in-flight
-  request has been answered "outcome unknown".
+  request has been answered "outcome unknown". When every request in flight
+  is a call to a tool declared READ_ONLY and re-reads are on, idle-only
+  restarts too: reads left running beside a new server change nothing, and
+  each one is re-read on the new server (see Retry).
 * A request that arrives while the server is being restarted waits for it
   (bounded); one that cannot be sent is answered "not sent" -- it certainly
   did not execute. When the restart budget is spent, every later request is
@@ -143,6 +193,38 @@ result that is not a ``CallToolResult``, or whose ``structuredContent``
 breaks the tool's ``outputSchema``, is logged as category H -- and delivered
 exactly as the server sent it. A response from the server is written to the
 client as the exact bytes the server produced.
+
+Reconciliation (opt-in, embedded use only): observe, or escalate -- never resend
+---------------------------------------------------------------------------------
+An effects-file entry may carry a ``reconcile`` block: read-only probes that
+check an operator-declared *predicate* (``stateguard.adapters.mcp.reconcile``
+has the format; ``docs/runtime/RECONCILIATION_CONTRACT_V2.md`` the contract).
+When such a call's outcome becomes UNKNOWN because the server's connection
+closed, and the relay is restarting the server, the client's answer is held
+while the relay waits for the restart. Probes run against the **restarted**
+server only if that restart reported ``TerminationEvidence.scope_ended(...)``
+naming the executor the call was sent to -- an assertion by the embedder that
+every process and thread that could execute it ran inside a scope it confirmed
+ended. Otherwise nothing is probed and the postcondition is ``undetermined``.
+
+The standard entry point (``main``) can only reap its direct child, which does
+not show that detached descendants (or external systems) stopped. So ``main``
+**refuses** an effects file with ``reconcile`` blocks at startup. Reconciliation
+is available only to an embedding whose restart factory can make that
+assertion (an in-process server, a container or VM it awaited).
+
+The client is answered "outcome unknown" (JSON-RPC ``-32000``, as before) with
+the verdict in ``data``: ``io.stateguard/postcondition`` is
+``observed_satisfied``, ``observed_not_satisfied`` or ``undetermined`` -- what
+the probes saw, and when (``io.stateguard/observation``). Execution, attribution
+(who caused it), durability (whether it still holds) and the operation's
+outcome stay ``unknown`` / ``not_established`` in every case.
+
+Nothing is ever resent. A deadline-expired request is not probed (its executor
+may still run it), and shadow mode never probes. The ledger keeps the
+execution state, result validity, postcondition, attribution and an
+append-only reconciliation history apart; the audit log records each probe's
+status and the verdict, never probe arguments or results.
 
 Policy, stated rather than buried
 ---------------------------------
@@ -202,14 +284,22 @@ import contextlib
 import itertools
 import json
 import os
+import secrets
+import shutil
 import subprocess
 import sys
 import threading
+import time
+from collections import OrderedDict
 from collections.abc import Callable
-from typing import IO, Any
+from dataclasses import replace
+from datetime import UTC, datetime
+from typing import IO, Any, NamedTuple
 
 from stateguard import ContractGuard
 from stateguard.adapters.mcp import (
+    Effect,
+    EffectDeclaration,
     EffectPolicy,
     FailureClassification,
     ForwardingInvariantError,
@@ -217,7 +307,11 @@ from stateguard.adapters.mcp import (
     MalformedMessageError,
     MCPAction,
     Observed,
+    Postcondition,
+    ReconcileConfigError,
+    ReconcilePolicy,
     ResponseDisposition,
+    ResultValidity,
     ToolCallOutcome,
     ToolCallRequest,
     ToolListAccumulator,
@@ -229,6 +323,19 @@ from stateguard.adapters.mcp import (
     decide_retry,
     forward_message,
     refusal_response,
+)
+from stateguard.adapters.mcp.executor_scope import (
+    PidNamespaceScope,
+    ScopeError,
+    check_pid_namespace_capability,
+)
+from stateguard.adapters.mcp.idempotency import (
+    Outcome,
+    call_key,
+    new_key,
+    not_executed_outcome,
+    tool_supports_keys,
+    with_key,
 )
 from stateguard.adapters.mcp.jsonrpc import (
     JSONRPC_VERSION,
@@ -243,19 +350,43 @@ from stateguard.adapters.mcp.jsonrpc import (
     tool_error_response,
 )
 from stateguard.adapters.mcp.payload import same_json
+from stateguard.adapters.mcp.reconcile import (
+    DISCOVERY_BUDGET_SECONDS,
+    TERMINATION_WAIT_SECONDS,
+    ProbeObservation,
+    ProbeStatus,
+    ReconcileSpec,
+    TerminationEvidence,
+    Verdict,
+    bind_probes,
+    decide,
+    executor_identity,
+    observe,
+    probe_tool_problem,
+)
 from stateguard.adapters.mcp.recording import Direction, Provenance, Recorder, RedactionPolicy
 from stateguard.adapters.mcp.recording import RedactionMode as RecordRedaction
 from stateguard.core.explain import FieldDecisionKind, root_normalisation
 from stateguard.core.models.config import GuardConfig, RepairMode
 
-#: Prefix for the ids of the relay's own requests, so their responses can be
-#: told apart from the client's. A client is free to choose any id; one that
-#: chose this prefix would have its tools/list responses consumed here.
+#: Prefix for the ids of the relay's own requests. Their responses are matched
+#: by the exact ids the relay issued (never by this prefix), so a client may use
+#: any id, including one that starts with it; an issued id is never one a
+#: client has already used.
 OWN_ID_PREFIX = "stateguard-relay:"
 #: Ids of retried tools/call attempts; their answers go to the client under its own id.
 RETRY_ID_PREFIX = "stateguard-retry:"
 #: Id prefix of the ``initialize`` the relay replays to a restarted server.
 REINIT_ID_PREFIX = f"{OWN_ID_PREFIX}init-"
+#: Ids of reconciliation probes (relay-owned, read-only tools/call requests).
+#: Each relay adds a random per-session nonce; a response is only treated as a
+#: probe's when its id is exactly one the relay issued (see _take_probe_response).
+RECONCILE_ID_PREFIX = "stateguard-reconcile:"
+#: How long a stopping relay waits for reconciliation answers already being
+#: written. Past it, each one still unwritten is logged as unconfirmed.
+RECONCILE_STOP_WAIT_SECONDS = 2.0
+#: Settled probe ids remembered (late or duplicate answers are dropped, not relayed).
+SETTLED_PROBES_KEPT = 4096
 #: How long a client request waits for a restarting server before it is
 #: answered "not sent".
 RECONNECT_WAIT_SECONDS = 10.0
@@ -266,6 +397,31 @@ LINK_UP, LINK_RESTARTING, LINK_DOWN = "up", "restarting", "down"
 
 class _ServerChangedError(Exception):
     """The server was lost while a call was being decided: decide again."""
+
+
+class Restarted(NamedTuple):
+    """
+    What a restart factory may return: the new server's pipes; what the restart
+    established about the *replaced* server's executor; and the new server's
+    executor identity (which a later ``scope_ended`` must name). A plain
+    ``(stdin, stdout)`` pair is still accepted for restarts; it reports no
+    termination evidence and no identity, so reconciliation never probes after it.
+    """
+
+    stdin: IO[bytes]
+    stdout: IO[bytes]
+    termination: TerminationEvidence
+    executor: str | None = None
+
+
+def _restarted(result: Any) -> Restarted:
+    if isinstance(result, Restarted):
+        if not isinstance(result.termination, TerminationEvidence):
+            raise TypeError("Restarted.termination must be a TerminationEvidence")
+        return result
+    if isinstance(result, tuple) and len(result) == 2:
+        return Restarted(result[0], result[1], TerminationEvidence.not_reported())
+    raise TypeError("a restart factory returns (stdin, stdout) or Restarted(...)")
 
 
 #: How long a tools/call waits for a listing in flight before it is
@@ -289,11 +445,17 @@ class StdioRelay:
         call_deadline: float | None = None,
         effects: EffectPolicy | None = None,
         retry: str = "shadow",
-        restart: Callable[[], tuple[IO[bytes], IO[bytes]]] | None = None,
+        restart: Callable[[], tuple[IO[bytes], IO[bytes]] | Restarted] | None = None,
         max_restarts: int = 0,
         restart_policy: str = "idle-only",
         restart_backoff: float = 0.1,
         recorder: Recorder | None = None,
+        reconcile: ReconcilePolicy | None = None,
+        executor: str | None = None,
+        reread_unknown: bool = False,
+        trust_read_only_hints: bool = False,
+        deadline_scope: str = "all",
+        idempotency_keys: bool = False,
     ) -> None:
         self.registry = ToolRegistry(guard)
         if (
@@ -329,6 +491,24 @@ class StdioRelay:
         self._attempts: dict[Any, int] = {}  # client id -> attempts sent
         self._client_of: dict[Any, Any] = {}  # retry id -> client id
         self._retry_lock = threading.Lock()
+        # Re-read an unknown outcome of a tool declared READ_ONLY (decide_retry).
+        self._reread_unknown = reread_unknown
+        # Opt-in: the server's readOnlyHint counts as a READ_ONLY declaration.
+        self._trust_read_only_hints = trust_read_only_hints
+        if deadline_scope not in ("all", "recoverable"):
+            raise ValueError(f"deadline_scope must be all or recoverable, got {deadline_scope!r}")
+        # "recoverable": the call deadline applies only to calls the relay would
+        # resend (declared reads, honoured keys); others wait for their answer,
+        # as with no deadline at all.
+        self._deadline_scope = deadline_scope
+        # Idempotency keys (stateguard.adapters.mcp.idempotency): added to calls
+        # to tools whose server says it honours them; such a call may be
+        # resent once, with the same key, after an unknown outcome.
+        self._idempotency_keys = idempotency_keys
+        # id key -> {"state": "held" | "answered", "invocation": ...}: re-reads
+        # waiting for a restarted server. Only the path that moves one from
+        # held to answered may answer it (under _retry_lock).
+        self._pending_rereads: dict[str, dict[str, Any]] = {}
         self._stopped = threading.Event()
         if restart_policy not in ("idle-only", "after-unknown"):
             raise ValueError(
@@ -340,6 +520,13 @@ class StdioRelay:
         self._restart_policy = restart_policy
         self._restart_backoff = restart_backoff
         self._restarts = 0
+        # generation -> what the restart that replaced it established about its
+        # executor (guarded by _link_cond). Reconciliation reads its origin's.
+        self._termination: dict[int, TerminationEvidence] = {}
+        # generation -> the embedder's identity for its executor (None: none
+        # given, or rejected). A scope_ended assertion must name this identity.
+        self._executors: dict[int, str | None] = {}
+        self._executor_names: set[str] = set()
         self.generation = 0
         self._link = LINK_UP
         self._link_cond = threading.Condition()
@@ -399,6 +586,26 @@ class StdioRelay:
         # not outcomes too -- an unreadable schema, an internal error.
         self._shadow = guard.config.mode is RepairMode.SHADOW
         self._to_client, self._to_server, self._to_audit = (threading.Lock() for _ in range(3))
+        # Reconciliation (opt-in): operator-declared read-only probes for a
+        # request whose outcome is UNKNOWN. Verified, or escalated; never resent.
+        self._reconcile = reconcile if reconcile is not None and len(reconcile) else None
+        self._reconcile_lock = threading.Lock()
+        # Signalled whenever a pending reconciliation is answered (or fails to be).
+        self._reconcile_cond = threading.Condition(self._reconcile_lock)
+        # id key -> pending; each has "state": held -> answering -> (removed).
+        # Only the path that moves it from held to answering may answer it.
+        self._pending_reconcile: dict[str, dict[str, Any]] = {}
+        # probe request id -> [answered event, response or None, generation]:
+        # the probes issued and still awaited. Exact ids only.
+        self._probe_waiters: dict[str, list[Any]] = {}
+        # probe request id -> "answered" | "expired": issued, no longer awaited.
+        self._settled_probes: OrderedDict[str, str] = OrderedDict()
+        nonce = secrets.token_hex(8)
+        self._probe_ids = (f"{RECONCILE_ID_PREFIX}{nonce}:{n}" for n in itertools.count(1))
+        # Relay-owned tools/list ids that were answered or abandoned: a late or
+        # duplicate answer to one is dropped, never treated as the client's.
+        self._settled_own: OrderedDict[str, None] = OrderedDict()
+        self._name_executor(0, executor)
 
     # -- plumbing ------------------------------------------------------------
 
@@ -505,6 +712,8 @@ class StdioRelay:
         if self._protocol_meta:
             params["_meta"] = dict(self._protocol_meta)
         identifier = next(self._own_ids)
+        while self.ledger.get(identifier) is not None:  # never an id a client has used
+            identifier = next(self._own_ids)
         with self._listing_done:
             epoch = next(self._epoch_counter) if epoch is None else epoch
             self._epoch_of[identifier] = epoch
@@ -669,15 +878,35 @@ class StdioRelay:
                 )
 
     def _answer_not_sent(self, identifier: Any, reason: str) -> None:
-        """A request that was never written: it certainly did not execute. Say so."""
+        """
+        A request that was never written: it certainly did not execute. Say so --
+        but only if the ledger accepted that transition. A request the ledger
+        holds as SENT may have executed: it is resolved UNKNOWN and answered so.
+        One the ledger already finished has (or is getting) its one answer.
+        """
         if identifier is None:
             self._log("notification_dropped", category="E", reason=reason)
             return
-        self.ledger.answered_locally(identifier)
         self._forget(identifier)
-        self._log("not_sent", category="E", id=identifier, reason=reason)
+        if self.ledger.answered_locally(identifier):
+            self._log("not_sent", category="E", id=identifier, reason=reason)
+            response = not_sent_response(identifier)
+        else:
+            invocation = self.ledger.get(identifier)
+            state = invocation.state if invocation is not None else None
+            self._log(
+                "not_sent_unconfirmed",
+                category="E",
+                id=identifier,
+                reason=reason,
+                ledger_state=state.value if state is not None else None,
+            )
+            if state is not None and state.finished:
+                return  # never two answers for one request
+            self.ledger.unknown(identifier, "not_sent_unconfirmed")
+            response = unknown_outcome_response(identifier, "not_sent_unconfirmed")
         with contextlib.suppress(OSError, ValueError):  # the client may be gone too
-            self._send_json(self._client_out, self._to_client, not_sent_response(identifier))
+            self._send_json(self._client_out, self._to_client, response)
 
     def _send_decided(self, identifier: Any, payload: bytes, generation: int) -> bool:
         """
@@ -748,7 +977,7 @@ class StdioRelay:
         self._answer_not_sent(identifier, reason)
         return None
 
-    def _await_discovery(self, generation: int) -> str:
+    def _await_discovery(self, generation: int, timeout: float | None = None) -> str:
         """
         ``"valid"`` once *generation*'s listing is synced; ``"changed"`` if
         that server is lost first; ``"failed"`` if its listing failed (or did
@@ -766,8 +995,9 @@ class StdioRelay:
                 or (epoch is not None and epoch in self._failed_epochs)
             )
 
+        first = LISTING_WAIT_SECONDS if timeout is None else min(LISTING_WAIT_SECONDS, timeout)
         with self._listing_done:
-            self._listing_done.wait_for(settled, timeout=LISTING_WAIT_SECONDS)
+            self._listing_done.wait_for(settled, timeout=first)
             if self._synced_generation == generation:
                 return "valid"
             if lost():
@@ -775,18 +1005,19 @@ class StdioRelay:
             if self._discovery_epoch in self._lost_epochs:
                 # The listing could not be written: that server is dying. Its
                 # loss (or the timeout) decides, never a decision without it.
-                self._listing_done.wait_for(lost, timeout=RECONNECT_WAIT_SECONDS)
+                second = RECONNECT_WAIT_SECONDS
+                if timeout is not None:
+                    second = max(0.0, min(second, timeout - first))
+                self._listing_done.wait_for(lost, timeout=second)
                 return "changed" if lost() else "failed"
             return "failed"
 
-    def _await_link(self) -> bool:
+    def _await_link(self, timeout: float = RECONNECT_WAIT_SECONDS) -> bool:
         """True once the server link is up; False if it is (or stays) down."""
         with self._link_cond:
             self._link_waiters += 1
             try:
-                self._link_cond.wait_for(
-                    lambda: self._link != LINK_RESTARTING, timeout=RECONNECT_WAIT_SECONDS
-                )
+                self._link_cond.wait_for(lambda: self._link != LINK_RESTARTING, timeout=timeout)
                 return self._link == LINK_UP
             finally:
                 self._link_waiters -= 1
@@ -801,13 +1032,25 @@ class StdioRelay:
         elif is_notification(message, "notifications/initialized"):
             self._client_initialized = True
 
-    def _surface_unknown(self, *invocations: Any) -> None:
-        """Tell each client its request's outcome is unknown (auto); log it (both)."""
+    def _surface_unknown(self, *invocations: Any, verdict: Verdict | None = None) -> bool:
+        """
+        Tell each client its request's outcome is unknown (auto); log it (both).
+        With a reconciliation *verdict*, the answer carries it: the outcome is
+        still unknown, and attribution unknown, even when the postcondition
+        was verified. True if every answer was written to the client's stream
+        (written, not known to be read); False if a write failed.
+        """
+        written = True
         for invocation in invocations:
             if invocation is None:
                 continue
             reason = invocation.unknown_reason or "unknown"
             client_id = self._client_of.get(invocation.request_id, invocation.request_id)
+            if invocation.request_id != client_id and not self._unanswered(client_id):
+                # A retry or re-read whose client already has its one answer
+                # (the original's late success came first): nothing to say.
+                self._log("unknown_superseded", category="I", id=client_id)
+                continue
             self._forget(client_id)
             self._log(
                 "outcome_unknown",
@@ -820,22 +1063,27 @@ class StdioRelay:
             )
             if self._shadow:
                 continue
-            with contextlib.suppress(OSError):
+            try:
                 self._send_json(
                     self._client_out,
                     self._to_client,
-                    unknown_outcome_response(client_id, reason),
+                    unknown_outcome_response(client_id, reason, verdict),
                 )
+            except OSError:
+                written = False
+        return written
 
     def run_deadlines(self) -> None:
         """With ``call_deadline`` set: resolve unanswered requests as unknown. Runs until stop."""
         if self._call_deadline is None:
             return
         tick = min(0.05, self._call_deadline / 4)
+        select = self._resendable if self._deadline_scope == "recoverable" else None
         while not self._stopped.wait(tick):
             try:
                 self._resolve_unknown(
-                    self.ledger.expire(self._call_deadline), Observed.UNKNOWN_DEADLINE
+                    self.ledger.expire(self._call_deadline, select=select),
+                    Observed.UNKNOWN_DEADLINE,
                 )
             except Exception as exc:  # noqa: BLE001 -- never let the deadline thread die
                 self._internal_error("deadline", exc)
@@ -848,20 +1096,411 @@ class StdioRelay:
         observed: Observed,
         *,
         connection_available: bool = True,
+        probe_channel: bool = False,
+        reread_channel: bool = False,
     ) -> None:
-        """Requests whose outcome is unknown: retry the ones that may be, surface the rest."""
+        """
+        Requests whose outcome is unknown: re-read the ones declared READ_ONLY
+        and resend (same key) the ones whose server honours their idempotency
+        key, when enabled -- never anything else, see ``decide_retry``;
+        reconcile the ones with declared probes; surface the rest.
+        *probe_channel*: a restarted server will replace the one these requests
+        were written to, and may be probed. *reread_channel*: a restarted
+        server will replace it, and a resend may wait for that server.
+        """
         for invocation in invocations:
             if invocation is None:
                 continue
             client_id = self._client_of.get(invocation.request_id, invocation.request_id)
-            if self._consider_retry(client_id, observed, connection_available=connection_available):
+            if self._consider_retry(
+                client_id,
+                observed,
+                connection_available=connection_available,
+                reread_channel=reread_channel,
+            ):
                 continue
-            self._surface_unknown(invocation)
+            begun = self._begin_reconciliation(client_id, invocation, observed, probe_channel)
+            if begun is True:
+                continue  # answered when the probes are done
+            self._surface_unknown(invocation, verdict=begun or None)
+
+    # -- reconciliation (opt-in): verified, or escalated; never resent --------
+
+    def _begin_reconciliation(
+        self, client_id: Any, invocation: Any, observed: Observed, probe_channel: bool
+    ) -> bool | Verdict:
+        """
+        True: probes will run on a restarted server and answer the client.
+        A ``Verdict``: reconciliation was declared but cannot be done (answer
+        with it now). False: not declared for this tool (or shadow mode).
+        """
+        if self._reconcile is None or invocation.method != TOOLS_CALL or not invocation.tool:
+            return False
+        spec = self._reconcile.of(invocation.tool)
+        if spec is None:
+            return False
+        if self._shadow:
+            self._log(
+                "reconcile_skipped",
+                category="I",
+                id=client_id,
+                tool=invocation.tool,
+                reason="shadow mode never probes",
+            )
+            return False
+        with self._retry_lock:
+            call = self._calls.get(client_id)
+        reason: str | None = None
+        if observed is not Observed.UNKNOWN_TRANSPORT:
+            reason = "the original executor may still be running: no probe can settle the outcome"
+        elif not probe_channel:
+            reason = (
+                "no probe channel: the server is not being restarted (reconciliation needs "
+                "--restart N with --restart-policy after-unknown)"
+            )
+        elif call is None:
+            reason = "the call's arguments are not available"
+        bound: Any = None
+        arguments: Any = None
+        if reason is None and call is not None:
+            message = json.loads(call[0])
+            params = message.get("params") if isinstance(message, dict) else None
+            arguments = params.get("arguments") if isinstance(params, dict) else None
+            bound = bind_probes(spec, arguments)
+            if isinstance(bound, str):
+                reason = bound
+        if reason is not None or call is None:
+            verdict = Verdict(Postcondition.UNDETERMINED, (str(reason),))
+            self._record_verdict(client_id, invocation, verdict, probe_generation=None)
+            return verdict
+        probe_args, keys = bound
+        pending = {
+            "client_id": client_id,
+            "invocation": invocation,
+            "spec": spec,
+            "arguments": arguments,
+            "probe_args": probe_args,
+            "keys": keys,
+            "origin_generation": call[2],
+            "state": "held",
+            # One budget for everything this answer waits on (ReconcileSpec.max_seconds).
+            "deadline": time.monotonic() + spec.max_seconds,
+        }
+        with self._reconcile_lock:
+            self._pending_reconcile[_id_key(client_id)] = pending
+        self.ledger.record_reconciliation(
+            invocation.request_id,
+            {"event": "pending", "tool": invocation.tool, "probes": len(spec.probes)},
+            Postcondition.PENDING,
+        )
+        self._log(
+            "reconcile_pending",
+            category="I",
+            id=client_id,
+            tool=invocation.tool,
+            probes=len(spec.probes),
+            origin_generation=call[2],
+        )
+        threading.Thread(target=self._reconcile_worker, args=(pending,), daemon=True).start()
+        return True
+
+    def _reconcile_worker(self, pending: dict[str, Any]) -> None:
+        try:
+            self._run_reconciliation(pending)
+        except Exception as exc:  # noqa: BLE001 -- never leave the client without an answer
+            self._internal_error("reconciliation", exc, id=pending["client_id"])
+            self._finish_reconciliation(
+                pending,
+                Verdict(Postcondition.UNDETERMINED, ("StateGuard failed while probing",)),
+                probe_generation=None,
+            )
+
+    def _await_termination(
+        self, origin: int, timeout: float = TERMINATION_WAIT_SECONDS
+    ) -> TerminationEvidence | None:
+        """What the restart that replaced *origin* established; None if none came."""
+        with self._link_cond:
+            self._link_cond.wait_for(
+                lambda: origin in self._termination or self._link == LINK_DOWN,
+                timeout=max(0.0, timeout),
+            )
+            return self._termination.get(origin)
+
+    def _held(self, pending: dict[str, Any]) -> bool:
+        """Still waiting for this worker's answer (not taken over by a stopping relay)."""
+        with self._reconcile_lock:
+            return bool(pending.get("state") == "held")
+
+    def _run_reconciliation(self, pending: dict[str, Any]) -> None:
+        """Wait for the restarted server, probe it, decide, answer. Bounded throughout."""
+        spec: ReconcileSpec = pending["spec"]
+        origin = pending["origin_generation"]
+        deadline: float = pending["deadline"]
+
+        def left() -> float:
+            return deadline - time.monotonic()
+
+        # No probe unless the restart established that the original executor
+        # can no longer act -- a restart alone does not (see TerminationEvidence).
+        termination = self._await_termination(origin, min(TERMINATION_WAIT_SECONDS, left()))
+        pending["termination"] = termination
+        why = termination.applies_to(self._executors.get(origin)) if termination else None
+        if termination is None or why is not None:
+            reason = (
+                f"executor termination not established: {why}; nothing was probed"
+                if termination is not None
+                else "no probe channel: no restart replaced the server whose outcome is "
+                "unknown, so executor termination is not established; nothing was probed"
+            )
+            verdict = Verdict(Postcondition.UNDETERMINED, (reason,))
+            self._finish_reconciliation(pending, verdict, probe_generation=None)
+            return
+        # One budget for finding a usable restarted server, however many restarts,
+        # itself inside the reconciliation's overall budget.
+        discovery_ends = min(time.monotonic() + DISCOVERY_BUDGET_SECONDS, deadline)
+        generation: int | None = None
+        while not self._stopped.is_set():
+            remaining = discovery_ends - time.monotonic()
+            if remaining <= 0 or not self._await_link(timeout=remaining):
+                break
+            if self.generation <= origin:
+                break  # the link is up, but on the server whose outcome is unknown
+            remaining = discovery_ends - time.monotonic()
+            if remaining <= 0:
+                break
+            current = self.generation
+            if self._await_discovery(current, timeout=remaining) == "valid":
+                generation = current
+                break
+        if generation is None:
+            verdict = Verdict(
+                Postcondition.UNDETERMINED,
+                ("no probe channel: no restarted server became available",),
+            )
+            self._finish_reconciliation(pending, verdict, probe_generation=None)
+            return
+        observations: list[ProbeObservation] = []
+        observed_from = _utc_now()
+        for index, probe in enumerate(spec.probes):
+            if not self._held(pending):
+                return  # the relay is stopping and has answered this call itself
+            if left() <= 0:
+                self._log("reconcile_budget_exhausted", category="I", id=pending["client_id"])
+                break  # the budget ran out: decide() reads the missing probes as incomplete
+            entry = self.registry.find(probe.tool)
+            problem = probe_tool_problem(
+                entry is not None, entry.annotations if entry is not None else None
+            )
+            if problem is not None:
+                observation = ProbeObservation(
+                    index, probe.tool, ProbeStatus.INVALID, "none", problem
+                )
+            else:
+                response = self._send_probe(
+                    probe.tool,
+                    pending["probe_args"][index],
+                    generation,
+                    min(spec.timeout_seconds, max(0.0, left())),
+                )
+                observation = observe(probe, index, pending["arguments"], response)
+            observations.append(observation)
+            self._log(
+                "reconcile_probe",
+                category="I",
+                id=pending["client_id"],
+                generation=generation,
+                **observation.to_dict(),
+            )
+        observed_to = _utc_now()
+        stable = self.generation == generation and self._link == LINK_UP
+        verdict = decide(
+            spec,
+            observations,
+            pending["keys"],
+            # Only reached when the restart that replaced the origin generation
+            # established its executor ended (checked above).
+            executor_replaced=termination.established,
+            generation_stable=stable,
+        )
+        verdict = replace(verdict, observed_from=observed_from, observed_to=observed_to)
+        self._finish_reconciliation(pending, verdict, probe_generation=generation)
+
+    def _send_probe(
+        self, tool: str, arguments: dict[str, str], generation: int, timeout: float
+    ) -> dict[str, Any] | None:
+        """One read-only probe to *generation* only; its response, or None (no answer)."""
+        identifier = next(self._probe_ids)
+        while self.ledger.get(identifier) is not None:  # never an id a client has used
+            identifier = next(self._probe_ids)
+        params: dict[str, Any] = {"name": tool, "arguments": dict(arguments)}
+        if self._protocol_meta:
+            params["_meta"] = dict(self._protocol_meta)
+        waiter: list[Any] = [threading.Event(), None, generation]
+        with self._reconcile_lock:
+            self._probe_waiters[identifier] = waiter
+        try:
+            message = {
+                "jsonrpc": JSONRPC_VERSION,
+                "id": identifier,
+                "method": TOOLS_CALL,
+                "params": params,
+            }
+            if not self._send_decided(None, self._encode(message), generation):
+                return None  # the server changed first: nothing was written
+            waiter[0].wait(timeout=timeout)
+            return waiter[1] if isinstance(waiter[1], dict) else None
+        finally:
+            with self._reconcile_lock:
+                self._probe_waiters.pop(identifier, None)
+                self._settle_probe(identifier, "answered" if waiter[1] is not None else "expired")
+
+    def _settle_probe(self, identifier: str, state: str) -> None:
+        """Remember an issued probe id that is no longer awaited (caller holds the lock)."""
+        if identifier not in self._settled_probes:
+            self._settled_probes[identifier] = state
+            while len(self._settled_probes) > SETTLED_PROBES_KEPT:
+                self._settled_probes.popitem(last=False)
+
+    def _take_probe_response(self, identifier: Any, message: dict[str, Any]) -> bool:
+        """
+        True if *message* answers a probe this relay issued -- matched by exact
+        id, never by prefix. The first answer to a probe still awaited on this
+        generation is delivered to it; a later, duplicate or other-generation
+        answer to an issued probe is dropped (the client never asked for it).
+        False for every other response: it takes the normal path to the client.
+        """
+        if not isinstance(identifier, str):
+            return False
+        with self._reconcile_lock:
+            waiter = self._probe_waiters.get(identifier)
+            if waiter is not None and waiter[1] is None and waiter[2] == self.generation:
+                waiter[1] = message
+                self._settle_probe(identifier, "answered")
+                waiter[0].set()
+                return True
+            if waiter is not None:
+                late = "duplicate" if waiter[1] is not None else "other generation"
+            elif identifier in self._settled_probes and not self.ledger.in_flight(identifier):
+                late = "duplicate" if self._settled_probes[identifier] == "answered" else "late"
+            else:
+                return False  # not ours, or a client request that happens to share the id
+        self._log("reconcile_probe_dropped", category="J", id=identifier, why=late)
+        return True
+
+    def _fail_probes(self) -> None:
+        """The server went away: probes waiting on it get no answer."""
+        with self._reconcile_lock:
+            waiters = list(self._probe_waiters.values())
+        for waiter in waiters:
+            waiter[0].set()
+
+    def _finish_reconciliation(
+        self, pending: dict[str, Any], verdict: Verdict, *, probe_generation: int | None
+    ) -> bool:
+        """
+        Record and answer -- exactly once per pending reconciliation. The entry
+        stays pending (``answering``) until the answer is written, so a stopping
+        relay waits for it instead of losing it. False if another path took it.
+        """
+        key = _id_key(pending["client_id"])
+        with self._reconcile_lock:
+            if self._pending_reconcile.get(key) is not pending or pending["state"] != "held":
+                return False
+            pending["state"] = "answering"
+        written = False
+        try:
+            try:
+                self._record_verdict(
+                    pending["client_id"],
+                    pending["invocation"],
+                    verdict,
+                    probe_generation=probe_generation,
+                    termination=pending.get("termination"),
+                )
+            except Exception as exc:  # noqa: BLE001 -- the client is still answered
+                self._internal_error("reconciliation record", exc, id=pending["client_id"])
+            written = self._surface_unknown(pending["invocation"], verdict=verdict)
+        finally:
+            with self._reconcile_cond:
+                self._pending_reconcile.pop(key, None)
+                pending["state"] = "answered" if written else "unwritten"
+                self._reconcile_cond.notify_all()
+            self._log(
+                "reconcile_answered",
+                category="I",
+                id=pending["client_id"],
+                postcondition=verdict.postcondition.value,
+                # Flushed into the client's stream; whether the client read it is unknown.
+                written_to_stream=written,
+            )
+        return True
+
+    def _settle_reconciliations(self, reason: str) -> None:
+        """
+        The relay is stopping. Every reconciliation still held is answered now
+        (``undetermined``); those whose answer is already being written are
+        waited for, at most ``RECONCILE_STOP_WAIT_SECONDS``. Any still unwritten
+        then is logged as unconfirmed -- never reported as delivered. Idempotent.
+        """
+        with self._reconcile_lock:
+            held = [p for p in self._pending_reconcile.values() if p["state"] == "held"]
+        for item in held:
+            self._finish_reconciliation(
+                item, Verdict(Postcondition.UNDETERMINED, (reason,)), probe_generation=None
+            )
+        with self._reconcile_cond:
+            self._reconcile_cond.wait_for(
+                lambda: not self._pending_reconcile, timeout=RECONCILE_STOP_WAIT_SECONDS
+            )
+            unconfirmed = list(self._pending_reconcile.values())
+        for item in unconfirmed:
+            self._log(
+                "reconcile_answer_unconfirmed",
+                category="E",
+                id=item["client_id"],
+                tool=item["invocation"].tool,
+                state=item["state"],
+                reason="the relay stopped before this answer was written",
+            )
+
+    def _record_verdict(
+        self,
+        client_id: Any,
+        invocation: Any,
+        verdict: Verdict,
+        *,
+        probe_generation: int | None,
+        termination: TerminationEvidence | None = None,
+    ) -> None:
+        """Append the verdict to the ledger and the audit log. No values: statuses only."""
+        entry = {"event": "verdict", "probe_generation": probe_generation, **verdict.to_dict()}
+        if termination is not None:
+            entry["termination"] = termination.to_dict()
+        self.ledger.record_reconciliation(invocation.request_id, entry, verdict.postcondition)
+        self._log(
+            "reconcile_verdict",
+            category="I",
+            id=client_id,
+            tool=invocation.tool,
+            probe_generation=probe_generation,
+            resent=False,
+            termination=termination.to_dict() if termination is not None else None,
+            **verdict.to_dict(),
+        )
 
     def _consider_retry(
-        self, client_id: Any, observed: Observed, *, connection_available: bool = True
+        self,
+        client_id: Any,
+        observed: Observed,
+        *,
+        connection_available: bool = True,
+        reread_channel: bool = False,
     ) -> bool:
-        """Log the retry decision for a tools/call; send the retry if auto says so."""
+        """
+        Log the retry decision for a tools/call; send the retry if auto says so.
+        A re-read after a lost connection cannot go to the dead server: with
+        *reread_channel* it waits for the restarted one (``_reread_after_restart``).
+        """
         with self._retry_lock:
             call = self._calls.get(client_id)
             attempts = self._attempts.get(client_id, 1)
@@ -870,17 +1509,18 @@ class StdioRelay:
         payload, tool, generation = call
         if generation != self.generation:
             return False  # decided against a server that is gone: never re-sent to another
-        entry = self.registry.find(tool) if tool else None
-        declaration = self._effects.of(
-            tool or "", annotations=entry.annotations if entry is not None else None
-        )
+        declaration = self._declaration(tool)
+        keyed = self._carries_honoured_key(payload, tool)
         verdict = decide_retry(
             observed,
             declaration,
             attempts_made=attempts,
             connection_available=connection_available and self._link == LINK_UP,
+            reread_unknown=self._reread_unknown,
+            keyed=keyed,
         )
         acted = verdict.retry and self._retry_mode == "auto"
+        deferred = acted and observed is Observed.UNKNOWN_TRANSPORT
         self._log(
             "retry_decision",
             category={Observed.TOOL_ERROR: "F", Observed.AUTH_ERROR: "K"}.get(observed, "I"),
@@ -891,11 +1531,37 @@ class StdioRelay:
             effect=declaration.to_dict(),
             decision=verdict.decision.value,
             reason=verdict.reason,
-            acted=acted,
+            **({"keyed": True} if keyed else {}),
+            acted=acted and (not deferred or reread_channel),
+            **({"deferred": "until a restarted server is synced"} if deferred else {}),
         )
         if not acted:
             return False
+        if deferred:
+            if not reread_channel:
+                self._log(
+                    "reread_unsent",
+                    category="E",
+                    id=client_id,
+                    reason="the server was lost and no restart will replace it",
+                )
+                return False
+            # Only a first attempt is ever deferred (the budget allows one
+            # more), so the invocation to answer for is the client's own.
+            key = _id_key(client_id)
+            invocation = self.ledger.get(client_id)
+            pending = {"state": "held", "invocation": invocation, "client_id": client_id}
+            with self._retry_lock:
+                self._pending_rereads[key] = pending
+            threading.Thread(
+                target=self._reread_worker,
+                args=(pending, payload, tool, generation, keyed),
+                daemon=True,
+            ).start()
+            return True
         retry_id = next(self._retry_ids)
+        while self.ledger.get(retry_id) is not None:  # never an id a client has used
+            retry_id = next(self._retry_ids)
         message = json.loads(payload)
         message["id"] = retry_id
         with self._retry_lock:
@@ -913,6 +1579,199 @@ class StdioRelay:
         self._log("retry_not_sent", category="E", id=client_id, reason="server changed")
         return False
 
+    def _reread_worker(
+        self,
+        pending: dict[str, Any],
+        payload: bytes,
+        tool: str | None,
+        origin: int,
+        keyed: bool = False,
+    ) -> None:
+        try:
+            self._reread_after_restart(pending, payload, tool, origin, keyed)
+        except Exception as exc:  # noqa: BLE001 -- never leave the client without an answer
+            self._internal_error("re-read", exc, id=pending["client_id"])
+            self._finish_reread(pending, "StateGuard failed while re-reading")
+
+    def _reread_after_restart(
+        self,
+        pending: dict[str, Any],
+        payload: bytes,
+        tool: str | None,
+        origin: int,
+        keyed: bool = False,
+    ) -> None:
+        """
+        A read (or a keyed call) lost with its server: send it once more to the
+        restarted server, only once that server's own listing is synced -- and,
+        for a keyed call, only if that listing still says the tool honours keys.
+        Bounded; if no such server comes, the client is answered "outcome unknown".
+        """
+        client_id = pending["client_id"]
+        discovery_ends = time.monotonic() + DISCOVERY_BUDGET_SECONDS
+        generation: int | None = None
+        while not self._stopped.is_set():
+            remaining = discovery_ends - time.monotonic()
+            if remaining <= 0 or not self._await_link(timeout=remaining):
+                break
+            if self.generation <= origin:
+                break  # the link is up, but on the server that lost the read
+            remaining = discovery_ends - time.monotonic()
+            if remaining <= 0:
+                break
+            current = self.generation
+            if self._await_discovery(current, timeout=remaining) == "valid":
+                generation = current
+                break
+        if generation is None:
+            self._finish_reread(pending, "no restarted server became available")
+            return
+        if keyed and not self._honours_keys(tool):
+            self._finish_reread(pending, "the restarted server does not honour idempotency keys")
+            return
+        with self._retry_lock:
+            if pending["state"] != "held":
+                return  # the relay is stopping and has answered this call itself
+            pending["state"] = "sending"
+            attempts = self._attempts.get(client_id, 1)
+            retry_id = next(self._retry_ids)
+            while self.ledger.get(retry_id) is not None:  # never an id a client has used
+                retry_id = next(self._retry_ids)
+            self._client_of[retry_id] = client_id
+            self._attempts[client_id] = attempts + 1
+            self._calls[client_id] = (payload, tool, generation)
+        message = json.loads(payload)
+        message["id"] = retry_id
+        self.ledger.received(retry_id, TOOLS_CALL, tool)
+        self._log("reread_sent", category="I", id=client_id, generation=generation)
+        sent = self._send_decided(retry_id, self._encode(message), generation)
+        with self._retry_lock:
+            self._pending_rereads.pop(_id_key(client_id), None)
+            pending["state"] = "sent" if sent else "held"
+        if not sent:
+            self.ledger.answered_locally(retry_id)
+            self._finish_reread(pending, "the restarted server was lost before the re-read")
+
+    def _finish_reread(self, pending: dict[str, Any], reason: str) -> None:
+        """Answer a held re-read "outcome unknown" -- exactly once."""
+        with self._retry_lock:
+            if pending["state"] != "held":
+                return
+            pending["state"] = "answered"
+            self._pending_rereads.pop(_id_key(pending["client_id"]), None)
+        self._log("reread_unsent", category="E", id=pending["client_id"], reason=reason)
+        self._surface_unknown(pending["invocation"])
+
+    def _settle_rereads(self, reason: str) -> None:
+        """The relay is stopping: every re-read still waiting for a server is answered."""
+        with self._retry_lock:
+            held = [p for p in self._pending_rereads.values() if p["state"] == "held"]
+        for pending in held:
+            self._finish_reread(pending, reason)
+
+    def _unanswered(self, client_id: Any) -> bool:
+        """The client has not had its answer to this tools/call yet."""
+        with self._retry_lock:
+            return client_id in self._calls
+
+    def _answer_in_doubt(self, client_id: Any, outcome: Outcome) -> None:
+        """
+        A keyed resend that executed nothing, and leaves the first attempt's
+        outcome unknown. In doubt or in progress after a deadline, the original
+        may still be running: its late answer still wins for one more deadline.
+        """
+        original = self.ledger.get(client_id)
+        wait = (
+            self._call_deadline
+            if self._call_deadline is not None
+            and outcome in (Outcome.IN_DOUBT, Outcome.IN_PROGRESS)
+            and original is not None
+            and original.unknown_reason == "deadline"
+            else 0.0
+        )
+
+        def answer() -> None:
+            if wait and self._stopped.wait(wait):
+                pass  # stopping: answer now
+            if not self._unanswered(client_id):
+                return  # the original's late answer came first
+            self._forget(client_id)
+            with contextlib.suppress(OSError, ValueError):
+                self._send_json(
+                    self._client_out,
+                    self._to_client,
+                    unknown_outcome_response(client_id, f"idempotency_{outcome.value}"),
+                )
+
+        if wait:
+            threading.Thread(target=answer, daemon=True).start()
+        else:
+            answer()
+
+    def _honours_keys(self, tool: str | None) -> bool:
+        """The current server's own listing says *tool* honours idempotency keys."""
+        entry = self.registry.find(tool) if tool else None
+        return entry is not None and tool_supports_keys(entry.definition)
+
+    def _keyed_payload(self, payload: bytes, tool: str | None) -> bytes:
+        """
+        *payload* with an idempotency key, when keys are on and the tool's
+        server honours them -- never for a declared read (it needs none) and
+        never in shadow mode. A key the client sent itself is kept.
+        """
+        if not self._idempotency_keys or self._shadow or self._retry_mode != "auto":
+            return payload
+        if not self._honours_keys(tool):
+            return payload
+        declaration = self._declaration(tool)
+        if declaration.declared and declaration.effect is Effect.READ_ONLY:
+            return payload
+        try:
+            message = json.loads(payload)
+        except ValueError:
+            return payload
+        if not isinstance(message, dict):
+            return payload
+        return self._encode(with_key(message, new_key()))
+
+    def _carries_honoured_key(self, payload: bytes, tool: str | None) -> bool:
+        if not self._idempotency_keys or not self._honours_keys(tool):
+            return False
+        try:
+            message = json.loads(payload)
+        except ValueError:
+            return False
+        return isinstance(message, dict) and call_key(message) is not None
+
+    def _resendable(self, invocation: Any) -> bool:
+        """An unknown outcome the relay can recover: a declared read, or an honoured key."""
+        if self._reread_safe(invocation):
+            return True
+        if invocation is None or self._retry_mode != "auto":
+            return False
+        client_id = self._client_of.get(invocation.request_id, invocation.request_id)
+        with self._retry_lock:
+            call = self._calls.get(client_id)
+        return call is not None and self._carries_honoured_key(call[0], call[1])
+
+    def _reread_safe(self, invocation: Any) -> bool:
+        """An unknown outcome this relay would re-read: a call to a declared READ_ONLY tool."""
+        if not self._reread_unknown or self._retry_mode != "auto" or invocation is None:
+            return False
+        if invocation.method != TOOLS_CALL or not invocation.tool:
+            return False
+        declaration = self._declaration(invocation.tool)
+        return declaration.declared and declaration.effect is Effect.READ_ONLY
+
+    def _declaration(self, tool: str | None) -> EffectDeclaration:
+        """The tool's effect declaration (with the server's hints, as the operator chose)."""
+        entry = self.registry.find(tool) if tool else None
+        return self._effects.of(
+            tool or "",
+            annotations=entry.annotations if entry is not None else None,
+            trust_read_only_hints=self._trust_read_only_hints,
+        )
+
     def _forget(self, client_id: Any) -> None:
         with self._retry_lock:
             self._calls.pop(client_id, None)
@@ -929,6 +1788,13 @@ class StdioRelay:
         check = check_tool_result(
             entry.definition if entry is not None else None, message["result"]
         )
+        if not check.ok:
+            validity = ResultValidity.INVALID
+        elif check.structured_checked:
+            validity = ResultValidity.VALID
+        else:
+            validity = ResultValidity.ENVELOPE_VALID
+        self.ledger.record_result_check(client_id, validity)
         if check.issues:
             self._log(
                 "result_check",
@@ -1032,8 +1898,12 @@ class StdioRelay:
                     self.ledger.answered_locally(identifier)
                 self._send(self._client_out, self._to_client, payload)
                 return
-            if identifier is not None and self._retry_mode != "off":
-                tool = message.get("params", {}).get("name") if isinstance(message, dict) else None
+            tool = message.get("params", {}).get("name") if isinstance(message, dict) else None
+            try:
+                payload = self._keyed_payload(payload, tool if isinstance(tool, str) else None)
+            except Exception as exc:  # noqa: BLE001 -- fail open: send it without a key
+                self._internal_error("idempotency key", exc, id=identifier)
+            if identifier is not None and (self._retry_mode != "off" or self._reconcile):
                 with self._retry_lock:
                     self._calls[identifier] = (
                         payload,
@@ -1201,6 +2071,9 @@ class StdioRelay:
                 # Requests that were waiting for a restart are answered "not
                 # sent" before the relay stops -- never left without an answer.
                 self._link_cond.wait_for(lambda: self._link_waiters == 0, timeout=2.0)
+            self._fail_probes()
+            self._settle_reconciliations("no probe channel: the relay is stopping")
+            self._settle_rereads("the relay is stopping")
             self._stopped.set()
 
     def _set_link(self, state: str) -> None:
@@ -1222,9 +2095,31 @@ class StdioRelay:
         with self._to_server:
             self._set_link(LINK_RESTARTING if will_try else LINK_DOWN)
         # Nothing in flight will be answered: each is UNKNOWN, told so, and
-        # never re-sent -- not even to a restarted server.
+        # never re-sent -- not even to a restarted server. Probes waiting on
+        # this server get no answer.
+        self._fail_probes()
         unknown = [inv for inv in self.ledger.transport_closed() if inv is not None]
-        self._resolve_unknown(unknown, Observed.UNKNOWN_TRANSPORT, connection_available=False)
+        probe_channel = (
+            will_try
+            and self._restart_policy == "after-unknown"
+            and self._restarts < self._max_restarts
+        )
+        # Only reads (or keyed calls) in flight: a new server beside them is
+        # harmless -- a read changes nothing, a keyed resend is answered from
+        # the server's record (Retry).
+        only_reads = bool(unknown) and all(self._resendable(inv) for inv in unknown)
+        reread_channel = (
+            will_try
+            and self._restarts < self._max_restarts
+            and (self._restart_policy == "after-unknown" or only_reads)
+        )
+        self._resolve_unknown(
+            unknown,
+            Observed.UNKNOWN_TRANSPORT,
+            connection_available=False,
+            probe_channel=probe_channel,
+            reread_channel=reread_channel,
+        )
         self._abandon_own_listings()
         self._log(
             "server_lost",
@@ -1238,7 +2133,7 @@ class StdioRelay:
         if self._shadow:
             self._log("restart_would_attempt", category="E", in_flight_unknown=len(unknown))
             return False
-        if unknown and self._restart_policy == "idle-only":
+        if unknown and self._restart_policy == "idle-only" and not only_reads:
             self._log(
                 "restart_refused",
                 category="E",
@@ -1253,17 +2148,72 @@ class StdioRelay:
             if self._stopped.wait(self._restart_backoff * (self._restarts - 1)):
                 break
             try:
-                server_in, server_out = self._restart()
+                server_in, server_out, termination, executor = _restarted(self._restart())
             except Exception as exc:  # noqa: BLE001 -- a failed restart is counted, not fatal
                 self._log("restart_failed", category="E", attempt=self._restarts, error=str(exc))
                 continue
-            self._connect(server_in, server_out)
+            self._record_termination(self.generation, termination)
+            self._connect(server_in, server_out, executor)
+            with self._to_server:
+                # The client may have left while the restart ran (pump_client
+                # then closed the *old* stream). Nothing is sent for it: close
+                # the new server's stdin so it can exit, and pump it to its end.
+                gone = self._client_gone
+                if gone:
+                    with contextlib.suppress(OSError):
+                        self._server_in.close()
+            if gone:
+                self._set_link(LINK_DOWN)
+                self._log("restart_unused", category="E", reason="the client left during it")
             return True
         self._log("restart_exhausted", category="E", restarts_used=self._restarts)
         self._set_link(LINK_DOWN)
+        self._settle_rereads("the restart budget is spent: no server to re-read from")
         return False
 
-    def _connect(self, server_in: IO[bytes], server_out: IO[bytes]) -> None:
+    def _name_executor(self, generation: int, executor: Any) -> None:
+        """Record the embedder's identity for *generation*'s executor; reject bad or reused ones."""
+        if executor is None:
+            self._executors[generation] = None
+            return
+        try:
+            name = executor_identity(executor)
+        except ValueError as exc:
+            self._executors[generation] = None
+            self._log(
+                "executor_identity_rejected", category="E", generation=generation, why=str(exc)
+            )
+            return
+        if name in self._executor_names:
+            self._executors[generation] = None
+            self._log(
+                "executor_identity_rejected",
+                category="E",
+                generation=generation,
+                why="already used by an earlier server generation",
+            )
+            return
+        self._executor_names.add(name)
+        self._executors[generation] = name
+
+    def _record_termination(self, generation: int, evidence: TerminationEvidence) -> None:
+        """What the restart established about *generation*'s executor; first report wins."""
+        with self._link_cond:
+            self._termination.setdefault(generation, evidence)
+            self._link_cond.notify_all()
+        if self._reconcile is not None:  # only reconciliation reads it; other logs unchanged
+            why = evidence.applies_to(self._executors.get(generation))
+            self._log(
+                "executor_termination",
+                category="E",
+                generation=generation,
+                applies=why is None,
+                **evidence.to_dict(),
+            )
+
+    def _connect(
+        self, server_in: IO[bytes], server_out: IO[bytes], executor: str | None = None
+    ) -> None:
         """Swap in a restarted server; re-initialize and re-list before trusting it."""
         with self._to_server:
             old = self._server_in
@@ -1272,6 +2222,7 @@ class StdioRelay:
             # old generation can never be written to the new stream.
             self.generation += 1
             self._discovery_epoch = None
+            self._name_executor(self.generation, executor)
         with contextlib.suppress(OSError):
             old.close()
         self._server_out = server_out
@@ -1354,6 +2305,8 @@ class StdioRelay:
         """Listings requested from a dead server will never complete."""
         with self._listing_done:
             epochs = set(self._epoch_of.values())
+            for identifier in self._epoch_of:
+                self._settle_own(identifier)
             self._epoch_of.clear()
             self._first_page_ids.clear()
             self._lost_epochs |= epochs
@@ -1377,18 +2330,30 @@ class StdioRelay:
             ):
                 self._on_reinit(message)
                 continue
-            if is_response(message) and not (
-                isinstance(identifier, str) and identifier.startswith(OWN_ID_PREFIX)
+            if is_response(message) and self._take_probe_response(identifier, message):
+                continue  # a probe the relay issued: the client never asked for this one
+            # Relay-owned listings are matched by exact issued id, never by prefix:
+            # a client is free to use any id, including one that looks like ours.
+            own = is_response(message) and _hashable(identifier) and identifier in self._epoch_of
+            if own and self.ledger.in_flight(identifier):
+                # The client reused an id the relay issued while it was pending:
+                # the relay asked first; the next answer with this id is the client's.
+                self._log("response_id_collision", category="J", id=identifier)
+            if (
+                is_response(message)
+                and not own
+                and _hashable(identifier)
+                and identifier in self._settled_own
+                and not self.ledger.in_flight(identifier)
             ):
+                self._log("own_response_dropped", category="J", id=identifier)
+                continue  # a late or duplicate answer to a listing the relay asked for
+            if is_response(message) and not own:
                 try:
                     self._on_era_evidence(message, identifier)
                 except Exception as exc:  # noqa: BLE001 -- fail open
                     self._internal_error("session lifecycle", exc)
-            if (
-                is_response(message)
-                and isinstance(identifier, str)
-                and identifier.startswith(OWN_ID_PREFIX)
-            ):
+            if own:
                 try:
                     self._on_own_listing(message)
                 except Exception as exc:  # noqa: BLE001 -- fail open
@@ -1439,10 +2404,35 @@ class StdioRelay:
             failure = classify_response(message) if is_error else None
             observed = failure.observed if failure is not None else Observed.TOOL_ERROR
             disposition = self.ledger.response(identifier, is_error=is_error)
-            if isinstance(identifier, str) and identifier.startswith(RETRY_ID_PREFIX):
+            if _hashable(identifier) and identifier in self._client_of:
                 # Never delivered raw: the client knows its own id, not ours.
                 client_id = self._client_of.get(identifier)
-                if disposition is ResponseDisposition.DELIVER and client_id is not None:
+                if (
+                    disposition is ResponseDisposition.DELIVER
+                    and client_id is not None
+                    and not self._unanswered(client_id)
+                ):
+                    # The original's late answer came first: the client has it.
+                    self._log("reread_superseded", category="J", id=client_id)
+                elif (
+                    disposition is ResponseDisposition.DELIVER
+                    and client_id is not None
+                    and (left_unknown := _resend_left_unknown(message)) is not None
+                ):
+                    # The server executed nothing for the resend, and that says
+                    # nothing about the first attempt: in doubt, in progress, or
+                    # a rejection (store down, key mismatch). The client is told
+                    # "outcome unknown" (after a deadline, once the original has
+                    # had one more deadline to answer). A resend answered
+                    # "not executed" or "expired" is delivered as the server sent it.
+                    self._log(
+                        "idempotency_in_doubt",
+                        category="I",
+                        id=client_id,
+                        outcome=left_unknown.value,
+                    )
+                    self._answer_in_doubt(client_id, left_unknown)
+                elif disposition is ResponseDisposition.DELIVER and client_id is not None:
                     self._note_failure(client_id, failure)
                     if not (is_error and self._consider_retry(client_id, observed)):
                         self._deliver_as(client_id, message)
@@ -1453,6 +2443,18 @@ class StdioRelay:
                         id=identifier,
                         disposition=disposition.value,
                     )
+                return False
+            if (
+                disposition is ResponseDisposition.LATE
+                and not is_error
+                and _hashable(identifier)
+                and self._unanswered(identifier)
+                and self._attempts.get(identifier, 1) > 1
+            ):
+                # Re-read pending, client still waiting: the original's late
+                # success is the first answer. The re-read's is then dropped.
+                self._log("late_answer_delivered", category="I", id=identifier)
+                self._deliver_as(identifier, message)
                 return False
             if disposition is ResponseDisposition.DELIVER:
                 self._note_failure(identifier, failure)
@@ -1474,10 +2476,18 @@ class StdioRelay:
         )
         return self._shadow  # shadow never changes traffic
 
+    def _settle_own(self, identifier: Any) -> None:
+        """Remember a relay-owned id that is no longer awaited (bounded)."""
+        if isinstance(identifier, str):
+            self._settled_own[identifier] = None
+            while len(self._settled_own) > SETTLED_PROBES_KEPT:
+                self._settled_own.popitem(last=False)
+
     def _on_own_listing(self, message: Any) -> None:
         identifier = request_id(message)
         with self._listing_done:
             epoch = self._epoch_of.pop(identifier, 0)
+            self._settle_own(identifier)
             if identifier in self._first_page_ids:
                 self._first_page_ids.discard(identifier)
                 if "result" in message:
@@ -1506,8 +2516,30 @@ class StdioRelay:
 _VERSIONED_LIMIT = 64
 
 
+def _resend_left_unknown(message: dict[str, Any]) -> Outcome | None:
+    """A keyed resend's answer that executed nothing *and* leaves the original unknown."""
+    outcome = not_executed_outcome(message)
+    if outcome in (
+        Outcome.IN_DOUBT,
+        Outcome.IN_PROGRESS,
+        Outcome.REJECTED_STORE,
+        Outcome.REJECTED_MISMATCH,
+    ):
+        return outcome
+    return None
+
+
 def _id_key(identifier: Any) -> str:
     return json.dumps(identifier, sort_keys=True)
+
+
+def _hashable(identifier: Any) -> bool:
+    return isinstance(identifier, (str, int, float)) and not isinstance(identifier, bool)
+
+
+def _utc_now() -> str:
+    """Wall-clock UTC, millisecond precision: when a probe observation was made."""
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 #: JSON-RPC implementation-defined server error: the outcome is unknown.
@@ -1515,7 +2547,16 @@ UNKNOWN_OUTCOME_CODE = -32000
 UNKNOWN_OUTCOME_KEY = "io.stateguard/executionState"
 
 
-def unknown_outcome_response(identifier: Any, reason: str) -> dict[str, Any]:
+POSTCONDITION_KEY = "io.stateguard/postcondition"
+#: Which reconciliation contract a verdict in ``data`` follows.
+CONTRACT_KEY = "io.stateguard/reconciliationContract"
+RECONCILIATION_CONTRACT = "2"
+ATTRIBUTION_KEY = "io.stateguard/attribution"
+
+
+def unknown_outcome_response(
+    identifier: Any, reason: str, verdict: Verdict | None = None
+) -> dict[str, Any]:
     """
     The relay's answer for a request whose outcome it cannot know.
 
@@ -1523,23 +2564,65 @@ def unknown_outcome_response(identifier: Any, reason: str) -> dict[str, Any]:
     must not read it as the tool's verdict. The message says plainly that
     the request may have executed, so nobody retries a non-idempotent call
     on the strength of it.
+
+    With a reconciliation *verdict*, ``data`` also carries what the probes
+    observed: ``postcondition`` (``observed_satisfied`` / ``observed_not_satisfied``
+    / ``undetermined``), when and what was checked (``observation``), and the
+    things no observation establishes, stated explicitly: execution ``unknown``,
+    attribution ``unknown``, durability ``not_established``, operation outcome
+    ``unknown``. An observed predicate is never reported as success.
     """
     why = {
         "transport_closed": "the MCP server's connection closed before it answered",
         "deadline": "the MCP server did not answer within the relay's deadline",
         "send_failed": "the request could not be fully written to the MCP server",
+        "not_sent_unconfirmed": "the relay could not confirm the request was never sent",
     }.get(reason, "the relay cannot determine the outcome")
+    data: dict[str, Any] = {UNKNOWN_OUTCOME_KEY: "unknown", "io.stateguard/reason": reason}
+    message = (
+        f"Outcome unknown: {why}. The request may or may not have been executed; "
+        "do not retry it unless it is safe to run twice."
+    )
+    if verdict is not None:
+        data[CONTRACT_KEY] = RECONCILIATION_CONTRACT
+        data[POSTCONDITION_KEY] = verdict.postcondition.value
+        data[ATTRIBUTION_KEY] = "unknown"
+        data["io.stateguard/durability"] = verdict.durability
+        data["io.stateguard/operationOutcome"] = verdict.operation_outcome
+        # Stated outright for clients that read one flag: never treat this as success.
+        data["io.stateguard/treatAsSuccess"] = False
+        observation = verdict.observation()
+        if observation is not None:
+            data["io.stateguard/observation"] = observation
+        data["io.stateguard/reconciliation"] = {
+            "reasons": list(verdict.reasons),
+            "establishes": verdict.establishes(),
+            "does_not_establish": verdict.does_not_establish(),
+            "probes": [o.to_dict() for o in verdict.observations],
+        }
+        when = f" at {verdict.observed_to}" if verdict.observed_to else ""
+        if verdict.postcondition is Postcondition.OBSERVED_SATISFIED:
+            what = (
+                "the declared predicate"
+                if verdict.content_checked
+                else ("the declared presence-only predicate (content was not checked)")
+            )
+            message = (
+                f"Outcome unknown: {why}. Read-only probes observed {what} holding{when}. "
+                "That does not show this request executed or caused it, that it still "
+                "holds, or that the operation succeeded. Do not resend it."
+            )
+        elif verdict.postcondition is Postcondition.OBSERVED_NOT_SATISFIED:
+            message += (
+                f" Read-only probes observed the declared predicate not holding{when}; "
+                "that does not show the request did not execute."
+            )
+        else:
+            message += " Reconciliation could not establish whether the declared predicate holds."
     return {
         "jsonrpc": JSONRPC_VERSION,
         "id": identifier,
-        "error": {
-            "code": UNKNOWN_OUTCOME_CODE,
-            "message": (
-                f"Outcome unknown: {why}. The request may or may not have been executed; "
-                "do not retry it unless it is safe to run twice."
-            ),
-            "data": {UNKNOWN_OUTCOME_KEY: "unknown", "io.stateguard/reason": reason},
-        },
+        "error": {"code": UNKNOWN_OUTCOME_CODE, "message": message, "data": data},
     }
 
 
@@ -1607,6 +2690,52 @@ def _parse(line: bytes) -> Any:
         return None  # not ours to understand: relayed as-is
 
 
+#: The executor-scope environment baseline. Only PATH, which the server needs to
+#: exec itself and its children; it is not a credential. Everything else is opt-in
+#: via --env / --env-passthrough. Not every server runs on this alone (see
+#: docs/runtime/WEEK4C_ENVIRONMENT_AND_RESOURCE_BOUNDARY.md).
+_ENV_BASELINE = ("PATH",)
+
+
+def _server_environment(args: Any, parser: argparse.ArgumentParser) -> tuple[dict[str, str], str]:
+    """Build the scoped server's environment and working directory, or exit with an error.
+
+    Deterministic and explicit: a minimal baseline plus only what the operator
+    passes. Conflicts, malformed entries, missing passthroughs and a bad working
+    directory are all refused here, before any server starts. No value is logged.
+    """
+    explicit: dict[str, str] = {}
+    source: dict[str, str] = {}
+    for item in args.env_set:
+        name, sep, value = item.partition("=")
+        if not sep or not name:
+            parser.error(f"--env {item!r}: expected NAME=VALUE with a non-empty NAME")
+        if name in source:
+            parser.error(f"--env: {name} given more than once (via {source[name]} and --env)")
+        source[name] = "--env"
+        explicit[name] = value
+    for name in args.env_passthrough:
+        if not name:
+            parser.error("--env-passthrough: empty variable name")
+        if name in source:
+            parser.error(
+                f"--env-passthrough: {name} also given via {source[name]} (one source per variable)"
+            )
+        if name not in os.environ:
+            parser.error(
+                f"--env-passthrough {name}: not set in the relay's environment; set it, pass "
+                "--env {name}=VALUE, or drop the passthrough"
+            )
+        source[name] = "--env-passthrough"
+        explicit[name] = os.environ[name]
+    server_env: dict[str, str] = {n: os.environ[n] for n in _ENV_BASELINE if n in os.environ}
+    server_env.update(explicit)  # an explicit value overrides the baseline
+    server_cwd = "/" if args.server_cwd is None else args.server_cwd
+    if not os.path.isdir(server_cwd):
+        parser.error(f"--server-cwd {server_cwd!r}: not an existing directory")
+    return server_env, server_cwd
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[1] if __doc__ else None)
     parser.add_argument(
@@ -1640,6 +2769,31 @@ def main(argv: list[str] | None = None) -> int:
         choices=["off", "shadow", "auto"],
         default="shadow",
         help="Retry tools declared read_only/idempotent (default: shadow, log only).",
+    )
+    parser.add_argument(
+        "--no-reread-unknown",
+        action="store_true",
+        help="With --retry auto: never re-read a READ_ONLY tool whose outcome is unknown.",
+    )
+    parser.add_argument(
+        "--no-idempotency-keys",
+        action="store_true",
+        help="With --retry auto: never add idempotency keys, never resend a keyed call.",
+    )
+    parser.add_argument(
+        "--trust-read-only-hints",
+        action="store_true",
+        help="Trust the server's readOnlyHint: a tool it annotates read-only counts as "
+        "declared READ_ONLY (unless --effects declares it otherwise). Only for a server "
+        "you trust: a wrong hint lets a mutating call be re-sent.",
+    )
+    parser.add_argument(
+        "--deadline-scope",
+        choices=["all", "recoverable"],
+        default="all",
+        help="Which calls --call-deadline applies to: all (default), or only calls the "
+        "relay could resend (declared reads, honoured idempotency keys) -- others wait for "
+        "their answer, so a slow mutation is never cut short.",
     )
     parser.add_argument(
         "--restart",
@@ -1678,11 +2832,51 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Kill switch: relay bytes only, StateGuard off. The measurement baseline.",
     )
+    parser.add_argument(
+        "--executor-scope",
+        choices=["none", "pid-namespace", "pid-namespace-unprivileged"],
+        default="none",
+        help="Run each server generation in its own executor scope (default: none). "
+        "pid-namespace: Linux, needs CAP_SYS_ADMIN; the server keeps its host user identity. "
+        "pid-namespace-unprivileged: EXPERIMENTAL architecture B -- a user+PID namespace needing "
+        "NO host CAP_SYS_ADMIN, but it REMAPS the server's user identity to the relay's uid/gid "
+        "(files the server writes are owned by that uid, not root) and needs unprivileged user "
+        "namespaces enabled plus a seccomp policy permitting unshare. Both are checked before the "
+        "server starts and never downgraded; both satisfy reconcile blocks. Neither is a sandbox.",
+    )
+    parser.add_argument(
+        "--env-passthrough",
+        metavar="NAME",
+        action="append",
+        default=[],
+        help="Executor-scope only: also pass this variable's current value from the relay's "
+        "environment to the server. Repeatable. Fails before start if NAME is unset.",
+    )
+    parser.add_argument(
+        "--env",
+        metavar="NAME=VALUE",
+        action="append",
+        default=[],
+        dest="env_set",
+        help="Executor-scope only: set this variable in the server's environment. Repeatable. "
+        "Conflicts (a NAME set twice, or both set and passed through) are refused before start.",
+    )
+    parser.add_argument(
+        "--server-cwd",
+        metavar="DIR",
+        help="Executor-scope only: the server's working directory (must exist). "
+        "Default in scope mode: '/' (a neutral directory, not the relay's). "
+        "Pass the relay's directory explicitly to keep the pre-4C behaviour.",
+    )
     parser.add_argument("server", nargs=argparse.REMAINDER, help="-- then the server command")
     args = parser.parse_args(argv)
     command = args.server[1:] if args.server[:1] == ["--"] else args.server
     if not command:
         parser.error("give the server command after --")
+    # Which executor-scope architecture (if any). ``unprivileged`` is architecture B;
+    # both A and B are scoped. The selection is explicit and never downgraded.
+    scoped = args.executor_scope in ("pid-namespace", "pid-namespace-unprivileged")
+    unprivileged = args.executor_scope == "pid-namespace-unprivileged"
     real_capture = args.record_provenance == Provenance.REAL_CAPTURE.value
     if real_capture:
         # Checked before the server starts: a refused real capture runs nothing.
@@ -1697,12 +2891,106 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--record-provenance real_capture requires --record-redaction mask")
 
     mode = RepairMode.SHADOW if args.shadow else RepairMode.AUTO
+    effects = EffectPolicy.from_file(args.effects) if args.effects else None
+    reconcile: ReconcilePolicy | None = None
+    if args.effects and effects is not None:
+        # Checked before the server starts: an unsafe probe configuration runs nothing.
+        try:
+            reconcile = ReconcilePolicy.from_file(args.effects, effects)
+        except ReconcileConfigError as exc:
+            parser.error(f"--effects: {exc}")
+        if len(reconcile) and not scoped:
+            parser.error(
+                f"--effects: reconcile blocks ({', '.join(reconcile.tools())}) need "
+                "--executor-scope pid-namespace (or pid-namespace-unprivileged). "
+                "Reconciliation probes a restarted server "
+                "only once every process that could still execute the lost call has "
+                "provably ended; without an executor scope this relay can only reap its "
+                "direct child -- a detached descendant could still act. Add "
+                "--executor-scope pid-namespace (Linux, CAP_SYS_ADMIN) or "
+                "pid-namespace-unprivileged, remove the "
+                "reconcile blocks, or embed StdioRelay with a restart factory that returns "
+                "Restarted(..., TerminationEvidence.scope_ended(scope, executor=...), "
+                "executor=...) for a scope it controls. External systems are never covered "
+                "(see docs/runtime/RECONCILIATION_CONTRACT_V2.md)."
+            )
+        if len(reconcile) and (args.shadow or args.passthrough):
+            parser.error(
+                "--effects: reconcile blocks are never used in shadow or passthrough mode "
+                "(they never probe); remove them for this mode"
+            )
+        if len(reconcile) and (args.restart < 1 or args.restart_policy != "after-unknown"):
+            parser.error(
+                "--effects: reconcile probes run on a restarted server: add --restart N "
+                "--restart-policy after-unknown (or remove the reconcile blocks)"
+            )
+    if not scoped and (args.env_passthrough or args.env_set or args.server_cwd is not None):
+        parser.error(
+            "--env, --env-passthrough and --server-cwd apply only with "
+            "--executor-scope pid-namespace (or pid-namespace-unprivileged); without a scope the "
+            "server inherits the relay's environment and directory, unchanged"
+        )
+    server_env: dict[str, str] | None = None
+    server_cwd: str | None = None
+    if scoped:
+        # Checked before the server starts; a missing capability is never downgraded.
+        resolved = shutil.which(command[0])
+        if resolved is None:
+            parser.error(f"--executor-scope: the server program {command[0]!r} was not found")
+        # Resolve to an absolute path now: the server runs in its own working
+        # directory (default '/'), so a relative command would not resolve there.
+        command = [os.path.abspath(resolved), *command[1:]]
+        # The probe matches the selected architecture (A: CAP_SYS_ADMIN PID namespace;
+        # B: unprivileged user+PID namespace). The two are never substituted.
+        capability = check_pid_namespace_capability(unprivileged=unprivileged)
+        if not capability.available:
+            hint = (
+                "or ensure unprivileged user namespaces are enabled and unshare is permitted by "
+                "the seccomp policy"
+                if unprivileged
+                else "or on Linux with CAP_SYS_ADMIN"
+            )
+            parser.error(
+                f"--executor-scope {args.executor_scope} is not available here: "
+                f"{capability.reason}. Nothing was started. Run without --executor-scope "
+                f"(and without reconcile blocks), {hint}."
+            )
+        # The server's environment is built explicitly, not inherited: a minimal
+        # baseline (PATH, needed to exec the program and its children) plus only
+        # what the operator passes. Conflicts and missing passthroughs fail here.
+        server_env, server_cwd = _server_environment(args, parser)
     audit = open(args.audit, "a", encoding="utf-8") if args.audit else sys.stderr  # noqa: SIM115
-    processes = [subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE)]
-    server = processes[0]
-    assert server.stdin is not None and server.stdout is not None
+    scopes: list[PidNamespaceScope] = []
+    processes: list[subprocess.Popen[bytes]] = []
+    if scoped:
+        try:
+            scopes.append(
+                PidNamespaceScope(
+                    command, env=server_env, cwd=server_cwd, unprivileged=unprivileged
+                )
+            )
+        except ScopeError as exc:
+            parser.error(f"--executor-scope {args.executor_scope}: {exc}")
+        server_in, server_out = scopes[0].stdin, scopes[0].stdout
+    else:
+        processes.append(subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE))
+        assert processes[0].stdin is not None and processes[0].stdout is not None
+        server_in, server_out = processes[0].stdin, processes[0].stdout
 
-    def restart() -> tuple[IO[bytes], IO[bytes]]:
+    def restart_scoped() -> Restarted:
+        # End the old generation's scope first, and report exactly what that
+        # established; then start the next generation in a new scope, with the
+        # same explicit environment and directory policy.
+        evidence = scopes[-1].end()
+        new = PidNamespaceScope(
+            command, env=server_env, cwd=server_cwd, unprivileged=unprivileged
+        )  # may raise: counted
+        scopes.append(new)
+        return Restarted(new.stdin, new.stdout, evidence, new.identity)
+
+    def restart() -> Restarted:
+        if scoped:
+            return restart_scoped()
         old = processes[-1]
         if old.poll() is None:  # stdout closed but still running: stop it first
             old.terminate()
@@ -1711,10 +2999,14 @@ def main(argv: list[str] | None = None) -> int:
             except subprocess.TimeoutExpired:
                 old.kill()
                 old.wait()
+        # Reaped: the direct child is gone. That is all this entry point can
+        # see -- a descendant it started (in its own session, say) is not -- so
+        # the evidence is reported as it is, and never establishes termination.
+        reaped = TerminationEvidence.direct_child_reaped(old.returncode)
         new = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         assert new.stdin is not None and new.stdout is not None
         processes.append(new)
-        return new.stdin, new.stdout
+        return Restarted(new.stdin, new.stdout, reaped)
 
     recorder = None
     if args.record:
@@ -1743,19 +3035,36 @@ def main(argv: list[str] | None = None) -> int:
         ContractGuard.with_mcp(config=GuardConfig(mode=mode)),
         sys.stdin.buffer,
         sys.stdout.buffer,
-        server.stdin,
-        server.stdout,
+        server_in,
+        server_out,
         audit,
         unreadable=args.unreadable,
         passthrough=args.passthrough,
         refresh_before_intervening=not args.no_listing_refresh,
         call_deadline=args.call_deadline,
-        effects=EffectPolicy.from_file(args.effects) if args.effects else None,
+        effects=effects,
         retry=args.retry,
+        reread_unknown=args.retry == "auto" and not args.no_reread_unknown,
+        trust_read_only_hints=args.trust_read_only_hints,
+        deadline_scope=args.deadline_scope,
+        idempotency_keys=args.retry == "auto" and not args.no_idempotency_keys,
         restart=restart,
         max_restarts=args.restart,
         restart_policy=args.restart_policy,
         recorder=recorder,
+        reconcile=reconcile,
+        executor=scopes[0].identity if scoped else None,
+    )
+    scope_info = (
+        {
+            # The exact architecture selected, so the audit log is unambiguous.
+            "executor_scope": args.executor_scope,
+            # Names only, never values: the audit log must never carry a secret.
+            "server_env_names": sorted(server_env or {}),
+            "server_cwd": server_cwd,
+        }
+        if scoped
+        else {}
     )
     relay._log(
         "relay_started",
@@ -1767,12 +3076,20 @@ def main(argv: list[str] | None = None) -> int:
             if real_capture
             else {"server": command}
         ),
+        reconcile_tools=reconcile.tools() if reconcile is not None else [],
+        **scope_info,
     )
+
     to_server = threading.Thread(target=relay.pump_client, daemon=True)
     to_server.start()
     threading.Thread(target=relay.run_deadlines, daemon=True).start()
     relay.pump_server()  # until the server closes its stdout for good
-    code = processes[-1].wait()
+    if scoped:
+        for scope in scopes:  # bounded each; nothing in any scope outlives the relay
+            scope.end()
+        code = scopes[-1].returncode or 0
+    else:
+        code = processes[-1].wait()
     if recorder is not None:
         recorder.close()
     return code

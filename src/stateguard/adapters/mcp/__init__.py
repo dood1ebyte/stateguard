@@ -55,13 +55,25 @@ from stateguard.adapters.mcp.ledger import (
     ExecutionState,
     Invocation,
     InvocationLedger,
+    Postcondition,
     ResponseDisposition,
+    ResultValidity,
 )
 from stateguard.adapters.mcp.outcomes import (
     MCPAction,
     ToolCallOutcome,
     outcome_for,
     repair_tool_call,
+)
+from stateguard.adapters.mcp.reconcile import (
+    ProbeObservation,
+    ProbeStatus,
+    ReconcileConfigError,
+    ReconcilePolicy,
+    ReconcileSpec,
+    TerminationEvidence,
+    TerminationKind,
+    Verdict,
 )
 from stateguard.adapters.mcp.recording import (
     Direction,
@@ -121,7 +133,17 @@ __all__ = [
     "ExecutionState",
     "Invocation",
     "InvocationLedger",
+    "Postcondition",
     "ResponseDisposition",
+    "ResultValidity",
+    "ProbeObservation",
+    "ProbeStatus",
+    "ReconcileConfigError",
+    "ReconcilePolicy",
+    "ReconcileSpec",
+    "TerminationEvidence",
+    "TerminationKind",
+    "Verdict",
     "ForwardingInvariantError",
     "InvalidToolDefinitionError",
     "MCPAction",

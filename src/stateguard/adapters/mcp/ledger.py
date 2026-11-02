@@ -25,6 +25,25 @@ a client has been told the outcome is unknown, a late answer from the server
 is recorded (``late_response``) but is not delivered -- the client already
 has its one response.
 
+Beside the execution state -- never derived from it, never changing it
+---------------------------------------------------------------------
+``result_validity``   whether a *returned* result was checked: ``not_checked``,
+                      ``envelope_valid`` (a CallToolResult, no outputSchema to
+                      check), ``valid``, ``invalid``, or ``no_result`` (UNKNOWN:
+                      no result arrived).
+``postcondition``     what read-only probes observed about an operator-declared
+                      predicate, when they ran (``stateguard.adapters.mcp.reconcile``):
+                      ``not_checked``, ``pending``, ``observed_satisfied``,
+                      ``observed_not_satisfied``, ``undetermined``.
+``attribution``       ``None`` until a reconciliation; then ``"unknown"``. A
+                      probe observes state, never which actor produced it.
+``reconciliation``    append-only: every probe attempt and verdict, with reasons.
+
+An ``observed_satisfied`` postcondition leaves an UNKNOWN invocation UNKNOWN:
+the predicate can hold because another actor produced that state, it may stop
+holding after the observation, and it says nothing about whether the operation
+succeeded. ``observed_not_satisfied`` is not "not executed" either.
+
 Responses
 ---------
 ``response(id)`` returns a ``ResponseDisposition``:
@@ -60,7 +79,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable, Hashable
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -69,7 +88,9 @@ __all__ = [
     "ExecutionState",
     "Invocation",
     "InvocationLedger",
+    "Postcondition",
     "ResponseDisposition",
+    "ResultValidity",
 ]
 
 #: Finished invocations kept for duplicate detection, by default.
@@ -91,6 +112,43 @@ class ExecutionState(StrEnum):
             ExecutionState.COMPLETED,
             ExecutionState.UNKNOWN,
         )
+
+
+class ResultValidity(StrEnum):
+    """Whether a result the server returned was checked (never the execution state)."""
+
+    NOT_CHECKED = "not_checked"
+    ENVELOPE_VALID = "envelope_valid"  # a CallToolResult; no outputSchema to check
+    VALID = "valid"
+    INVALID = "invalid"
+    NO_RESULT = "no_result"  # UNKNOWN: no result arrived
+
+
+class Postcondition(StrEnum):
+    """
+    What read-only probes observed about an operator-declared predicate, at
+    the time they ran. Never whether the request executed, whether it caused
+    what was seen, whether that still holds, or whether the operation succeeded.
+    """
+
+    NOT_CHECKED = "not_checked"
+    PENDING = "pending"
+    #: Every declared check held when it was read. Cause and durability unknown.
+    OBSERVED_SATISFIED = "observed_satisfied"
+    #: The checks answered and the predicate did not hold -- not "not executed".
+    OBSERVED_NOT_SATISFIED = "observed_not_satisfied"
+    #: The evidence could not decide either way.
+    UNDETERMINED = "undetermined"
+
+
+#: Postconditions a reconciliation may end in.
+FINAL_POSTCONDITIONS = frozenset(
+    {
+        Postcondition.OBSERVED_SATISFIED,
+        Postcondition.OBSERVED_NOT_SATISFIED,
+        Postcondition.UNDETERMINED,
+    }
+)
 
 
 class ResponseDisposition(StrEnum):
@@ -121,6 +179,10 @@ class Invocation:
     duplicate_responses: int = 0
     history: list[ExecutionState] = field(default_factory=list)
     anomalies: list[str] = field(default_factory=list)
+    result_validity: ResultValidity = ResultValidity.NOT_CHECKED
+    postcondition: Postcondition = Postcondition.NOT_CHECKED
+    attribution: str | None = None
+    reconciliation: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -135,6 +197,10 @@ class Invocation:
             "duplicate_responses": self.duplicate_responses,
             "history": [state.value for state in self.history],
             "anomalies": list(self.anomalies),
+            "result_validity": self.result_validity.value,
+            "postcondition": self.postcondition.value,
+            "attribution": self.attribution,
+            "reconciliation": [dict(entry) for entry in self.reconciliation],
         }
 
 
@@ -184,9 +250,17 @@ class InvocationLedger:
             self._live[key] = invocation
             return invocation
 
-    def answered_locally(self, request_id: Any) -> None:
-        """The proxy answered the request itself; it was never sent."""
-        self._finish(request_id, ExecutionState.ANSWERED_LOCALLY, expect=(ExecutionState.PENDING,))
+    def answered_locally(self, request_id: Any) -> bool:
+        """
+        The proxy answered the request itself; it was never sent.
+
+        True only if the transition was accepted (the request was PENDING).
+        A caller about to tell the client "not sent, did not execute" must
+        check this: a request already SENT may have executed.
+        """
+        return self._finish(
+            request_id, ExecutionState.ANSWERED_LOCALLY, expect=(ExecutionState.PENDING,)
+        )
 
     def sent(self, request_id: Any) -> None:
         """
@@ -206,6 +280,41 @@ class InvocationLedger:
             invocation.state = ExecutionState.SENT
             invocation.sent_at = self._clock()
             invocation.history.append(ExecutionState.SENT)
+
+    def unknown(self, request_id: Any, reason: str) -> Invocation | None:
+        """A PENDING or SENT request whose outcome the proxy cannot establish."""
+        return self._unknown(request_id, reason)
+
+    def record_result_check(self, request_id: Any, validity: ResultValidity) -> bool:
+        """Record whether a COMPLETED request's result was valid. Never changes the state."""
+        key = _key(request_id)
+        with self._lock:
+            invocation = self._finished.get(key)
+            if invocation is None or invocation.state is not ExecutionState.COMPLETED:
+                return False
+            invocation.result_validity = validity
+            return True
+
+    def record_reconciliation(
+        self, request_id: Any, entry: Mapping[str, Any], postcondition: Postcondition
+    ) -> bool:
+        """
+        Append one reconciliation record to an UNKNOWN request and set its
+        postcondition. Append-only; the execution state stays UNKNOWN and the
+        attribution ``"unknown"``. False (nothing recorded) for any other state.
+        """
+        key = _key(request_id)
+        with self._lock:
+            invocation = self._finished.get(key)
+            if invocation is None or invocation.state is not ExecutionState.UNKNOWN:
+                return False
+            if invocation.postcondition in FINAL_POSTCONDITIONS:
+                invocation.anomalies.append("reconciliation after a final postcondition")
+                return False
+            invocation.reconciliation.append(dict(entry))
+            invocation.postcondition = postcondition
+            invocation.attribution = "unknown"
+            return True
 
     def send_failed(self, request_id: Any) -> Invocation | None:
         """
@@ -254,20 +363,39 @@ class InvocationLedger:
             keys = [k for k, inv in self._live.items() if inv.state is ExecutionState.SENT]
         return [inv for k in keys if (inv := self._unknown_by_key(k, "transport_closed"))]
 
-    def expire(self, deadline: float, now: float | None = None) -> list[Invocation]:
-        """``SENT`` requests older than *deadline* seconds become ``UNKNOWN``."""
+    def expire(
+        self,
+        deadline: float,
+        now: float | None = None,
+        *,
+        select: Callable[[Invocation], bool] | None = None,
+    ) -> list[Invocation]:
+        """
+        ``SENT`` requests older than *deadline* seconds become ``UNKNOWN``.
+        With *select*, only those it accepts (called outside the lock).
+        """
         at = self._clock() if now is None else now
         with self._lock:
-            keys = [
-                k
+            candidates = [
+                (k, inv)
                 for k, inv in self._live.items()
                 if inv.state is ExecutionState.SENT
                 and inv.sent_at is not None
                 and at - inv.sent_at >= deadline
             ]
+        keys = [k for k, inv in candidates if select is None or select(inv)]
         return [inv for k in keys if (inv := self._unknown_by_key(k, "deadline"))]
 
     # -- reading -------------------------------------------------------------
+
+    def in_flight(self, request_id: Any) -> bool:
+        """True if a client request with this id is pending or sent and not yet answered."""
+        with self._lock:
+            invocation = self._live.get(_key(request_id))
+            return invocation is not None and invocation.state in (
+                ExecutionState.PENDING,
+                ExecutionState.SENT,
+            )
 
     def get(self, request_id: Any) -> Invocation | None:
         key = _key(request_id)
@@ -286,20 +414,21 @@ class InvocationLedger:
 
     def _finish(
         self, request_id: Any, state: ExecutionState, *, expect: tuple[ExecutionState, ...]
-    ) -> None:
+    ) -> bool:
         key = _key(request_id)
         with self._lock:
             invocation = self._live.get(key)
             if invocation is None:
-                return
+                return False
             if invocation.state not in expect:
                 invocation.anomalies.append(f"{state.value} while {invocation.state.value}")
-                return
+                return False
             invocation.state = state
             invocation.finished_at = self._clock()
             invocation.history.append(state)
             self._live.pop(key)
             self._remember(key, invocation)
+            return True
 
     def _unknown(self, request_id: Any, reason: str) -> Invocation | None:
         return self._unknown_by_key(_key(request_id), reason)
@@ -314,6 +443,7 @@ class InvocationLedger:
                 return None
             invocation.state = ExecutionState.UNKNOWN
             invocation.unknown_reason = reason
+            invocation.result_validity = ResultValidity.NO_RESULT
             invocation.finished_at = self._clock()
             invocation.history.append(ExecutionState.UNKNOWN)
             self._live.pop(key)

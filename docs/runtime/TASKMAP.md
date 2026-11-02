@@ -1754,3 +1754,14 @@ Recommended next:
   (`additionalProperties: false`), and the SDK 2.x lifecycle. The Git/MCP
   domain is closed.
 - **T9:** circuit breaker.
+
+---
+
+## Autonomous RIFR iteration (2026-10-25)
+
+Full record: `docs/runtime/AUTONOMOUS_RIFR_ENGINEERING.md`. Measured results continue the M-series:
+
+- **M12** S1 concurrency, real fs server: 80 mutations in flight at loss; StateGuard 0 resends, 80/80 reconciled correctly; ordinary retry 80 unsafe resends, 60 false failures.
+- **M13** Read re-request (`decide_retry(reread_unknown=True)`), real 3 servers: reads 0/216 failed (raw 216/216), writes 216/216 UNKNOWN, 0 unsafe outcomes, 0 Z.
+- **M14** Synthetic strict RIFR, seed 2, 267 faulted + 400 control per arm. Faulted failures: raw 213, auto 177, auto_ops 165 (Z 16), ops_reread 130 (Z 11), ops_scoped 119 (Z 0), ops_keyed 91 (Z 0; servers that adopted keys). Controls 0/400 in every arm; 0 duplicates in every StateGuard arm.
+- **M15** Idempotency-key contract (`stateguard.adapters.mcp.idempotency`): opt-in, per-tool advertisement in the server's own listing. A resend is never a second execution: it is a replay or "in doubt".

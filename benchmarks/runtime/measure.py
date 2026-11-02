@@ -193,20 +193,43 @@ def run_one(scenario: Scenario, arm: str, *, listing_wait: float = 1.0) -> Resul
     def faults(call: ServerCall) -> ServerAction:
         return plan.get(next(order), ServerAction.NORMAL)
 
+    # ops_keyed: a server that honours idempotency keys, with a durable store
+    # shared by every process of it -- a server that has *adopted* the
+    # contract (stateguard.adapters.mcp.idempotency). No third-party server has.
+    store = None
+    if arm == "ops_keyed":
+        import tempfile
+
+        from stateguard.adapters.mcp.idempotency import IdempotencyStore
+
+        store = IdempotencyStore(Path(tempfile.mkdtemp(prefix="sg-keys-")) / "keys.db")
+
+    def make_server() -> ScriptedServer:
+        return ScriptedServer(
+            [ServerTool(t) for t in scenario.tools], faults=faults, idempotency=store
+        )
+
     def factory() -> ScriptedServer:
         if scenario.restart_fails:
             raise OSError("server cannot be started")
-        return ScriptedServer([ServerTool(t) for t in scenario.tools], faults=faults)
+        return make_server()
 
-    server = ScriptedServer([ServerTool(t) for t in scenario.tools], faults=faults)
+    server = make_server()
     mode = {
         "raw": RelayMode.PASSTHROUGH,
         "naive": RelayMode.PASSTHROUGH,
         "shadow": RelayMode.SHADOW,
         "auto": RelayMode.AUTO,
         "auto_ops": RelayMode.AUTO,
+        "ops_reread": RelayMode.AUTO,
+        "ops_scoped": RelayMode.AUTO,
+        "ops_keyed": RelayMode.AUTO,
     }[arm]
-    ops = arm == "auto_ops"
+    # ops_reread: auto_ops plus re-reads of unknown outcomes for tools declared
+    # READ_ONLY (what the CLI does with --retry auto). ops_scoped: ops_reread
+    # with --deadline-scope reads. Not in ARMS: the historical report is
+    # unchanged; benchmarks/runtime/rifr.py scores them.
+    ops = arm in ("auto_ops", "ops_reread", "ops_scoped", "ops_keyed")
     rig = Rig(
         server,
         mode,
@@ -216,6 +239,9 @@ def run_one(scenario: Scenario, arm: str, *, listing_wait: float = 1.0) -> Resul
         retry="auto" if ops else "shadow",
         server_factory=factory,
         max_restarts=RESTARTS_ARM if ops else 0,
+        reread_unknown=arm in ("ops_reread", "ops_scoped", "ops_keyed"),
+        idempotency_keys=arm == "ops_keyed",
+        deadline_scope="recoverable" if arm in ("ops_scoped", "ops_keyed") else "all",
     )
     try:
         rig.request("server/discover")

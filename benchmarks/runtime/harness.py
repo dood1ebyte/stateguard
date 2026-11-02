@@ -179,6 +179,14 @@ class ScriptedServer:
     #: Called with every call whose action is not NORMAL -- what a recording
     #: of a fault-injection run stores as its ground truth.
     on_fault: Callable[[ServerCall, ServerAction], None] | None = None
+    #: An ``IdempotencyStore`` shared by every process of this server (durable
+    #: across restarts): its tools advertise idempotency keys, and a keyed call
+    #: is recorded as started *before* anything else happens -- so a fault
+    #: before execution leaves the key in doubt, never free to run again.
+    idempotency: Any = None
+    #: Tools that advertise keys (None: all of them).
+    keyed_tools: frozenset[str] | None = None
+    _own_store: Any = None
     _initialized: bool = False
     _writer: Any = None
     _calls: int = 0
@@ -267,7 +275,7 @@ class ScriptedServer:
             return True
         if method == "tools/list":
             with self._lock:
-                listing = [tool.definition for tool in self.tools]
+                listing = [self._advertised(tool.definition) for tool in self.tools]
             self._reply(writer, identifier, {"resultType": "complete", "tools": listing})
             return True
         if method == "tools/call":
@@ -284,6 +292,16 @@ class ScriptedServer:
         )
         return True
 
+    def _advertised(self, definition: dict[str, Any]) -> dict[str, Any]:
+        if self.idempotency is None or (
+            self.keyed_tools is not None and definition.get("name") not in self.keyed_tools
+        ):
+            return definition
+        from stateguard.adapters.mcp.idempotency import IDEMPOTENCY_CAPABILITY
+
+        meta = {**(definition.get("_meta") or {}), IDEMPOTENCY_CAPABILITY: {"version": 1}}
+        return {**definition, "_meta": meta}
+
     def _call(
         self, identifier: Any, params: dict[str, Any], message: dict[str, Any], writer: IO[bytes]
     ) -> bool:
@@ -295,6 +313,9 @@ class ScriptedServer:
         action = self.faults(call)
         if action is not ServerAction.NORMAL and self.on_fault is not None:
             self.on_fault(call, action)
+        key = self._begin_key(identifier, str(name), arguments, message, writer)
+        if key is False:
+            return True  # answered from the store; nothing executed
 
         if action is ServerAction.CLOSE_BEFORE_EXECUTE:
             self.dead = True
@@ -302,9 +323,11 @@ class ScriptedServer:
         if action is ServerAction.HANG_BEFORE_EXECUTE:
             return True
         if action is ServerAction.TRANSIENT_ERROR:
+            self._free_key(key)
             self._reply(writer, identifier, _error_result(f"{name}: temporarily unavailable"))
             return True
         if action is ServerAction.AUTH_EXPIRED:
+            self._free_key(key)
             self._write(
                 writer,
                 json.dumps(
@@ -317,13 +340,18 @@ class ScriptedServer:
             )
             return True
         if tool is None:
+            self._free_key(key)
             self._reply(writer, identifier, _error_result(f"Unknown tool: {name}"))
             return True
         if action is ServerAction.REJECT_ARGUMENTS or not tool.accepts(arguments):
+            self._free_key(key)
             self._reply(writer, identifier, _error_result(f"Invalid arguments for {name}"))
             return True
 
         self.executed.append(call)  # the side effect happens here
+        if isinstance(key, str):
+            # Recorded with the effect, before any answer or fault after it.
+            self._store().complete(key, self._result_for(tool, str(name), arguments, action))
         if action is ServerAction.CLOSE_AFTER_EXECUTE:
             self.dead = True
             return False
@@ -353,6 +381,73 @@ class ScriptedServer:
         if action is ServerAction.DUPLICATE_RESPONSE:
             self._reply(writer, identifier, result)
         return True
+
+    def _begin_key(
+        self, identifier: Any, name: str, arguments: Any, message: dict[str, Any], writer: IO[bytes]
+    ) -> str | bool | None:
+        """A keyed call to a keyed tool: the key (execute), or False (answered here)."""
+        if self.idempotency is None or (
+            self.keyed_tools is not None and name not in self.keyed_tools
+        ):
+            return None
+        from stateguard.adapters.mcp.idempotency import (
+            BeginStatus,
+            Outcome,
+            call_key,
+            fingerprint,
+            outcome_error,
+        )
+
+        key = call_key(message)
+        if key is None:
+            return None
+        begun = self._store().begin(key, fingerprint(name, arguments), tool=name)
+        if begun.status is BeginStatus.EXECUTE:
+            return key
+        if begun.status is BeginStatus.REPLAY:
+            self._reply(writer, identifier, begun.result)
+            return False
+        outcome = {
+            BeginStatus.IN_PROGRESS: Outcome.IN_PROGRESS,
+            BeginStatus.IN_DOUBT: Outcome.IN_DOUBT,
+            BeginStatus.EXPIRED: Outcome.EXPIRED,
+            BeginStatus.MISMATCH: Outcome.REJECTED_MISMATCH,
+        }[begun.status]
+        self._write(writer, json.dumps(outcome_error(identifier, outcome, key)).encode())
+        return False
+
+    def _free_key(self, key: str | bool | None) -> None:
+        """Answered without executing: free the key, as a real server's NotExecuted does."""
+        if isinstance(key, str):
+            self._store().abort(key)
+
+    def _store(self) -> Any:
+        """This process's own instance on the shared file: a dead one's keys are in doubt."""
+        if self._own_store is None:
+            from stateguard.adapters.mcp.idempotency import IdempotencyStore
+
+            shared = self.idempotency
+            self._own_store = IdempotencyStore(shared.path, scope=shared.scope)
+        return self._own_store
+
+    @staticmethod
+    def _result_for(
+        tool: ServerTool | None, name: str, arguments: Any, action: ServerAction
+    ) -> dict[str, Any]:
+        """The result this server answers for an executed call (what a store records)."""
+        if action is ServerAction.TOOL_ERROR:
+            return _error_result(f"{name} failed while executing")
+        result: dict[str, Any] = {
+            "resultType": "complete",
+            "content": [
+                {"type": "text", "text": json.dumps({"tool": name, "arguments": arguments})}
+            ],
+            "isError": False,
+        }
+        if tool is not None and "outputSchema" in tool.definition:
+            key = "x-bad-structured" if action is ServerAction.BAD_STRUCTURED else "x-structured"
+            result["structuredContent"] = tool.definition.get(key, {})
+        return result
 
 
 def _error_result(text: str) -> dict[str, Any]:
@@ -395,11 +490,23 @@ class Rig:
         max_restarts: int = 0,
         restart_policy: str = "idle-only",
         recorder: Any = None,
+        reconcile: Any = None,
+        attest_termination: bool = False,
+        reread_unknown: bool = False,
+        trust_read_only_hints: bool = False,
+        deadline_scope: str = "all",
+        idempotency_keys: bool = False,
     ) -> None:
         from stateguard import ContractGuard, GuardConfig
         from stateguard.core.models.config import RepairMode
 
         relay_module = load_relay_module()
+        self._relay_module = relay_module
+        #: Restarts report ``scope_ended`` evidence -- naming the replaced
+        #: server's executor identity -- when that server's serve thread (its
+        #: whole executor, in-process) has been joined. Off by default: a
+        #: factory that proves nothing reports nothing.
+        self._attest_termination = attest_termination
         if listing_wait is not None:
             relay_module.LISTING_WAIT_SECONDS = listing_wait
         #: Every server process the relay has talked to, oldest first.
@@ -443,10 +550,19 @@ class Rig:
             restart_policy=restart_policy,
             restart_backoff=0.0,
             recorder=recorder,
+            reconcile=reconcile,
+            executor=self.executor_name(0),
+            reread_unknown=reread_unknown,
+            trust_read_only_hints=trust_read_only_hints,
+            deadline_scope=deadline_scope,
+            idempotency_keys=idempotency_keys,
         )
         server_in, server_out = os.fdopen(r2s_r, "rb"), os.fdopen(s2r_w, "wb")
+        first = threading.Thread(target=server.serve, args=(server_in, server_out), daemon=True)
+        #: The serve thread of each server process, aligned with ``servers``.
+        self._serve_threads: list[threading.Thread] = [first]
         self._threads = [
-            threading.Thread(target=server.serve, args=(server_in, server_out), daemon=True),
+            first,
             threading.Thread(target=self._pump_client_side, daemon=True),
             threading.Thread(target=self.relay.pump_client, daemon=True),
             threading.Thread(target=self._pump_server_side, daemon=True),
@@ -472,9 +588,26 @@ class Rig:
     def kill_server(self) -> None:
         self.server.kill()
 
-    def _restart(self) -> tuple[IO[bytes], IO[bytes]]:
+    @staticmethod
+    def executor_name(index: int) -> str:
+        """The executor identity the rig gives its *index*-th server process."""
+        return f"rig-executor-{index}"
+
+    def _restart(self) -> Any:
         """The relay's restart factory: a new server process on fresh pipes."""
         assert self._server_factory is not None
+        from stateguard.adapters.mcp import TerminationEvidence
+
+        replaced = len(self.servers) - 1
+        evidence = TerminationEvidence.not_reported()
+        if self._attest_termination:
+            old = self._serve_threads[-1]
+            old.join(timeout=2.0)
+            if not old.is_alive():
+                evidence = TerminationEvidence.scope_ended(
+                    "in-process server: serve thread joined",
+                    executor=self.executor_name(replaced),
+                )
         server = self._server_factory()  # may raise: a failed restart
         r2s_r, r2s_w = os.pipe()
         s2r_r, s2r_w = os.pipe()
@@ -484,9 +617,15 @@ class Rig:
             daemon=True,
         )
         self.servers.append(server)
+        self._serve_threads.append(thread)
         thread.start()
         self._server_threads.append(thread)
-        return os.fdopen(r2s_w, "wb"), os.fdopen(s2r_r, "rb")
+        return self._relay_module.Restarted(
+            os.fdopen(r2s_w, "wb"),
+            os.fdopen(s2r_r, "rb"),
+            evidence,
+            self.executor_name(len(self.servers) - 1),
+        )
 
     def _pump_server_side(self) -> None:
         # As the real relay's process does when its server exits: stop, which
