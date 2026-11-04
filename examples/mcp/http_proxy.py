@@ -306,8 +306,10 @@ class Relay:
         self.shadow: bool = args.shadow
         self.refresh: bool = not args.no_listing_refresh
         self._lists = ToolListAccumulator()
-        #: A client request's id -> the id of its current attempt (for cancellations).
-        self._live: dict[str, str] = {}
+        #: (the client's session or None, a request's id) -> the live requests with that id,
+        #: each by its token -> the ids of its attempts (where a cancellation goes).
+        self._live: dict[tuple[str | None, str], dict[int, list[str]]] = {}
+        self._tokens = itertools.count(1)
         self.tools: dict[str, dict[str, Any]] = {}
         self._ids = itertools.count(1)
         self._audit_lock = threading.Lock()
@@ -328,6 +330,19 @@ class Relay:
             self._audit.flush()
 
     # -- forwarding ------------------------------------------------------------------------------
+
+    def _new_state(self) -> dict[str, int]:
+        """One client request's attempt counters, and its token among live requests."""
+        return {"attempts": 0, "reopened": 0, "token": next(self._tokens)}
+
+    def _release(self, session: Session | None, client_id: Any, state: dict[str, int]) -> None:
+        """The request has its final answer: a cancellation no longer goes to its attempts."""
+        scope = (session.client_id if session is not None else None, _key(client_id))
+        live = self._live.get(scope)
+        if live is not None:
+            live.pop(state["token"], None)
+            if not live:
+                del self._live[scope]
 
     def _headers(self, request: Request, session: Session | None) -> dict[str, str]:
         out = {k: v for k, v in request.headers.items() if k.lower() not in HOP}
@@ -372,15 +387,60 @@ class Relay:
         self, request: Request, body: bytes, message: Any, session: Session | None
     ) -> Response:
         """A notification, a client's answer to a server request, or a batch: forwarded."""
+        bodies = [body]
         if (
             isinstance(message, dict)
             and message.get("method") == "notifications/cancelled"
             and isinstance(message.get("params"), dict)
         ):
-            upstream_id = self._live.get(_key(message["params"].get("requestId")))
-            if upstream_id is not None:
-                message = {**message, "params": {**message["params"], "requestId": upstream_id}}
-                body = json.dumps(message).encode()
+            targets = self._cancel_targets(message["params"].get("requestId"), session)
+            if targets is None:
+                return Response(status_code=202)
+            if targets:
+                bodies = [
+                    json.dumps(
+                        {**message, "params": {**message["params"], "requestId": t}}
+                    ).encode()
+                    for t in targets
+                ]
+        answer: httpx2.Response | None = None
+        for one in bodies:
+            forwarded = await self._forward_one(request, one, session)
+            if isinstance(forwarded, Response):
+                return forwarded
+            answer = forwarded
+        assert answer is not None
+        if (
+            isinstance(message, dict)
+            and message.get("method") == "notifications/initialized"
+            and session is not None
+        ):
+            session.initialized = True
+        return self._plain(answer, session)
+
+    def _cancel_targets(self, request_id: Any, session: Session | None) -> list[str] | None:
+        """
+        The attempts a client's cancellation of *request_id* goes to: every attempt of that
+        request (a raced request has two), and nothing of any other client's. ``[]``: no live
+        request of this client has that id (forwarded as it is). ``None``: two live requests
+        share it -- possible only without sessions, where two clients cannot be told apart --
+        so cancelling either could stop the other client's call; the cancellation, advisory in
+        MCP, is dropped instead.
+        """
+        live = self._live.get(
+            (session.client_id if session is not None else None, _key(request_id))
+        )
+        if not live:
+            return []
+        if len(live) > 1:
+            self.log("cancel_ambiguous", request=request_id)
+            return None
+        return list(next(iter(live.values())))
+
+    async def _forward_one(
+        self, request: Request, body: bytes, session: Session | None
+    ) -> httpx2.Response | Response:
+        """One notification (or another message that is not a request); a lost session reopened."""
         for _ in range(2):
             try:
                 answer = await self.client.post(
@@ -402,13 +462,7 @@ class Relay:
             assert session is not None
             if not await self.reopen(session, request):
                 break
-        if (
-            isinstance(message, dict)
-            and message.get("method") == "notifications/initialized"
-            and session is not None
-        ):
-            session.initialized = True
-        return self._plain(answer, session)
+        return answer
 
     def _plain(self, answer: httpx2.Response, session: Session | None) -> Response:
         headers = {
@@ -595,7 +649,7 @@ class Relay:
         ):
             raced = await self._race(request, message, sent, session, keyed, tool)
             return self._json_answer(method, raced, session)
-        state = {"attempts": 0, "reopened": 0}
+        state = self._new_state()
         first = await self._attempt(request, sent, session, state)
         # The response form follows the first answer: an event stream is relayed as one.
         if (
@@ -608,7 +662,7 @@ class Relay:
             if session is not None:
                 out[SESSION_HEADER] = session.client_id
             events = self._stream(request, message, sent, session, state, first, keyed, tool)
-            return StreamingResponse(events, status_code=200, headers=out)
+            return StreamingResponse(_released(events, self, session, message, state), headers=out)
         final = await self._settle(request, message, sent, session, state, first, keyed, tool)
         return self._json_answer(method, final, session)
 
@@ -653,7 +707,7 @@ class Relay:
         """
         assert self.deadline is not None
         client_id = message.get("id")
-        state = {"attempts": 0, "reopened": 0}
+        state = self._new_state()
         send, receive = anyio.create_memory_object_stream[dict[str, Any] | Response](2)
 
         async def racer() -> None:
@@ -664,45 +718,47 @@ class Relay:
 
         winner: dict[str, Any] | Response | None = None
         fallback: dict[str, Any] | Response | None = None
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(racer)
-            with anyio.move_on_after(self.deadline):
-                winner = await receive.receive()
-            if winner is None:
-                retry, why = self._decide(
-                    message, Observed.UNKNOWN_DEADLINE, state["attempts"], keyed, tool
-                )
-                self.log(
-                    "retry_decision",
-                    id=client_id,
-                    method=message.get("method"),
-                    tool=tool,
-                    keyed=keyed,
-                    observed=Observed.UNKNOWN_DEADLINE.value,
-                    attempts=state["attempts"],
-                    retry=retry,
-                    reason=why,
-                )
-                pending = 1
-                if retry:
-                    tg.start_soon(racer)
-                    pending = 2
-                while pending:
-                    # Unbounded while both run; one more deadline once one has answered.
-                    wait = self.deadline if fallback is not None else math.inf
-                    answer = None
-                    with anyio.move_on_after(wait):
-                        answer = await receive.receive()
-                    if answer is None:
-                        break
-                    pending -= 1
-                    if self._definitive(answer, keyed):
-                        winner = answer
-                        break
-                    fallback = answer
-                    self.log("raced_answer_not_definitive", id=client_id)
-            tg.cancel_scope.cancel()
-        self._live.pop(_key(client_id), None)
+        try:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(racer)
+                with anyio.move_on_after(self.deadline):
+                    winner = await receive.receive()
+                if winner is None:
+                    retry, why = self._decide(
+                        message, Observed.UNKNOWN_DEADLINE, state["attempts"], keyed, tool
+                    )
+                    self.log(
+                        "retry_decision",
+                        id=client_id,
+                        method=message.get("method"),
+                        tool=tool,
+                        keyed=keyed,
+                        observed=Observed.UNKNOWN_DEADLINE.value,
+                        attempts=state["attempts"],
+                        retry=retry,
+                        reason=why,
+                    )
+                    pending = 1
+                    if retry:
+                        tg.start_soon(racer)
+                        pending = 2
+                    while pending:
+                        # Unbounded while both run; one more deadline once one has answered.
+                        wait = self.deadline if fallback is not None else math.inf
+                        answer = None
+                        with anyio.move_on_after(wait):
+                            answer = await receive.receive()
+                        if answer is None:
+                            break
+                        pending -= 1
+                        if self._definitive(answer, keyed):
+                            winner = answer
+                            break
+                        fallback = answer
+                        self.log("raced_answer_not_definitive", id=client_id)
+                tg.cancel_scope.cancel()
+        finally:
+            self._release(session, client_id, state)
         if winner is not None:
             return winner
         return fallback if fallback is not None else unknown_outcome_response(client_id, "deadline")
@@ -717,7 +773,8 @@ class Relay:
         """One attempt, until its headers (and, for JSON, its body)."""
         state["attempts"] += 1
         upstream_id = f"sg-{next(self._ids)}"
-        self._live[_key(sent.get("id"))] = upstream_id
+        scope = (session.client_id if session is not None else None, _key(sent.get("id")))
+        self._live.setdefault(scope, {}).setdefault(state["token"], []).append(upstream_id)
         payload = {**sent, "id": upstream_id}
         deadline_at = time.monotonic() + self.connect_retry
         while True:
@@ -852,12 +909,12 @@ class Relay:
             if answer is not None:
                 final = {**answer, "id": client_id}
                 self._learn(str(message.get("method")), final)
-                self._live.pop(_key(client_id), None)
+                self._release(session, client_id, state)
                 yield sse(final)
                 return
             # The stream ended without the answer, and could not be resumed.
             if self.passthrough:
-                self._live.pop(_key(client_id), None)
+                self._release(session, client_id, state)
                 return  # forward only: the client sees the stream end, as without the relay
             attempt = await self._recover(
                 request,
@@ -871,7 +928,7 @@ class Relay:
             )
             if attempt.kind == "passthrough":
                 # The server answered a resend with an error status: its answer, if it is one.
-                self._live.pop(_key(client_id), None)
+                self._release(session, client_id, state)
                 parsed = _json_object(attempt.body)
                 yield sse(
                     {**parsed, "id": client_id}
@@ -881,11 +938,11 @@ class Relay:
                 return
             if attempt.kind != "answer" or attempt.response is None:
                 final_message = self._final(client_id, attempt)
-                self._live.pop(_key(client_id), None)
+                self._release(session, client_id, state)
                 yield sse(final_message)
                 return
             if attempt.message is not None:
-                self._live.pop(_key(client_id), None)
+                self._release(session, client_id, state)
                 final = {**attempt.message, "id": client_id}
                 self._learn(str(message.get("method")), final)
                 yield sse(final)
@@ -907,21 +964,21 @@ class Relay:
         while True:
             if attempt.kind == "answer":
                 if attempt.message is not None:
-                    self._live.pop(_key(client_id), None)
+                    self._release(session, client_id, state)
                     return {**attempt.message, "id": client_id}
                 answer: dict[str, Any] | None = None
                 async for kind, item in self._events(request, attempt, session):
                     if kind == "end":
                         answer = item
                 if answer is not None:
-                    self._live.pop(_key(client_id), None)
+                    self._release(session, client_id, state)
                     return {**answer, "id": client_id}
                 attempt = Attempt("unknown", reason="stream_cut")
             if self.passthrough and attempt.kind in ("unknown", "not_sent"):
-                self._live.pop(_key(client_id), None)
+                self._release(session, client_id, state)
                 return Response(status_code=502)  # forward only: a broken exchange, as without it
             if attempt.kind == "passthrough":
-                self._live.pop(_key(client_id), None)
+                self._release(session, client_id, state)
                 assert attempt.response is not None
                 return Response(
                     content=attempt.body,
@@ -936,7 +993,7 @@ class Relay:
                 request, message, sent, session, state, attempt, keyed, tool
             )
             if attempt.kind in ("not_sent", "unknown", "session_lost", "final"):
-                self._live.pop(_key(client_id), None)
+                self._release(session, client_id, state)
                 return self._final(client_id, attempt)
 
     async def _recover(
@@ -1115,7 +1172,7 @@ class Relay:
                 "method": "tools/list",
                 "params": params,
             }
-            state = {"attempts": 0, "reopened": 0}
+            state = self._new_state()
             first = await self._attempt(request, listing, session, state)
             answer = await self._settle(
                 request, listing, listing, session, state, first, False, None
@@ -1134,6 +1191,21 @@ class Relay:
             cursor = following
         self._sync(tools, "relay")
         return True
+
+
+async def _released(
+    events: AsyncIterator[bytes],
+    relay: Relay,
+    session: Session | None,
+    message: dict[str, Any],
+    state: dict[str, int],
+) -> AsyncIterator[bytes]:
+    """*events*, then the request released however the stream ends (its client gone, too)."""
+    try:
+        async for chunk in events:
+            yield chunk
+    finally:
+        relay._release(session, message.get("id"), state)
 
 
 def _key(identifier: Any) -> str:

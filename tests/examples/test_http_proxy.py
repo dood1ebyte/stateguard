@@ -570,3 +570,232 @@ def test_the_fault_proxy_ends_each_exchange_even_when_the_server_keeps_it_alive(
     finally:
         upstream.shutdown()
         upstream.server_close()
+
+
+# -- cancellations go to the request they name, and to nothing else ------------------------------
+
+
+class _HoldingUpstream:
+    """
+    A minimal MCP server over HTTP that holds every ``tools/call`` open until
+    it is cancelled (or a few seconds pass), and records each cancellation as
+    (its session, the request id it names). With *sessions* off it is
+    stateless: no ``Mcp-Session-Id``, as the 2026-07-28 revision.
+    """
+
+    def __init__(self, *, sessions: bool = True) -> None:
+        import http.server
+
+        self.sessions = sessions
+        self.calls: list[tuple[str | None, str]] = []
+        self.cancels: list[tuple[str | None, str]] = []
+        self._held: dict[tuple[str | None, str], threading.Event] = {}
+        self._lock = threading.Lock()
+        self._opened = 0
+        upstream = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args: Any) -> None:
+                pass
+
+            def do_POST(self) -> None:
+                message = json.loads(self.rfile.read(int(self.headers["content-length"])))
+                session = self.headers.get("mcp-session-id")
+                method = message.get("method")
+                headers: dict[str, str] = {}
+                if method == "initialize":
+                    if upstream.sessions:
+                        with upstream._lock:
+                            upstream._opened += 1
+                            headers["mcp-session-id"] = f"up-{upstream._opened}"
+                    result: Any = {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "holding", "version": "0"},
+                    }
+                elif method == "notifications/cancelled":
+                    target = (session, str(message["params"]["requestId"]))
+                    with upstream._lock:
+                        upstream.cancels.append(target)
+                        held = upstream._held.get(target)
+                    if held is not None:
+                        held.set()
+                    self._send(202, None, {})
+                    return
+                elif "id" not in message:
+                    self._send(202, None, {})
+                    return
+                elif method == "tools/list":
+                    result = {"tools": []}
+                elif method == "tools/call":
+                    key = (session, str(message["id"]))
+                    released = threading.Event()
+                    with upstream._lock:
+                        upstream.calls.append(key)
+                        upstream._held[key] = released
+                    released.wait(4.0)
+                    result = {"content": [{"type": "text", "text": "done"}], "isError": False}
+                else:
+                    result = {}
+                self._send(200, {"jsonrpc": "2.0", "id": message["id"], "result": result}, headers)
+
+            def _send(self, status: int, body: Any, headers: dict[str, str]) -> None:
+                data = json.dumps(body).encode() if body is not None else b""
+                self.send_response(status)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(data)))
+                for name, value in headers.items():
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(data)
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.port = int(self.server.server_address[1])
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def wait_for_calls(self, n: int, timeout: float = 10.0) -> None:
+        deadline = time.monotonic() + timeout
+        while len(self.calls) < n:
+            assert time.monotonic() < deadline, f"{len(self.calls)} calls reached the server"
+            time.sleep(0.02)
+
+    def close(self) -> None:
+        with self._lock:
+            for held in self._held.values():
+                held.set()
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class _Client:
+    """A raw Streamable HTTP client whose request ids the test chooses."""
+
+    def __init__(self, url: str) -> None:
+        import httpx2
+
+        self.url = url
+        self.http = httpx2.Client(timeout=15.0)
+        self.headers = {"accept": "application/json, text/event-stream"}
+        answer = self.post(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "t", "version": "0"},
+                },
+            }
+        )
+        if "mcp-session-id" in answer.headers:
+            self.headers["mcp-session-id"] = answer.headers["mcp-session-id"]
+        self.post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    def post(self, message: dict[str, Any]) -> Any:
+        return self.http.post(self.url, json=message, headers=self.headers)
+
+    def call_in_background(self, request_id: int, tool: str = "slow") -> threading.Thread:
+        message = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": {}},
+        }
+        thread = threading.Thread(target=self.post, args=(message,), daemon=True)
+        thread.start()
+        return thread
+
+    def cancel(self, request_id: int) -> None:
+        self.post(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": request_id},
+            }
+        )
+
+
+@pytest.fixture
+def holding(request: pytest.FixtureRequest) -> Iterator[_HoldingUpstream]:
+    upstream = _HoldingUpstream(sessions=getattr(request, "param", True))
+    yield upstream
+    upstream.close()
+
+
+def test_a_cancellation_reaches_only_its_own_clients_request(
+    rig: Rig, holding: _HoldingUpstream
+) -> None:
+    """
+    Two clients, each with a call numbered 7 in flight: client A's
+    cancellation goes to A's call on A's session -- never to B's call, which
+    shares the client-side id.
+    """
+    rig.proxy_port = holding.port
+    rig.relay()
+    a, b = _Client(rig.relay_url), _Client(rig.relay_url)
+    calls = [a.call_in_background(7)]
+    holding.wait_for_calls(1)
+    calls.append(b.call_in_background(7))
+    holding.wait_for_calls(2)
+    a.cancel(7)
+    calls[0].join(10)
+    a_call = holding.calls[0]
+    assert holding.cancels == [a_call]
+    assert holding.calls[1][0] != a_call[0]  # B's call is on another session, and still held
+    assert calls[1].is_alive()
+
+
+@pytest.mark.parametrize("holding", [False], indirect=True)
+def test_without_sessions_an_ambiguous_cancellation_is_dropped(
+    rig: Rig, holding: _HoldingUpstream
+) -> None:
+    """
+    A stateless server, two clients with a call numbered 7 each: the relay
+    cannot tell whose cancellation it is, so it sends none rather than risk
+    stopping the other client's call. One call alone is cancelled as usual.
+    """
+    rig.proxy_port = holding.port
+    rig.relay()
+    a, b = _Client(rig.relay_url), _Client(rig.relay_url)
+    first = a.call_in_background(7)
+    holding.wait_for_calls(1)
+    b.call_in_background(7)
+    holding.wait_for_calls(2)
+    a.cancel(7)
+    time.sleep(0.5)
+    assert holding.cancels == []
+    assert "cancel_ambiguous" in rig.events()
+    holding.close()  # both calls answered: neither is live any more
+    first.join(10)
+
+
+@pytest.mark.parametrize("holding", [False], indirect=True)
+def test_without_sessions_a_single_call_is_cancelled(rig: Rig, holding: _HoldingUpstream) -> None:
+    rig.proxy_port = holding.port
+    rig.relay()
+    a = _Client(rig.relay_url)
+    call = a.call_in_background(7)
+    holding.wait_for_calls(1)
+    a.cancel(7)
+    call.join(10)
+    assert holding.cancels == holding.calls
+
+
+def test_a_raced_requests_cancellation_reaches_both_attempts(
+    rig: Rig, holding: _HoldingUpstream
+) -> None:
+    """A declared read past its deadline has two attempts open; cancelling it reaches both."""
+    effects = rig.tmp / "effects.json"
+    effects.write_text(json.dumps({"tools": [{"name": "slow", "effect": "read_only"}]}))
+    rig.proxy_port = holding.port
+    rig.relay("--retry", "auto", "--call-deadline", "0.5", "--effects", str(effects))
+    a = _Client(rig.relay_url)
+    call = a.call_in_background(7)
+    holding.wait_for_calls(2)  # the original, and the attempt after the deadline
+    a.cancel(7)
+    call.join(10)
+    assert sorted(holding.cancels) == sorted(holding.calls)
