@@ -55,6 +55,7 @@ from typing import Any
 from stateguard.adapters.mcp.errors import MalformedMessageError
 from stateguard.adapters.mcp.outcomes import MCPAction, ToolCallOutcome
 from stateguard.adapters.mcp.payload import same_json
+from stateguard.core.explain import FieldDecisionKind, root_normalisation
 from stateguard.core.paths import MAX_PAYLOAD_DEPTH, nests_deeper_than
 
 __all__ = [
@@ -250,6 +251,47 @@ def forward_message(request: ToolCallRequest, outcome: ToolCallOutcome) -> dict[
     if same_json(outcome.arguments, received):  # 2.0 -> 2 is a change; see payload.py
         return copy.deepcopy(dict(request.message))
     return request.with_arguments(outcome.arguments)
+
+
+def intervenes(request: ToolCallRequest, outcome: ToolCallOutcome) -> bool:
+    """
+    Whether auto mode would do anything but forward the call as received.
+
+    Judged on ``auto_action`` / ``proposed_arguments``, not on this mode's
+    action: in shadow the call is forwarded regardless, but the recorded
+    decision is what a shadow rollout is measured on, so it must not come
+    from a stale listing either.
+    """
+    if outcome.auto_action is not MCPAction.FORWARD:
+        return True
+    received = {} if request.arguments is None else request.arguments
+    # JSON-exact: a repair from 2.0 to 2 (or 1 to True) is a change.
+    return not same_json(outcome.proposed_arguments, received) or type(received) is not dict
+
+
+def proposal(request: ToolCallRequest, outcome: ToolCallOutcome) -> str:
+    """
+    What auto mode would do to this call, by kind -- for audit logs and the
+    evidence they feed, which must not count a default as a repair:
+
+    ``none``          forwarded exactly as received;
+    ``default_fill``  forwarded with omitted optional fields written out from
+                      their declared defaults -- the call was *valid*, no
+                      field was wrong, nothing was repaired;
+    ``repair``        forwarded with at least one field (or the payload root)
+                      repaired -- including a missing *required* field set
+                      from its declared default, which is a real violation;
+    ``refuse`` / ``escalate``  not forwarded.
+    """
+    auto = outcome.auto_action or outcome.action
+    if auto is not MCPAction.FORWARD:
+        return auto.value
+    if not intervenes(request, outcome):
+        return "none"
+    repaired = any(d.kind is FieldDecisionKind.REPAIRED for d in outcome.result.field_decisions())
+    if repaired or root_normalisation(outcome.result) is not None:
+        return "repair"
+    return "default_fill"
 
 
 def protocol_version(request: ToolCallRequest) -> str | None:

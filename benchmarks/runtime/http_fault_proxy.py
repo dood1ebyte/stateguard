@@ -21,7 +21,12 @@ Modes (the fault fires once per ``--fault-file``; every other request passes):
                      (a JSON answer is lost whole, as ``lost_response``)
 
 Each request runs on its own connection (``Connection: close`` both ways), so
-a fault ends exactly one exchange. ``--log`` gets one line per request:
+a fault ends exactly one exchange. The server's answer is read by its own
+framing (``Content-Length`` or chunks) and passed on with its ``Connection``
+header replaced by ``close``: a server that answers ``keep-alive`` whatever the
+request asked (Express's event streams do) must not lead the client to send a
+second request down a connection this proxy will never read again. ``--log``
+gets one line per request:
 ``<method> <tool or -> <fault or pass>``; ``call <tool>`` lines count what
 reached the server.
 """
@@ -33,6 +38,7 @@ import asyncio
 import json
 import re
 import sys
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -125,7 +131,9 @@ class Proxy:
             up_w.write(upstream_head + body)
             await up_w.drain()
             if fault in ("lost_response", "http_502_after", "hang_after"):
-                await up_r.read()  # the server's whole answer, discarded
+                head, response = await _response_head(up_r)
+                async for _ in _body(up_r, response):
+                    pass  # the server's whole answer, discarded
                 if fault == "lost_response":
                     client_w.transport.abort()
                 elif fault == "http_502_after":
@@ -140,8 +148,11 @@ class Proxy:
             if fault == "cut_stream":
                 await self._cut(up_r, client_w, message)
                 return
-            while chunk := await up_r.read(65536):
-                client_w.write(chunk)
+            head, response = await _response_head(up_r)
+            client_w.write(head)
+            await client_w.drain()
+            async for piece in _body(up_r, response):
+                client_w.write(piece)
                 await client_w.drain()
         finally:
             up_w.close()
@@ -150,9 +161,13 @@ class Proxy:
         self, up_r: asyncio.StreamReader, client_w: asyncio.StreamWriter, request: Any
     ) -> None:
         """Relay an event stream up to the event that answers *request*, then cut it."""
-        head = await up_r.readuntil(b"\r\n\r\n")
-        if b"text/event-stream" not in head.lower() or b"chunked" not in head.lower():
-            await up_r.read()
+        head, response = await _response_head(up_r)
+        if (
+            "text/event-stream" not in response.get("content-type", "").lower()
+            or "chunked" not in response.get("transfer-encoding", "").lower()
+        ):
+            async for _ in _body(up_r, response):
+                pass
             client_w.transport.abort()  # a JSON answer: lost whole
             return
         client_w.write(head)
@@ -180,6 +195,42 @@ class Proxy:
 
 
 _EVENT_END = re.compile(r"\r?\n\r?\n")
+
+
+async def _response_head(up_r: asyncio.StreamReader) -> tuple[bytes, dict[str, str]]:
+    """The answer's status line and headers, ``Connection: close`` in place of its own."""
+    raw = await up_r.readuntil(b"\r\n\r\n")
+    lines = raw.decode("latin-1").split("\r\n")
+    status, header_lines = lines[0], [h for h in lines[1:] if h]
+    headers = {h.split(":", 1)[0].strip().lower(): h.split(":", 1)[1].strip() for h in header_lines}
+    headers[":status"] = status
+    kept = [h for h in header_lines if h.split(":", 1)[0].strip().lower() != "connection"]
+    return "\r\n".join([status, *kept, "Connection: close", "", ""]).encode(), headers
+
+
+async def _body(up_r: asyncio.StreamReader, headers: dict[str, str]) -> AsyncIterator[bytes]:
+    """The answer's body as sent (chunk framing kept), ending where its framing ends it."""
+    code = (headers[":status"].split(" ") + [""])[1]
+    if "chunked" in headers.get("transfer-encoding", "").lower():
+        while True:
+            size_line = await up_r.readuntil(b"\r\n")
+            size = int(size_line.strip().split(b";")[0], 16)
+            if size == 0:
+                trailer = b""
+                while (line := await up_r.readuntil(b"\r\n")) != b"\r\n":
+                    trailer += line
+                yield size_line + trailer + b"\r\n"
+                return
+            yield size_line + await up_r.readexactly(size + 2)
+    elif "content-length" in headers:
+        length = int(headers["content-length"])
+        if length:
+            yield await up_r.readexactly(length)
+    elif code.startswith("1") or code in ("204", "304"):
+        return
+    else:
+        while chunk := await up_r.read(65536):  # framed by the end of the connection
+            yield chunk
 
 
 def _answers(event: str, answer_id: Any) -> bool:

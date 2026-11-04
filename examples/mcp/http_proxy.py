@@ -63,10 +63,30 @@ the client's ``notifications/cancelled``) are mapped back. Requests the
 server sends inside a response stream, and the client's answers to them,
 pass through unchanged.
 
-Limits. One server per relay. No relay deadline yet: a server that never
-answers is waited for until ``--upstream-timeout`` (the stdio relay's
-``--call-deadline`` has no HTTP counterpart here). No schema validation or
-repair (the stdio relay's), no recording, no reconciliation probes. A client
+``deadline`` (``--call-deadline SECONDS``) -- a request the relay could send
+    again without risk (a declared read, a request that changes nothing, a
+    keyed call) that has no answer in time is sent once more, the first
+    attempt left open; the first answer that settles it wins. A keyed resend
+    answered "in progress" or "in doubt" waits one more deadline for the
+    original's answer. No other request gets a deadline: cutting a slow
+    mutation short could only turn its success into a failure. Such raced
+    requests are answered as one JSON message (progress events are dropped).
+
+Calls are checked against the server's schemas
+--------------------------------------------
+As in the stdio relay, each ``tools/call`` is validated against the tool's
+definition from the server's last complete ``tools/list``, through
+``stateguard.adapters.mcp.ToolRegistry``. In auto mode (the default) a
+drifted call is repaired where that is safe, and refused or escalated where it
+is not -- the client gets the relay's ``isError`` result, and the server never
+sees the call; ``--shadow`` only logs what auto mode would do. The relay
+changes or refuses a call only on a listing requested after the call arrived:
+it lists the tools again on the call's session first (``--no-listing-refresh``
+turns that off), and forwards the call unchanged if it cannot. A tool the
+relay has no definition for is forwarded unvalidated.
+
+Limits. One server per relay. A request without a deadline waits for the
+server until ``--upstream-timeout``. No recording, no reconciliation probes. A client
 resuming a response stream itself (``Last-Event-ID`` on its own ``GET``) sees
 the relay's attempt ids in replayed answers; the relay resumes the streams of
 its own attempts. The relay holds its
@@ -82,6 +102,7 @@ import argparse
 import contextlib
 import itertools
 import json
+import math
 import secrets
 import sys
 import threading
@@ -99,6 +120,17 @@ from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 from starlette.routing import Route
 
+from stateguard import ContractGuard
+from stateguard.adapters.mcp import (
+    MalformedMessageError,
+    ToolCallRequest,
+    ToolListAccumulator,
+    ToolNotFoundError,
+    ToolRegistry,
+    ToolSchemaUnusableError,
+    forward_message,
+    refusal_response,
+)
 from stateguard.adapters.mcp.effects import (
     DEFAULT_MAX_ATTEMPTS,
     EffectPolicy,
@@ -106,11 +138,15 @@ from stateguard.adapters.mcp.effects import (
     decide_retry,
 )
 from stateguard.adapters.mcp.idempotency import new_key, tool_supports_keys, with_key
+from stateguard.adapters.mcp.jsonrpc import intervenes, proposal
+from stateguard.core.models.config import GuardConfig, RepairMode
 
 SESSION_HEADER = "mcp-session-id"
 LAST_EVENT_ID = "last-event-id"
 UNKNOWN_OUTCOME_CODE = -32000
 UNKNOWN_OUTCOME_KEY = "io.stateguard/executionState"
+#: The idempotency contract's "nothing executed now" errors (stateguard.adapters.mcp.idempotency).
+IN_DOUBT_CODE, IN_PROGRESS_CODE = -32010, -32011
 #: Client requests that change nothing on the server: requesting them again is safe.
 SAFE_METHODS = frozenset(
     {
@@ -262,7 +298,14 @@ class Relay:
         self.effects = EffectPolicy.from_file(args.effects) if args.effects else EffectPolicy()
         self.trust_read_only_hints: bool = args.trust_read_only_hints
         self.connect_retry: float = args.connect_retry
+        self.deadline: float | None = args.call_deadline
         self.sessions: dict[str, Session] = {}
+        mode = RepairMode.SHADOW if args.shadow else RepairMode.AUTO
+        #: The server's tools, from complete tools/list answers: what calls are checked against.
+        self.registry = ToolRegistry(ContractGuard.with_mcp(config=GuardConfig(mode=mode)))
+        self.shadow: bool = args.shadow
+        self.refresh: bool = not args.no_listing_refresh
+        self._lists = ToolListAccumulator()
         #: A client request's id -> the id of its current attempt (for cancellations).
         self._live: dict[str, str] = {}
         self.tools: dict[str, dict[str, Any]] = {}
@@ -524,11 +567,34 @@ class Relay:
             return True, f"{method} changes nothing on the server; requested again"
         return False, f"{method} is not known to be safe to send twice"
 
+    def _recoverable(self, method: str, tool: str | None, keyed: bool) -> bool:
+        """A request the relay may send again after a deadline: it cannot run twice."""
+        if method in SAFE_METHODS or keyed:
+            return True
+        if method != "tools/call":
+            return False
+        declaration = self._declaration(tool)
+        return bool(declaration.declared and declaration.effect.value == "read_only")
+
     async def relay_request(
         self, request: Request, message: dict[str, Any], session: Session | None
     ) -> Response:
-        sent, keyed, tool = self._keyed(message)
         method = str(message.get("method"))
+        if method == "tools/list":
+            self._lists.observe_request(message)
+        if method == "tools/call" and not self.passthrough:
+            checked = await self._check_call(request, message, session)
+            if isinstance(checked, Response):
+                return checked
+            message = checked
+        sent, keyed, tool = self._keyed(message)
+        if (
+            self.deadline is not None
+            and self.retry == "auto"
+            and self._recoverable(method, tool, keyed)
+        ):
+            raced = await self._race(request, message, sent, session, keyed, tool)
+            return self._json_answer(method, raced, session)
         state = {"attempts": 0, "reopened": 0}
         first = await self._attempt(request, sent, session, state)
         # The response form follows the first answer: an event stream is relayed as one.
@@ -544,6 +610,11 @@ class Relay:
             events = self._stream(request, message, sent, session, state, first, keyed, tool)
             return StreamingResponse(events, status_code=200, headers=out)
         final = await self._settle(request, message, sent, session, state, first, keyed, tool)
+        return self._json_answer(method, final, session)
+
+    def _json_answer(
+        self, method: str, final: dict[str, Any] | Response, session: Session | None
+    ) -> Response:
         if isinstance(final, Response):
             return final
         self._learn(method, final)
@@ -551,6 +622,90 @@ class Relay:
         if session is not None:
             out[SESSION_HEADER] = session.client_id
         return Response(content=json.dumps(final), status_code=200, headers=out)
+
+    def _definitive(self, final: dict[str, Any] | Response, keyed: bool) -> bool:
+        """An answer that settles it: not the relay's own "unknown", nor "still running"."""
+        if isinstance(final, Response) or "result" in final:
+            return True
+        error = final.get("error")
+        if not isinstance(error, dict):
+            return True
+        data = error.get("data")
+        if isinstance(data, dict) and data.get(UNKNOWN_OUTCOME_KEY) == "unknown":
+            return False
+        return not (keyed and error.get("code") in (IN_DOUBT_CODE, IN_PROGRESS_CODE))
+
+    async def _race(
+        self,
+        request: Request,
+        message: dict[str, Any],
+        sent: dict[str, Any],
+        session: Session | None,
+        keyed: bool,
+        tool: str | None,
+    ) -> dict[str, Any] | Response:
+        """
+        A recoverable request under ``--call-deadline``. If it has no answer in
+        time, it is sent once more -- the first attempt stays open -- and the
+        first answer that settles it wins; the other is abandoned. A keyed
+        resend answered "in progress" or "in doubt" waits one more deadline
+        for the original's late answer before that answer is delivered.
+        """
+        assert self.deadline is not None
+        client_id = message.get("id")
+        state = {"attempts": 0, "reopened": 0}
+        send, receive = anyio.create_memory_object_stream[dict[str, Any] | Response](2)
+
+        async def racer() -> None:
+            first = await self._attempt(request, sent, session, state)
+            await send.send(
+                await self._settle(request, message, sent, session, state, first, keyed, tool)
+            )
+
+        winner: dict[str, Any] | Response | None = None
+        fallback: dict[str, Any] | Response | None = None
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(racer)
+            with anyio.move_on_after(self.deadline):
+                winner = await receive.receive()
+            if winner is None:
+                retry, why = self._decide(
+                    message, Observed.UNKNOWN_DEADLINE, state["attempts"], keyed, tool
+                )
+                self.log(
+                    "retry_decision",
+                    id=client_id,
+                    method=message.get("method"),
+                    tool=tool,
+                    keyed=keyed,
+                    observed=Observed.UNKNOWN_DEADLINE.value,
+                    attempts=state["attempts"],
+                    retry=retry,
+                    reason=why,
+                )
+                pending = 1
+                if retry:
+                    tg.start_soon(racer)
+                    pending = 2
+                while pending:
+                    # Unbounded while both run; one more deadline once one has answered.
+                    wait = self.deadline if fallback is not None else math.inf
+                    answer = None
+                    with anyio.move_on_after(wait):
+                        answer = await receive.receive()
+                    if answer is None:
+                        break
+                    pending -= 1
+                    if self._definitive(answer, keyed):
+                        winner = answer
+                        break
+                    fallback = answer
+                    self.log("raced_answer_not_definitive", id=client_id)
+            tg.cancel_scope.cancel()
+        self._live.pop(_key(client_id), None)
+        if winner is not None:
+            return winner
+        return fallback if fallback is not None else unknown_outcome_response(client_id, "deadline")
 
     async def _attempt(
         self,
@@ -865,6 +1020,120 @@ class Relay:
         for tool in tools:
             if isinstance(tool, dict) and isinstance(tool.get("name"), str):
                 self.tools[tool["name"]] = tool
+        complete = self._lists.observe_response(answer)
+        if complete is not None:
+            self._sync(complete, "client")
+
+    def _sync(self, tools: list[Any], source: str) -> None:
+        report = self.registry.sync(tools)
+        self.log("tools_synced", source=source, summary=report.to_dict()["summary"])
+
+    # -- checking calls against the server's schemas -----------------------------------------
+
+    async def _check_call(
+        self, request: Request, message: dict[str, Any], session: Session | None
+    ) -> dict[str, Any] | Response:
+        """
+        The call to send (repaired, in auto mode, where that is safe), or the
+        relay's own answer refusing it. A call is changed or refused only on a
+        listing requested after it arrived (as the stdio relay does): a tool's
+        schema may have changed since the last listing the relay saw.
+        """
+        try:
+            call = ToolCallRequest.parse(message)
+        except MalformedMessageError:
+            return message  # the server's to reject
+        outcome = self._evaluate(call)
+        if outcome is None:
+            return message
+        listing = "current"
+        if self.refresh and intervenes(call, outcome):
+            if not await self._refresh_listing(request, session):
+                self.log(
+                    "call",
+                    id=call.id,
+                    tool=call.name,
+                    action="unvalidated",
+                    reason="could not confirm the tool listing is current; forwarded "
+                    "unchanged rather than act on a possibly stale schema",
+                )
+                return message
+            outcome = self._evaluate(call)
+            if outcome is None:
+                return message
+            listing = "confirmed"
+        self.log(
+            "call",
+            id=call.id,
+            tool=call.name,
+            action=outcome.action.value,
+            auto_action=(outcome.auto_action or outcome.action).value,
+            proposal=proposal(call, outcome),
+            reason=outcome.reason,
+            listing=listing,
+            would_modify=intervenes(call, outcome),
+        )
+        forwarded = forward_message(call, outcome)
+        if forwarded is None:
+            refused = refusal_response(call, outcome)
+            out = {"content-type": "application/json"}
+            if session is not None:
+                out[SESSION_HEADER] = session.client_id
+            return Response(content=json.dumps(refused), status_code=200, headers=out)
+        return forwarded
+
+    def _evaluate(self, call: ToolCallRequest) -> Any:
+        try:
+            return self.registry.process_call(call.name, call.arguments)
+        except ToolNotFoundError:
+            self.log(
+                "call",
+                id=call.id,
+                tool=call.name,
+                action="unvalidated",
+                reason="no definition for this tool; forwarded for the server to answer",
+            )
+        except ToolSchemaUnusableError as exc:
+            self.log(
+                "call",
+                id=call.id,
+                tool=call.name,
+                action="unvalidated",
+                reason=f"schema unreadable; forwarded: {exc.cause}",
+            )
+        return None
+
+    async def _refresh_listing(self, request: Request, session: Session | None) -> bool:
+        """List the server's tools now, on the call's own session; True once synced."""
+        tools: list[Any] = []
+        cursor: str | None = None
+        for page in itertools.count():
+            params: dict[str, Any] = {"cursor": cursor} if cursor is not None else {}
+            listing = {
+                "jsonrpc": "2.0",
+                "id": f"sg-list-{next(self._ids)}",
+                "method": "tools/list",
+                "params": params,
+            }
+            state = {"attempts": 0, "reopened": 0}
+            first = await self._attempt(request, listing, session, state)
+            answer = await self._settle(
+                request, listing, listing, session, state, first, False, None
+            )
+            result = answer.get("result") if isinstance(answer, dict) else None
+            if not isinstance(result, dict) or not isinstance(result.get("tools"), list):
+                self.log("tools_list_failed", page=page)
+                return False
+            tools.extend(result["tools"])
+            for tool in result["tools"]:
+                if isinstance(tool, dict) and isinstance(tool.get("name"), str):
+                    self.tools[tool["name"]] = tool
+            following = result.get("nextCursor")
+            if not isinstance(following, str) or page >= 50:
+                break
+            cursor = following
+        self._sync(tools, "relay")
+        return True
 
 
 def _key(identifier: Any) -> str:
@@ -898,6 +1167,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--listen", default="127.0.0.1:8800", help="host:port to serve on")
     parser.add_argument("--path", default="/mcp", help="the MCP endpoint path to serve")
     parser.add_argument("--passthrough", action="store_true", help="forward only (a baseline)")
+    parser.add_argument(
+        "--shadow", action="store_true", help="check calls and log; never change or refuse one"
+    )
+    parser.add_argument(
+        "--no-listing-refresh",
+        action="store_true",
+        help="act on the last listing seen, without listing again first",
+    )
     parser.add_argument("--retry", choices=["off", "auto"], default="off")
     parser.add_argument("--no-idempotency-keys", action="store_true")
     parser.add_argument("--effects", help="operator effect declarations (JSON), as the stdio relay")
@@ -907,6 +1184,13 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=10.0,
         help="seconds to keep re-sending a request that could not be sent",
+    )
+    parser.add_argument(
+        "--call-deadline",
+        type=float,
+        default=None,
+        help="seconds before a recoverable request (a declared read, a request that changes "
+        "nothing, a keyed call) is sent once more; the first answer wins (needs --retry auto)",
     )
     parser.add_argument(
         "--upstream-timeout",

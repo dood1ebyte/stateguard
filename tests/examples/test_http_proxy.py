@@ -18,8 +18,10 @@ from __future__ import annotations
 import json
 import os
 import socket
+import socketserver
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -420,3 +422,151 @@ def test_a_400_counts_as_a_lost_session_only_when_it_names_the_session(
     body: bytes, lost: bool
 ) -> None:
     assert _relay_module().says_session_unknown(body) is lost
+
+
+# -- a deadline for what can be sent again -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("mode", "outcome"), [("hang_after", "replayed"), ("hang_before", "executed")]
+)
+def test_a_keyed_write_without_an_answer_in_time_is_raced_and_runs_once(
+    rig: Rig, mode: str, outcome: str
+) -> None:
+    rig.server(keyed=True)
+    rig.faults(mode)
+    rig.relay("--retry", "auto", "--call-deadline", "1.5")
+    answer = _session(rig.relay_url, _add_note())
+    assert _ok(answer) and (answer.meta or {}).get(OUTCOME) == outcome
+    assert rig.notes() == ["a"]
+
+
+def test_a_declared_read_without_an_answer_in_time_is_requested_again(rig: Rig) -> None:
+    effects = rig.tmp / "effects.json"
+    effects.write_text(json.dumps({"tools": [{"name": "list_notes", "effect": "read_only"}]}))
+    rig.server()
+    rig.faults("hang_after", tool="list_notes")
+    rig.relay("--retry", "auto", "--effects", str(effects), "--call-deadline", "1.5")
+
+    async def body(session: Any) -> Any:
+        return await session.call_tool("list_notes", {})
+
+    assert _ok(_session(rig.relay_url, body))
+
+
+def test_an_unkeyed_write_is_never_cut_short_by_the_deadline(rig: Rig) -> None:
+    from mcp.shared.exceptions import MCPError
+
+    rig.server()
+    rig.faults("hang_after")
+    rig.relay("--retry", "auto", "--call-deadline", "0.5")
+
+    async def body(session: Any) -> Any:
+        try:
+            with anyio.fail_after(4):  # the client's own patience, not the relay's
+                return await session.call_tool("add_note", {"text": "a"})
+        except (TimeoutError, MCPError) as exc:
+            return exc
+
+    answer = _session(rig.relay_url, body)
+    assert isinstance(answer, TimeoutError)  # still waiting for the server: no "unknown" invented
+    assert rig.notes() == ["a"] and rig.calls_reaching_server() == 1  # and never resent
+
+
+# -- calls checked against the server's own schemas ----------------------------------------------
+
+
+def _call(name: str, arguments: dict[str, Any]) -> Any:
+    from mcp.shared.exceptions import MCPError
+
+    async def body(session: Any) -> Any:
+        try:
+            return await session.call_tool(name, arguments)
+        except MCPError as exc:
+            return exc
+
+    return body
+
+
+def test_a_drifted_call_is_repaired_on_a_freshly_listed_schema(rig: Rig) -> None:
+    rig.server()
+    rig.faults("none")
+    rig.relay("--retry", "auto")
+    answer = _session(rig.relay_url, _call("add_note", {"Text": "a"}))
+    assert _ok(answer) and rig.notes() == ["a"]
+    calls = [e for e in rig.audit() if e["event"] == "call"]
+    assert calls[-1]["proposal"] == "repair" and calls[-1]["listing"] == "confirmed"
+
+
+def test_a_call_with_no_safe_correction_is_refused_and_never_reaches_the_server(rig: Rig) -> None:
+    rig.server()
+    rig.faults("none")
+    rig.relay("--retry", "auto")
+    answer = _session(rig.relay_url, _call("add_note", {}))
+    assert getattr(answer, "is_error", False) is True
+    assert rig.calls_reaching_server() == 0 and rig.notes() == []
+
+
+def test_in_shadow_mode_a_drifted_call_is_forwarded_as_received(rig: Rig) -> None:
+    rig.server()
+    rig.faults("none")
+    rig.relay("--retry", "auto", "--shadow")
+    _session(rig.relay_url, _call("add_note", {"Text": "a"}))
+    assert rig.calls_reaching_server() == 1 and rig.notes() == []  # the server rejected it itself
+    calls = [e for e in rig.audit() if e["event"] == "call"]
+    assert calls[-1]["action"] == "hold" and calls[-1]["proposal"] == "repair"
+
+
+class _KeepAliveUpstream(socketserver.StreamRequestHandler):
+    """Answers every request as an event stream saying ``keep-alive``, and never closes."""
+
+    def handle(self) -> None:
+        while True:
+            length = 0
+            while (line := self.rfile.readline()) not in (b"\r\n", b""):
+                if line.lower().startswith(b"content-length:"):
+                    length = int(line.split(b":", 1)[1])
+            if line == b"":
+                return
+            self.rfile.read(length)
+            event = b'event: message\r\ndata: {"jsonrpc":"2.0","id":1,"result":{}}\r\n\r\n'
+            self.wfile.write(
+                b"HTTP/1.1 200 OK\r\nconnection: keep-alive\r\n"
+                b"content-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n"
+                + f"{len(event):x}\r\n".encode()
+                + event
+                + b"\r\n0\r\n\r\n"
+            )
+            self.wfile.flush()
+
+
+def test_the_fault_proxy_ends_each_exchange_even_when_the_server_keeps_it_alive(
+    rig: Rig,
+) -> None:
+    """
+    A server that answers ``keep-alive`` whatever the request asked (Express's
+    event streams do): the proxy still answers ``Connection: close``, so a
+    client never sends its next request down a connection the proxy no longer
+    reads. Before, that request waited for the server's own idle timeout.
+    """
+    import httpx2
+
+    upstream = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _KeepAliveUpstream)
+    upstream.daemon_threads = True
+    threading.Thread(target=upstream.serve_forever, daemon=True).start()
+    try:
+        rig.server_port = int(upstream.server_address[1])
+        rig.faults("none")
+        with httpx2.Client(timeout=3.0) as client:
+            for n in range(3):
+                answer = client.post(
+                    rig.direct_url,
+                    json={"jsonrpc": "2.0", "id": n, "method": "ping"},
+                    headers={"accept": "application/json, text/event-stream"},
+                )
+                assert answer.status_code == 200
+                assert answer.headers["connection"] == "close"
+                assert '"result"' in answer.text
+    finally:
+        upstream.shutdown()
+        upstream.server_close()

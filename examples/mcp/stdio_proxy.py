@@ -305,7 +305,6 @@ from stateguard.adapters.mcp import (
     ForwardingInvariantError,
     InvocationLedger,
     MalformedMessageError,
-    MCPAction,
     Observed,
     Postcondition,
     ReconcileConfigError,
@@ -349,6 +348,8 @@ from stateguard.adapters.mcp.jsonrpc import (
     request_id,
     tool_error_response,
 )
+from stateguard.adapters.mcp.jsonrpc import intervenes as _intervenes
+from stateguard.adapters.mcp.jsonrpc import proposal as _proposal
 from stateguard.adapters.mcp.payload import same_json
 from stateguard.adapters.mcp.reconcile import (
     DISCOVERY_BUDGET_SECONDS,
@@ -366,7 +367,6 @@ from stateguard.adapters.mcp.reconcile import (
 )
 from stateguard.adapters.mcp.recording import Direction, Provenance, Recorder, RedactionPolicy
 from stateguard.adapters.mcp.recording import RedactionMode as RecordRedaction
-from stateguard.core.explain import FieldDecisionKind, root_normalisation
 from stateguard.core.models.config import GuardConfig, RepairMode
 
 #: Prefix for the ids of the relay's own requests. Their responses are matched
@@ -2640,47 +2640,6 @@ def not_sent_response(identifier: Any) -> dict[str, Any]:
             "data": {UNKNOWN_OUTCOME_KEY: "not_sent"},
         },
     }
-
-
-def _intervenes(request: ToolCallRequest, outcome: ToolCallOutcome) -> bool:
-    """
-    Whether auto mode would do anything but forward the call as received.
-
-    Judged on ``auto_action`` / ``proposed_arguments``, not on this mode's
-    action: in shadow the call is forwarded regardless, but the recorded
-    decision is what a shadow rollout is measured on, so it must not come
-    from a stale listing either.
-    """
-    if outcome.auto_action is not MCPAction.FORWARD:
-        return True
-    received = {} if request.arguments is None else request.arguments
-    # JSON-exact: a repair from 2.0 to 2 (or 1 to True) is a change.
-    return not same_json(outcome.proposed_arguments, received) or type(received) is not dict
-
-
-def _proposal(request: ToolCallRequest, outcome: ToolCallOutcome) -> str:
-    """
-    What auto mode would do to this call, by kind -- for the audit log and
-    the evidence it feeds, which must not count a default as a repair:
-
-    ``none``          forwarded exactly as received;
-    ``default_fill``  forwarded with omitted optional fields written out from
-                      their declared defaults -- the call was *valid*, no
-                      field was wrong, nothing was repaired;
-    ``repair``        forwarded with at least one field (or the payload root)
-                      repaired -- including a missing *required* field set
-                      from its declared default, which is a real violation;
-    ``refuse`` / ``escalate``  not forwarded.
-    """
-    auto = outcome.auto_action or outcome.action
-    if auto is not MCPAction.FORWARD:
-        return auto.value
-    if not _intervenes(request, outcome):
-        return "none"
-    repaired = any(d.kind is FieldDecisionKind.REPAIRED for d in outcome.result.field_decisions())
-    if repaired or root_normalisation(outcome.result) is not None:
-        return "repair"
-    return "default_fill"
 
 
 def _parse(line: bytes) -> Any:
