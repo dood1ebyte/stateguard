@@ -137,7 +137,13 @@ from stateguard.adapters.mcp.effects import (
     Observed,
     decide_retry,
 )
-from stateguard.adapters.mcp.idempotency import new_key, tool_supports_keys, with_key
+from stateguard.adapters.mcp.idempotency import (
+    IDEMPOTENCY_KEY,
+    new_key,
+    tool_supports_keys,
+    with_key,
+)
+from stateguard.adapters.mcp.incidence import INVOCATION_EVENT, resolution, with_faults
 from stateguard.adapters.mcp.jsonrpc import intervenes, proposal
 from stateguard.core.models.config import GuardConfig, RepairMode
 
@@ -331,11 +337,62 @@ class Relay:
 
     # -- forwarding ------------------------------------------------------------------------------
 
-    def _new_state(self) -> dict[str, int]:
-        """One client request's attempt counters, and its token among live requests."""
-        return {"attempts": 0, "reopened": 0, "token": next(self._tokens)}
+    def _new_state(self) -> dict[str, Any]:
+        """
+        One client request's attempt counters, its token among live requests, the faults it
+        met (for its ``invocation`` record), when it started, and the answer it was sent.
+        """
+        return {
+            "attempts": 0,
+            "reopened": 0,
+            "token": next(self._tokens),
+            "faults": [],
+            "t0": time.monotonic(),
+            "final": None,
+        }
 
-    def _release(self, session: Session | None, client_id: Any, state: dict[str, int]) -> None:
+    def _record(
+        self,
+        session: Session | None,
+        message: dict[str, Any],
+        state: dict[str, Any],
+        final: dict[str, Any] | Response | None,
+        *,
+        kind: str | None = None,
+    ) -> None:
+        """One ``invocation`` audit record per client request: no arguments, no results."""
+        if state.get("recorded"):
+            return
+        state["recorded"] = True
+        if kind is None:
+            if isinstance(final, Response):
+                kind, outcome = resolution(None, status=final.status_code)
+            else:
+                kind, outcome = resolution(final)
+            kind = with_faults(kind, state["faults"])
+        else:
+            outcome = None
+        params = message.get("params")
+        tool = params.get("name") if isinstance(params, dict) else None
+        self.log(
+            INVOCATION_EVENT,
+            id=message.get("id"),
+            session=session.client_id if session is not None else None,
+            method=message.get("method"),
+            tool=tool if message.get("method") == "tools/call" else None,
+            keyed=bool(
+                isinstance(params, dict)
+                and isinstance(params.get("_meta"), dict)
+                and IDEMPOTENCY_KEY in params["_meta"]
+            ),
+            attempts=state["attempts"],
+            faults=list(state["faults"]),
+            resolution=kind,
+            server_outcome=outcome,
+            ms=round((time.monotonic() - state["t0"]) * 1000),
+        )
+
+    def _release(self, session: Session | None, client_id: Any, state: dict[str, Any]) -> None:
         """The request has its final answer: a cancellation no longer goes to its attempts."""
         scope = (session.client_id if session is not None else None, _key(client_id))
         live = self._live.get(scope)
@@ -636,9 +693,11 @@ class Relay:
         method = str(message.get("method"))
         if method == "tools/list":
             self._lists.observe_request(message)
+        state = self._new_state()
         if method == "tools/call" and not self.passthrough:
             checked = await self._check_call(request, message, session)
             if isinstance(checked, Response):
+                self._record(session, message, state, None, kind="refused")
                 return checked
             message = checked
         sent, keyed, tool = self._keyed(message)
@@ -647,9 +706,9 @@ class Relay:
             and self.retry == "auto"
             and self._recoverable(method, tool, keyed)
         ):
-            raced = await self._race(request, message, sent, session, keyed, tool)
+            raced = await self._race(request, message, sent, session, keyed, tool, state)
+            self._record(session, sent, state, raced)
             return self._json_answer(method, raced, session)
-        state = self._new_state()
         first = await self._attempt(request, sent, session, state)
         # The response form follows the first answer: an event stream is relayed as one.
         if (
@@ -662,8 +721,9 @@ class Relay:
             if session is not None:
                 out[SESSION_HEADER] = session.client_id
             events = self._stream(request, message, sent, session, state, first, keyed, tool)
-            return StreamingResponse(_released(events, self, session, message, state), headers=out)
+            return StreamingResponse(_released(events, self, session, sent, state), headers=out)
         final = await self._settle(request, message, sent, session, state, first, keyed, tool)
+        self._record(session, sent, state, final)
         return self._json_answer(method, final, session)
 
     def _json_answer(
@@ -697,6 +757,7 @@ class Relay:
         session: Session | None,
         keyed: bool,
         tool: str | None,
+        state: dict[str, Any],
     ) -> dict[str, Any] | Response:
         """
         A recoverable request under ``--call-deadline``. If it has no answer in
@@ -707,7 +768,6 @@ class Relay:
         """
         assert self.deadline is not None
         client_id = message.get("id")
-        state = self._new_state()
         send, receive = anyio.create_memory_object_stream[dict[str, Any] | Response](2)
 
         async def racer() -> None:
@@ -724,6 +784,7 @@ class Relay:
                 with anyio.move_on_after(self.deadline):
                     winner = await receive.receive()
                 if winner is None:
+                    state["faults"].append("deadline")
                     retry, why = self._decide(
                         message, Observed.UNKNOWN_DEADLINE, state["attempts"], keyed, tool
                     )
@@ -768,7 +829,7 @@ class Relay:
         request: Request,
         sent: dict[str, Any],
         session: Session | None,
-        state: dict[str, int],
+        state: dict[str, Any],
     ) -> Attempt:
         """One attempt, until its headers (and, for JSON, its body)."""
         state["attempts"] += 1
@@ -777,6 +838,7 @@ class Relay:
         self._live.setdefault(scope, {}).setdefault(state["token"], []).append(upstream_id)
         payload = {**sent, "id": upstream_id}
         deadline_at = time.monotonic() + self.connect_retry
+        refused = False
         while True:
             try:
                 upstream = self.client.build_request(
@@ -787,29 +849,37 @@ class Relay:
                 # The connection was never opened: the request did not reach the server.
                 if self.passthrough or time.monotonic() >= deadline_at:
                     self.log("not_sent", id=sent.get("id"), error=f"{type(exc).__name__}: {exc}")
+                    state["faults"].append("not_sent")
                     return Attempt("not_sent", reason=str(exc))
+                if not refused:
+                    refused = True
+                    state["faults"].append("connect_retry")
                 await anyio.sleep(0.2)
                 continue
             except httpx2.TransportError as exc:
                 self.log("transport_lost", id=sent.get("id"), error=f"{type(exc).__name__}: {exc}")
+                state["faults"].append("transport_lost")
                 return Attempt("unknown", reason="transport_closed")
             break
         status = answer.status_code
         if status == 404 and session is not None and not self.passthrough:
             await answer.aread()
             await answer.aclose()
+            state["faults"].append("session_lost")
             return Attempt("session_lost", response=answer)
         if status == 400 and session is not None and not self.passthrough:
             body = await answer.aread()
             await answer.aclose()
             if says_session_unknown(body):
                 self.log("session_lost_400", id=sent.get("id"))
+                state["faults"].append("session_lost")
                 return Attempt("session_lost", response=answer)
             return Attempt("passthrough", response=answer, body=body)
         if status >= 500 and not self.passthrough:
             await answer.aread()
             await answer.aclose()
             self.log("server_error", id=sent.get("id"), status=status)
+            state["faults"].append("server_error")
             return Attempt("unknown", reason="server_error", response=answer)
         if status != 200:
             body = await answer.aread()
@@ -835,7 +905,11 @@ class Relay:
         return attempt
 
     async def _events(
-        self, request: Request, attempt: Attempt, session: Session | None
+        self,
+        request: Request,
+        attempt: Attempt,
+        session: Session | None,
+        state: dict[str, Any] | None = None,
     ) -> AsyncIterator[tuple[str, dict[str, Any] | None]]:
         """
         The messages of an attempt's event stream: ``("event", message)`` for
@@ -867,6 +941,8 @@ class Relay:
                 self.log("stream_cut", id=upstream_id, error=f"{type(exc).__name__}: {exc}")
             finally:
                 await response.aclose()
+            if state is not None:
+                state["faults"].append("stream_cut")
             # Ended without the answer: resume it if the server numbered its events.
             if self.passthrough or last_id is None or session is None or resumed >= 3:
                 yield "end", None
@@ -892,7 +968,7 @@ class Relay:
         message: dict[str, Any],
         sent: dict[str, Any],
         session: Session | None,
-        state: dict[str, int],
+        state: dict[str, Any],
         first: Attempt,
         keyed: bool,
         tool: str | None,
@@ -901,7 +977,7 @@ class Relay:
         attempt = first
         while True:
             answer: dict[str, Any] | None = None
-            async for kind, item in self._events(request, attempt, session):
+            async for kind, item in self._events(request, attempt, session, state):
                 if kind == "event" and item is not None:
                     yield sse(item)
                 elif kind == "end":
@@ -910,6 +986,7 @@ class Relay:
                 final = {**answer, "id": client_id}
                 self._learn(str(message.get("method")), final)
                 self._release(session, client_id, state)
+                state["final"] = final
                 yield sse(final)
                 return
             # The stream ended without the answer, and could not be resumed.
@@ -930,21 +1007,24 @@ class Relay:
                 # The server answered a resend with an error status: its answer, if it is one.
                 self._release(session, client_id, state)
                 parsed = _json_object(attempt.body)
-                yield sse(
+                state["final"] = (
                     {**parsed, "id": client_id}
                     if parsed is not None
                     else unknown_outcome_response(client_id, "server_error")
                 )
+                yield sse(state["final"])
                 return
             if attempt.kind != "answer" or attempt.response is None:
                 final_message = self._final(client_id, attempt)
                 self._release(session, client_id, state)
+                state["final"] = final_message
                 yield sse(final_message)
                 return
             if attempt.message is not None:
                 self._release(session, client_id, state)
                 final = {**attempt.message, "id": client_id}
                 self._learn(str(message.get("method")), final)
+                state["final"] = final
                 yield sse(final)
                 return
 
@@ -954,7 +1034,7 @@ class Relay:
         message: dict[str, Any],
         sent: dict[str, Any],
         session: Session | None,
-        state: dict[str, int],
+        state: dict[str, Any],
         attempt: Attempt,
         keyed: bool,
         tool: str | None,
@@ -967,7 +1047,7 @@ class Relay:
                     self._release(session, client_id, state)
                     return {**attempt.message, "id": client_id}
                 answer: dict[str, Any] | None = None
-                async for kind, item in self._events(request, attempt, session):
+                async for kind, item in self._events(request, attempt, session, state):
                     if kind == "end":
                         answer = item
                 if answer is not None:
@@ -1002,7 +1082,7 @@ class Relay:
         message: dict[str, Any],
         sent: dict[str, Any],
         session: Session | None,
-        state: dict[str, int],
+        state: dict[str, Any],
         attempt: Attempt,
         keyed: bool,
         tool: str | None,
@@ -1198,14 +1278,18 @@ async def _released(
     relay: Relay,
     session: Session | None,
     message: dict[str, Any],
-    state: dict[str, int],
+    state: dict[str, Any],
 ) -> AsyncIterator[bytes]:
-    """*events*, then the request released however the stream ends (its client gone, too)."""
+    """
+    *events*, then the request released and recorded however the stream ends (its client gone,
+    too: then it was sent no answer).
+    """
     try:
         async for chunk in events:
             yield chunk
     finally:
         relay._release(session, message.get("id"), state)
+        relay._record(session, message, state, state.get("final"))
 
 
 def _key(identifier: Any) -> str:

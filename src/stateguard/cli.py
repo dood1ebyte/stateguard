@@ -554,6 +554,25 @@ def _call_parts(call: Any) -> tuple[str, Any, Any] | None:
     return params["name"], params.get("arguments"), call.get("id")
 
 
+def _cmd_incidence(args: argparse.Namespace) -> int:
+    from stateguard.adapters.mcp.incidence import (  # noqa: PLC0415
+        read_records,
+        render,
+        summarize,
+    )
+
+    try:
+        records = read_records(args.audit)
+    except (OSError, ValueError) as exc:
+        _die(f"cannot read the audit log: {exc}")
+    summary = summarize(records)
+    if args.json:
+        print(json.dumps(summary, indent=2))
+    else:
+        print(render(summary))
+    return _EXIT_OK
+
+
 def _cmd_replay(args: argparse.Namespace) -> int:
     from collections import Counter  # noqa: PLC0415
 
@@ -804,6 +823,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", default=False, help="Emit one record per call."
     )
 
+    # -- incidence -----------------------------------------------------------
+    incidence = sub.add_parser(
+        "incidence",
+        help="Fault incidence and outcomes from a relay's audit log.",
+        description=(
+            "Read the 'invocation' records a StateGuard relay writes to its --audit log (one "
+            "per client request: the faults it met and how it ended; no arguments or results) "
+            "and report, per invocation, how often each fault happened and how many were "
+            "recovered, unresolved or failed, with Wilson 95%% intervals. Only the relay's own "
+            "hop to the server is seen."
+        ),
+    )
+    incidence.add_argument("audit", metavar="AUDIT", nargs="+", help="Relay audit log(s), JSONL.")
+    incidence.add_argument(
+        "--json", action="store_true", default=False, help="Emit the machine-readable summary."
+    )
+
     return parser
 
 
@@ -834,7 +870,12 @@ def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    commands = {"check": _cmd_check, "diff": _cmd_diff, "replay": _cmd_replay}
+    commands = {
+        "check": _cmd_check,
+        "diff": _cmd_diff,
+        "replay": _cmd_replay,
+        "incidence": _cmd_incidence,
+    }
     if args.command in commands:
         try:
             code = commands[args.command](args)

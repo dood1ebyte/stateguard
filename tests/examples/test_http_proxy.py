@@ -917,3 +917,89 @@ def test_a_typescript_crash_after_the_effect_is_in_doubt_over_http(rig: Rig) -> 
     assert restarted.is_set()
     assert getattr(answer, "code", None) == -32010, answer  # in doubt
     assert rig.notes() == ["a"]  # the effect happened once, and was not run again
+
+
+# -- one invocation record per client request: what it met, and how it ended -------------------
+
+
+def _invocations(rig: Rig, method: str = "tools/call") -> list[dict[str, Any]]:
+    return [e for e in rig.audit() if e["event"] == "invocation" and e["method"] == method]
+
+
+def test_a_fault_free_call_is_recorded_answered(rig: Rig) -> None:
+    rig.server()
+    rig.faults("none")
+    rig.relay("--retry", "auto")
+    _session(rig.relay_url, _add_note())
+    (record,) = _invocations(rig)
+    assert record["resolution"] == "answered" and record["faults"] == []
+    assert record["tool"] == "add_note" and record["attempts"] == 1 and not record["keyed"]
+    assert "arguments" not in json.dumps(record) and '"a"' not in json.dumps(record)
+    assert {e["resolution"] for e in rig.audit() if e["event"] == "invocation"} == {"answered"}
+
+
+@pytest.mark.parametrize(
+    ("keyed", "resolution", "outcome"),
+    [(True, "recovered", "replayed"), (False, "unknown", None)],
+)
+def test_a_lost_response_is_recorded_with_its_fault_and_its_end(
+    rig: Rig, keyed: bool, resolution: str, outcome: Any
+) -> None:
+    rig.server(keyed=keyed)
+    rig.faults("lost_response")
+    rig.relay("--retry", "auto")
+    _session(rig.relay_url, _add_note())
+    (record,) = _invocations(rig)
+    assert record["faults"][0] == "transport_lost"
+    assert record["resolution"] == resolution and record["server_outcome"] == outcome
+    assert record["keyed"] is keyed and record["attempts"] == (2 if keyed else 1)
+
+
+def test_a_lost_session_is_recorded_recovered(rig: Rig) -> None:
+    rig.server()
+    rig.faults("none")
+    rig.relay("--retry", "auto")
+
+    async def body(session: Any) -> Any:
+        rig.kill_server()
+        rig.server()
+        return await _add_note()(session)
+
+    _session(rig.relay_url, body)
+    (record,) = _invocations(rig)
+    assert record["faults"] == ["session_lost"] and record["resolution"] == "recovered"
+
+
+def test_a_refused_call_is_recorded_refused(rig: Rig) -> None:
+    rig.server()
+    rig.faults("none")
+    rig.relay("--retry", "auto")
+    _session(rig.relay_url, _call("add_note", {}))
+    (record,) = _invocations(rig)
+    assert record["resolution"] == "refused" and record["attempts"] == 0
+
+
+def test_a_raced_read_is_recorded_with_its_deadline(rig: Rig) -> None:
+    effects = rig.tmp / "effects.json"
+    effects.write_text(json.dumps({"tools": [{"name": "list_notes", "effect": "read_only"}]}))
+    rig.server()
+    rig.faults("hang_after", tool="list_notes")
+    rig.relay("--retry", "auto", "--effects", str(effects), "--call-deadline", "1.5")
+    _session(rig.relay_url, _call("list_notes", {}))
+    (record,) = _invocations(rig)
+    assert "deadline" in record["faults"] and record["resolution"] == "recovered"
+    assert record["attempts"] == 2
+
+
+def test_the_incidence_report_reads_a_relays_audit_log(rig: Rig) -> None:
+    from stateguard.adapters.mcp.incidence import read_records, summarize
+
+    rig.server()
+    rig.faults("lost_response")
+    rig.relay("--retry", "auto")
+    _session(rig.relay_url, _add_note("a"))  # faulted: unknown
+    _session(rig.relay_url, _add_note("b"))  # the fault fires once: answered
+    calls = summarize(read_records([rig.tmp / "audit.jsonl"]))["tools/call"]
+    assert calls["invocations"] == 2
+    assert calls["faulted"]["k"] == 1 and calls["unresolved"]["k"] == 1
+    assert calls["resolutions"] == {"answered": 1, "unknown": 1}
