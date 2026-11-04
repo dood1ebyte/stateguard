@@ -67,11 +67,24 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install all deps (including pydantic for adapter type checking)
-        run: pip install -e ".[pydantic,dev]"
+      # ``mcp`` too: the SDK adapters (idempotency_sdk, inject) import it.
+      - name: Install all deps (including pydantic and mcp for adapter type checking)
+        run: pip install -e ".[pydantic,mcp,dev]"
 
       - name: Run mypy strict
         run: mypy src/
+
+      # The mcp 1.x adapter is typed against mcp 1.x, which the step above
+      # cannot have installed beside mcp 2.x.
+      - name: mcp 1.x environment
+        run: |
+          python -m venv /tmp/mcp1
+          /tmp/mcp1/bin/pip install "mcp==1.9.4" "mcp-server-sqlite==2025.4.25"
+
+      - name: Run mypy strict on the mcp 1.x modules, against mcp 1.x
+        run: >-
+          mypy --config-file mypy-mcp1.ini --python-executable /tmp/mcp1/bin/python
+          src/stateguard/adapters/mcp/idempotency_sdk1.py src/stateguard/adapters/mcp/inject.py
 
   # -------------------------------------------------------------------------
   # Job 4: Tests  (depends on isolation, matrix across OS x Python versions)
@@ -108,6 +121,15 @@ jobs:
       # must not need it -- the isolation job checks that with core alone.
       - name: Install all deps
         run: pip install -e ".[pydantic,mcp,dev]"
+
+      # The injector tests run the pinned third-party mcp 1.x server
+      # (tests/examples/test_inject_python.py); without this they skip.
+      - name: mcp 1.x environment for the injector tests
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        run: |
+          python -m venv /tmp/mcp1
+          /tmp/mcp1/bin/pip install "mcp==1.9.4" "mcp-server-sqlite==2025.4.25"
+          echo "STATEGUARD_MCP1_PYTHON=/tmp/mcp1/bin/python" >> "$GITHUB_ENV"
 
       - name: Run unit + integration tests with coverage
         run: |

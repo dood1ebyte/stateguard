@@ -66,8 +66,6 @@ check exact; see the contract's second condition.
 
 from __future__ import annotations
 
-import contextlib
-import contextvars
 import sqlite3
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
@@ -81,20 +79,22 @@ from pydantic import ValidationError
 from stateguard.adapters.mcp.idempotency import (
     IDEMPOTENCY_KEY,
     IDEMPOTENCY_OUTCOME,
-    BeginStatus,
     Execution,
     IdempotencyStore,
     NotExecuted,
     Outcome,
     Recovery,
-    StoreUnavailable,
     advertisement,
     error_code,
     error_data,
     error_message,
-    execution_for,
     fingerprint,
-    recover_abandoned,
+)
+from stateguard.adapters.mcp.idempotency_async import (
+    PointHook,
+    Unrecorded,
+    current_key,
+    execute_two_phase,
 )
 
 __all__ = ["KeyedTools", "NotExecuted", "Recovery", "current_key"]
@@ -104,22 +104,22 @@ ListHandler = Callable[[Any, Any], Awaitable[types.ListToolsResult]]
 Effect = Callable[[sqlite3.Connection, dict[str, Any]], types.CallToolResult]
 #: ``check(key, arguments)``: did this key's own effect happen? Runs in a worker thread.
 Recover = Callable[[str, dict[str, Any]], Recovery]
-_CURRENT_KEY: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "stateguard_idempotency_key", default=None
-)
-
-
-def current_key() -> str | None:
-    """The idempotency key of the keyed call this handler is executing, or None."""
-    return _CURRENT_KEY.get()
 
 
 class KeyedTools:
     """Idempotency keys for chosen tools of an ``mcp`` 2.x server."""
 
-    def __init__(self, store: IdempotencyStore, *, wait_seconds: float = 5.0) -> None:
+    def __init__(
+        self,
+        store: IdempotencyStore,
+        *,
+        wait_seconds: float = 5.0,
+        on_point: PointHook | None = None,
+    ) -> None:
         self.store = store
         self.wait_seconds = wait_seconds
+        #: TEST-ONLY: called at each point of a keyed call (fault injection).
+        self.on_point = on_point
         self._two_phase: set[str] = set()
         self._recover: dict[str, Recover] = {}
         self._transactional: dict[str, Effect] = {}
@@ -236,6 +236,8 @@ class KeyedTools:
         """The answer to a keyed call: a result, or an ``MCPError`` raised."""
         if name in self._transactional:
             effect = self._transactional[name]
+            if self.on_point is not None:
+                await self.on_point("before_begin", name)
             execution = await anyio.to_thread.run_sync(
                 lambda: self.store.transact(
                     key,
@@ -244,83 +246,24 @@ class KeyedTools:
                     tool=name,
                 )
             )
+            if execution.outcome is Outcome.EXECUTED and self.on_point is not None:
+                await self.on_point("after_record", name)
             return _answer(execution, key)
-        answered = await self._two_phase_call(key, name, arguments, run)
-        if isinstance(answered, types.InputRequiredResult):
-            return answered
+        check = self._recover.get(name)
+        answered = await execute_two_phase(
+            self.store,
+            key,
+            name,
+            arguments,
+            run,
+            settle=_settle,
+            recover=None if check is None else lambda k, a: _recorded(check(k, a)),
+            wait_seconds=self.wait_seconds,
+            on_point=self.on_point,
+        )
+        if isinstance(answered, Unrecorded):
+            return answered.answer  # type: ignore[no-any-return]
         return _answer(answered, key)
-
-    async def _two_phase_call(
-        self,
-        key: str,
-        name: str,
-        arguments: dict[str, Any],
-        run: Callable[[], Awaitable[Any]],
-    ) -> Execution | types.InputRequiredResult:
-        fp = fingerprint(name, arguments)
-        recover = self._recover.get(name)
-
-        def begin() -> Any:
-            return self.store.begin(key, fp, tool=name)
-
-        async def waited(begun: Any) -> Any:
-            # A duplicate of a call still running (or recovering) here: wait for it.
-            if begun.status is BeginStatus.IN_PROGRESS and await anyio.to_thread.run_sync(
-                self.store.wait, key, self.wait_seconds
-            ):
-                return await anyio.to_thread.run_sync(begin)
-            return begun
-
-        try:
-            begun = await waited(await anyio.to_thread.run_sync(begin))
-            if begun.status is BeginStatus.IN_DOUBT and recover is not None:
-                adopt = self.store.adopt
-                begun = await waited(
-                    await anyio.to_thread.run_sync(lambda: adopt(key, fp, tool=name))
-                )
-        except StoreUnavailable:
-            return Execution(Outcome.REJECTED_STORE, None)
-        if begun.status is BeginStatus.RECOVER and recover is not None:
-            check = recover
-
-            def settle() -> Execution | None:
-                return recover_abandoned(self.store, key, lambda: _recorded(check(key, arguments)))
-
-            settled = await anyio.to_thread.run_sync(settle)
-            if settled is not None:
-                return settled
-        elif begun.status is not BeginStatus.EXECUTE:
-            return execution_for(begun)
-        token = _CURRENT_KEY.set(key)
-        try:
-            result = _as_result(await run())
-        except NotExecuted as exc:
-            _quietly(self.store.abort, key)
-            return Execution(Outcome.NOT_EXECUTED, None, exc)
-        except BaseException as exc:
-            # Cancelled, or failed: it may have acted. In doubt, never re-run.
-            _quietly(self.store.mark_in_doubt, key, f"{type(exc).__name__}: {exc}")
-            if isinstance(exc, anyio.get_cancelled_exc_class()):
-                raise
-            return Execution(Outcome.IN_DOUBT, None, exc)
-        finally:
-            _CURRENT_KEY.reset(token)
-        if isinstance(result, types.InputRequiredResult):
-            # Not complete: the client retries with its input. Nothing acted yet.
-            _quietly(self.store.abort, key)
-            return result
-        record = _dump(result)
-        try:
-            await anyio.to_thread.run_sync(self.store.complete, key, record)
-        except StoreUnavailable:
-            return Execution(Outcome.EXECUTED_UNRECORDED, record)
-        return Execution(Outcome.EXECUTED, record)
-
-
-def _quietly(action: Callable[..., Any], *args: Any) -> None:
-    # On a store error the key stays as it was: started, so in doubt -- never free.
-    with contextlib.suppress(StoreUnavailable):
-        action(*args)
 
 
 class _NotAResultError(Exception):
@@ -339,6 +282,14 @@ def _as_result(value: Any) -> types.CallToolResult | types.InputRequiredResult:
         except ValidationError as exc:
             raise _NotAResultError(str(exc)) from exc
     raise _NotAResultError(f"a {type(value).__name__}")
+
+
+def _settle(value: Any) -> Any:
+    """A handler's answer as the JSON to record, or ``Unrecorded`` for "input required"."""
+    result = _as_result(value)
+    if isinstance(result, types.InputRequiredResult):
+        return Unrecorded(result)
+    return _dump(result)
 
 
 def _dump(result: types.CallToolResult) -> dict[str, Any]:

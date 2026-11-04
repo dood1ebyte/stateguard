@@ -111,6 +111,12 @@ no_implicit_reexport   = true
 module                 = "stateguard.adapters.pydantic.*"
 warn_return_any        = false
 
+# Typed against mcp 1.x, which this environment does not have: checked by
+# `mypy --config-file mypy-mcp1.ini --python-executable <python with mcp 1.x>`.
+[[tool.mypy.overrides]]
+module                 = "stateguard.adapters.mcp.idempotency_sdk1"
+ignore_errors          = true
+
 # ---------------------------------------------------------------------------
 # Ruff
 # ---------------------------------------------------------------------------
