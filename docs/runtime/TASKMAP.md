@@ -1765,3 +1765,40 @@ Full record: `docs/runtime/AUTONOMOUS_RIFR_ENGINEERING.md`. Measured results con
 - **M13** Read re-request (`decide_retry(reread_unknown=True)`), real 3 servers: reads 0/216 failed (raw 216/216), writes 216/216 UNKNOWN, 0 unsafe outcomes, 0 Z.
 - **M14** Synthetic strict RIFR, seed 2, 267 faulted + 400 control per arm. Faulted failures: raw 213, auto 177, auto_ops 165 (Z 16), ops_reread 130 (Z 11), ops_scoped 119 (Z 0), ops_keyed 91 (Z 0; servers that adopted keys). Controls 0/400 in every arm; 0 duplicates in every StateGuard arm.
 - **M15** Idempotency-key contract (`stateguard.adapters.mcp.idempotency`): opt-in, per-tool advertisement in the server's own listing. A resend is never a second execution: it is a replay or "in doubt".
+
+## Key injection, the HTTP relay, and incidence records (2026-11-04)
+
+Full record: `docs/runtime/KEY_INJECTION_AND_HTTP_RELAY.md`. Every result below is controlled fault
+injection on named, pinned servers, never a production rate.
+
+- **M16** Python key injection (`python -m stateguard.adapters.mcp.inject`), mcp-server-sqlite
+  2025.4.25 on mcp 1.9.4:
+  - keyed arm: faulted 24/204 (the claimed-but-unrecorded crash windows, in doubt), transport
+    0/144, fault-free 0/144, 0 unsafe;
+  - naive blind resend: 72 duplicate rows.
+- **M17** HTTP relay (`examples/mcp/http_proxy.py`), controlled Python server:
+  - relay, no keys: faulted 84/168 (unkeyed writes unknown; hangs);
+  - relay with keys: 24/168 (hangs only);
+  - relay with keys and `--call-deadline`: 0/168 (≤ 2.2%, full matrix), fault-free 0/144;
+  - naive: 48 duplicate notes. 0 unsafe in every relay arm.
+- **M18** server-everything 2026.8.31 over HTTP (third-party, reads only), relay with
+  `--call-deadline`: faulted 0/84, fault-free 0/72.
+  - iter8's relay numbers on this server came from a harness defect (the fault proxy kept a
+    connection alive that it never read again) and were re-measured on the fixed proxy.
+- **M19** TypeScript server over HTTP (controlled, SDK 1.32.1), keys only from the preload: the
+  same matrix gives raw 168/168, naive 48 duplicates, relay 84/168, relay with keys 24/168, relay
+  with keys and deadline 0/168 (≤ 2.2%), and 0/144 fault-free in every arm.
+- **M20** Relay overhead, paired and uncontended: +0.04 to +0.08 s per session (controlled server);
+  within noise on server-everything.
+- **Relay correctness fixes:**
+  - cancellations scoped to (session, request) and sent to every attempt; ambiguous stateless
+    cancellations dropped;
+  - the fault proxy now closes each exchange whatever the server's keep-alive.
+- **Incidence:**
+  - the HTTP relay writes one `invocation` record per client request (faults met, how it ended;
+    no arguments or results);
+  - `stateguard incidence` reports per-invocation fault incidence with Wilson intervals.
+  - Real incidence is still unmeasured.
+
+Next: the same record in the stdio relay, then a real capture to measure fault incidence.
+
