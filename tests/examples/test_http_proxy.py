@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import socketserver
 import subprocess
@@ -799,3 +800,120 @@ def test_a_raced_requests_cancellation_reaches_both_attempts(
     a.cancel(7)
     call.join(10)
     assert sorted(holding.cancels) == sorted(holding.calls)
+
+
+# -- a TypeScript server over HTTP, keyed by the preload -----------------------------------------
+
+NODE = shutil.which("node") or "/opt/node22/bin/node"
+TS = ROOT / "adapters" / "typescript"
+TS_SERVER = TS / "test" / "fixtures" / "http_notes_server.ts"
+PRELOAD = TS / "src" / "preload.ts"
+
+
+def _node_ready() -> bool:
+    if not Path(NODE).exists() or not (TS / "node_modules" / "@modelcontextprotocol").exists():
+        return False
+    out = subprocess.run([NODE, "--version"], capture_output=True, text=True, check=False)
+    major, minor = (int(part) for part in out.stdout.strip().lstrip("v").split(".")[:2])
+    return (major, minor) >= (22, 18)  # type stripping without a flag
+
+
+needs_node = pytest.mark.skipif(
+    not _node_ready(), reason="needs Node >= 22.18 and adapters/typescript deps"
+)
+
+
+def _ts_server(rig: Rig, *, keyed: bool = True, fault: str | None = None) -> None:
+    """The TypeScript SDK's HTTP server (one McpServer per session), keys only from the preload."""
+    env = dict(rig.env)
+    argv = [NODE, "--no-warnings"]
+    if keyed:
+        env.update(
+            STATEGUARD_IDEMPOTENCY_DB=str(rig.tmp / "keys.db"), STATEGUARD_KEYED_TOOLS="add_note"
+        )
+    if fault is not None:
+        env.update(STATEGUARD_FAULT=fault, STATEGUARD_FAULT_FILE=str(rig.tmp / "crash.fired"))
+    if keyed or fault is not None:
+        argv += ["--import", str(PRELOAD)]
+    argv += [str(TS_SERVER), str(rig.tmp / "notes.txt"), str(rig.server_port)]
+    rig._spawn("server", argv, env)
+    _wait_for(rig.server_port)
+
+
+@needs_node
+def test_a_typescript_server_over_http_answers_through_the_relay(rig: Rig) -> None:
+    _ts_server(rig)
+    rig.faults("none")
+    rig.relay("--retry", "auto")
+    answer = _session(rig.relay_url, _add_note())
+    assert _ok(answer) and (answer.meta or {}).get(OUTCOME) == "executed"
+    assert rig.notes() == ["a"] and rig.calls_reaching_server() == 1
+
+
+@needs_node
+@pytest.mark.parametrize("mode", ["lost_response", "http_502_after", "cut_stream"])
+def test_a_typescript_keyed_write_over_http_is_resent_and_runs_once(rig: Rig, mode: str) -> None:
+    """
+    The preload keys the per-session servers of an HTTP deployment as it keys a
+    stdio one: the relay resends the lost call with its key, and the server's
+    store answers it ``replayed`` -- the note is written once.
+    """
+    _ts_server(rig)
+    rig.faults(mode)
+    rig.relay("--retry", "auto")
+    answer = _session(rig.relay_url, _add_note())
+    assert _ok(answer) and (answer.meta or {}).get(OUTCOME) == "replayed"
+    assert rig.notes() == ["a"] and rig.calls_reaching_server() == 2
+
+
+@needs_node
+def test_without_keys_a_typescript_write_over_http_is_unknown_never_resent(rig: Rig) -> None:
+    _ts_server(rig, keyed=False)
+    rig.faults("lost_response")
+    rig.relay("--retry", "auto")
+    answer = _session(rig.relay_url, _add_note())
+    assert _state(answer) == "unknown"
+    assert rig.notes() == ["a"] and rig.calls_reaching_server() == 1
+
+
+@needs_node
+def test_a_lost_typescript_session_is_reopened_and_the_keyed_call_runs_once(rig: Rig) -> None:
+    """The server restarts between the client's handshake and its call: every session is gone."""
+    _ts_server(rig)
+    rig.faults("none")
+    rig.relay("--retry", "auto")
+
+    async def body(session: Any) -> Any:
+        rig.kill_server()
+        _ts_server(rig)
+        return await _add_note()(session)
+
+    answer = _session(rig.relay_url, body)
+    assert _ok(answer) and (answer.meta or {}).get(OUTCOME) == "executed"
+    assert rig.notes() == ["a"]
+    assert "session_reopened" in rig.events()
+
+
+@needs_node
+def test_a_typescript_crash_after_the_effect_is_in_doubt_over_http(rig: Rig) -> None:
+    """
+    The server dies (SIGKILL) after the note is written and before its key is
+    recorded. The relay resends the call with its key to the restarted server,
+    which answers "in doubt": reported, never run again.
+    """
+    _ts_server(rig, fault="after_effect")
+    rig.proxy_port = rig.server_port  # no fault proxy: a dead server refuses the connection
+    rig.relay("--retry", "auto", "--connect-retry", "15")
+    restarted = threading.Event()
+
+    def restart() -> None:
+        rig.procs["server"].wait(timeout=30)  # the crash
+        rig.procs.pop("server")
+        _ts_server(rig)  # the fault fires once per fault file
+        restarted.set()
+
+    threading.Thread(target=restart, daemon=True).start()
+    answer = _session(rig.relay_url, _add_note())
+    assert restarted.is_set()
+    assert getattr(answer, "code", None) == -32010, answer  # in doubt
+    assert rig.notes() == ["a"]  # the effect happened once, and was not run again

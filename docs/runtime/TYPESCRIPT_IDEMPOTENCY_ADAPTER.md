@@ -289,7 +289,15 @@ Every arm has 0 unsafe outcomes, 0 unknowns and 0 StateGuard-induced failures on
 - **Not covered:**
   - the 2026-07-28 `InputRequiredResult` shape is handled by pass-through, but SDK 1.32.1 cannot produce it, so it is tested only at the handler boundary;
   - task-augmented calls (`params.task`) are keyed like others, so the record is of the task's *creation*. This is untested;
-  - HTTP transports for the TypeScript adapter are untested. The Python adapter was tested on Streamable HTTP.
+  - HTTP transports: tested since 2026-11-04 on a controlled server only.
+    - Server: `test/fixtures/http_notes_server.ts`, SDK 1.32.1 over Streamable HTTP, with one
+      `McpServer` and one transport per session, as the SDK example and Express-based servers do.
+    - Setup: keys come from the preload alone, through `examples/mcp/http_proxy.py`.
+    - Covered: lost response, 502 after execution and cut stream (each `replayed`, run once),
+      session loss (reopened, run once), a crash after the effect (in doubt, never re-run), and
+      the unkeyed control (unknown, never resent).
+    - Tests: `tests/examples/test_http_proxy.py`.
+    - Not tested: a third-party TypeScript HTTP server with a write tool. No pinned one has one.
 - **Operator-declared re-run of abandoned attempts** for naturally idempotent tools is the follow-up §7.3 identifies, and it is not implemented.
 
 ## 10. Reproduce
