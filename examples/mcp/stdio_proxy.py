@@ -301,6 +301,7 @@ from stateguard.adapters.mcp import (
     Effect,
     EffectDeclaration,
     EffectPolicy,
+    ExecutionState,
     FailureClassification,
     ForwardingInvariantError,
     InvocationLedger,
@@ -336,6 +337,7 @@ from stateguard.adapters.mcp.idempotency import (
     tool_supports_keys,
     with_key,
 )
+from stateguard.adapters.mcp.incidence import INVOCATION_EVENT, resolution, with_faults
 from stateguard.adapters.mcp.jsonrpc import (
     JSONRPC_VERSION,
     PROTOCOL_VERSION_META_KEY,
@@ -489,6 +491,8 @@ class StdioRelay:
         # client id -> (payload, tool, server generation it was decided against)
         self._calls: dict[Any, tuple[bytes, str | None, int]] = {}
         self._attempts: dict[Any, int] = {}  # client id -> attempts sent
+        #: client id -> attempts, once forgotten and until its invocation record is written.
+        self._spent_attempts: OrderedDict[Any, int] = OrderedDict()
         self._client_of: dict[Any, Any] = {}  # retry id -> client id
         self._retry_lock = threading.Lock()
         # Re-read an unknown outcome of a tool declared READ_ONLY (decide_retry).
@@ -609,7 +613,17 @@ class StdioRelay:
 
     # -- plumbing ------------------------------------------------------------
 
-    def _send(self, stream: IO[bytes], lock: threading.Lock, line: bytes) -> None:
+    def _send(
+        self,
+        stream: IO[bytes],
+        lock: threading.Lock,
+        line: bytes,
+        message: Any = None,
+    ) -> None:
+        """
+        Write *line*. To the client, a response for a relayed request (*message*, the line
+        parsed, when the caller has it) also gets that request's one ``invocation`` record.
+        """
         with lock:
             try:
                 stream.write(line if line.endswith(b"\n") else line + b"\n")
@@ -618,6 +632,50 @@ class StdioRelay:
                 raise BrokenPipeError(str(exc)) from exc
             if stream is self._client_out:
                 self._tap(Direction.RELAY_TO_CLIENT, line)  # written: now it happened
+        if stream is self._client_out and is_response(message):
+            self._record_invocation(message.get("id"), message)
+
+    def _record_invocation(
+        self, identifier: Any, message: dict[str, Any] | None, *, kind: str | None = None
+    ) -> None:
+        """
+        One ``invocation`` audit record per relayed request, when its client is sent its one
+        answer (``stateguard.adapters.mcp.incidence``): no arguments, results or text. Its
+        faults come from the ledger: why the request went UNKNOWN, if it did, and whether it
+        was sent again. Never raises: a record never breaks a call.
+        """
+        try:
+            if not _hashable(identifier):
+                return
+            invocation = self.ledger.mark_recorded(identifier)
+            if invocation is None:
+                return  # an id the relay never relayed (or already recorded)
+            faults: list[str] = []
+            if ExecutionState.UNKNOWN in invocation.history:
+                faults.append(invocation.unknown_reason or "unknown")
+            with self._retry_lock:
+                attempts = self._attempts.get(identifier) or self._spent_attempts.pop(identifier, 1)
+            if attempts > 1 and not faults:
+                faults.append("resent")
+            outcome = None
+            if kind is None:
+                kind, outcome = resolution(message)
+                kind = with_faults(kind, faults)
+            # The audit log only: a recording (T13) stays deterministic, and its redaction
+            # would only mask these fields.
+            self._audit_only(
+                INVOCATION_EVENT,
+                id=identifier,
+                method=invocation.method,
+                tool=invocation.tool if invocation.method == "tools/call" else None,
+                attempts=attempts,
+                faults=faults,
+                resolution=kind,
+                server_outcome=outcome,
+                ms=round((time.monotonic() - invocation.received_at) * 1000),
+            )
+        except Exception as exc:  # noqa: BLE001 -- fail open
+            self._internal_error("invocation record", exc)
 
     def _send_server(self, line: bytes) -> None:
         """Write to the *current* server process (the stream is swapped on restart)."""
@@ -635,12 +693,17 @@ class StdioRelay:
         self._tap(Direction.RELAY_TO_SERVER, line)
 
     def _send_json(self, stream: IO[bytes], lock: threading.Lock, message: Any) -> None:
-        self._send(stream, lock, json.dumps(message, separators=(",", ":")).encode("utf-8"))
+        line = json.dumps(message, separators=(",", ":")).encode("utf-8")
+        self._send(stream, lock, line, message)
 
-    def _log(self, event: str, **fields: Any) -> None:
+    def _audit_only(self, event: str, **fields: Any) -> None:
+        """An audit line that is not recorded (timing-dependent, e.g. ``invocation``)."""
         with self._to_audit:
             self._audit.write(json.dumps({"event": event, **fields}, default=str) + "\n")
             self._audit.flush()
+
+    def _log(self, event: str, **fields: Any) -> None:
+        self._audit_only(event, **fields)
         recorder = self._recorder
         if recorder is not None:
             try:
@@ -1775,7 +1838,12 @@ class StdioRelay:
     def _forget(self, client_id: Any) -> None:
         with self._retry_lock:
             self._calls.pop(client_id, None)
-            self._attempts.pop(client_id, None)
+            attempts = self._attempts.pop(client_id, None)
+            if attempts is not None and attempts > 1:
+                # Kept for the request's invocation record, written once its answer goes out.
+                self._spent_attempts[client_id] = attempts
+                while len(self._spent_attempts) > 4096:
+                    self._spent_attempts.popitem(last=False)
 
     def _check_result(self, client_id: Any, message: dict[str, Any]) -> None:
         """Log a tools/call result that breaks its tool's contract. Never alters it."""
@@ -1897,6 +1965,7 @@ class StdioRelay:
                 if identifier is not None:
                     self.ledger.answered_locally(identifier)
                 self._send(self._client_out, self._to_client, payload)
+                self._record_invocation(identifier, None, kind="refused")
                 return
             tool = message.get("params", {}).get("name") if isinstance(message, dict) else None
             try:
@@ -2375,7 +2444,7 @@ class StdioRelay:
             except Exception as exc:  # noqa: BLE001 -- fail open
                 self._internal_error("server message", exc)
                 self._listing_ready.set()
-            self._send(self._client_out, self._to_client, line)  # untouched
+            self._send(self._client_out, self._to_client, line, message)  # untouched
 
     def _note_failure(self, client_id: Any, failure: FailureClassification | None) -> None:
         """Log an auth failure as category K: never retried, the operator's to resolve."""

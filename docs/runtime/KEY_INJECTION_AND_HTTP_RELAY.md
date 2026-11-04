@@ -380,7 +380,7 @@ equally):
 | 503 or connection loss before the server read the request | unknown for unkeyed writes | keys; a server-declared "not processed" signal |
 | Stale pooled connection (server closes an idle connection as the relay reuses it) | **unmeasured**; would surface as unknown for unkeyed writes | a relay pool idle timeout below the server's (httpx's pool and Node's server both default to 5 s) |
 | Servers in other languages (Go, Rust, C#, Java) | relay only, no keys | per-SDK adapters |
-| Real fault incidence | **unmeasured** | the HTTP relay's per-invocation records (§8) exist; still needed: the same in the stdio relay, then a real capture |
+| Real fault incidence | **unmeasured** | both relays now write per-invocation records (§8); still needed: a real capture |
 
 **Next priority: fault incidence.** Every remaining question about the failure rate depends on
 how often each fault actually happens, and this testbed cannot answer it. §8 is the first step.
@@ -425,7 +425,25 @@ The report says so in its output.
   refusal → `refused`; a raced read records its `deadline`; and the report computed from a real
   relay log.
 
-**Not yet.**
-- The stdio relay writes no such record. Its `InvocationLedger` already tracks each invocation's
-  end, so it is the natural place for one.
-- No real capture has been run, so no real incidence is known yet.
+**The stdio relay** (`examples/mcp/stdio_proxy.py`) writes the same record.
+- **Where:** the record is written when the client is sent the request's one answer, on the
+  relay's single write path to the client. Each request gets exactly one record: the ledger
+  marks it recorded under its lock.
+- **Faults:** taken from the `InvocationLedger`, namely why the request went UNKNOWN
+  (`transport_closed`, `send_failed`, `deadline`, ...). A request sent again for another reason
+  carries `resent`.
+- **Refusals:** a call refused locally is recorded `refused`.
+- **Shadow mode:** records are written there too, which makes it the observe-only way to
+  measure incidence.
+- **Recordings:** records go to the audit log only, never into a recording (T13). They carry
+  timing, and recorded tapes must stay deterministic; the first full run caught exactly this
+  (`test_replay.py`).
+- **Tests:**
+  - `tests/examples/test_relay_ledger.py`: fault-free; server death before and after execution;
+    deadline with a late answer (still one record); refusal; a duplicate response in auto and in
+    shadow (still one record).
+  - `tests/examples/test_relay_reread.py`: a hung read answered by its re-read, and a read lost
+    with its server and re-read on the restarted one (both `recovered`, 2 attempts); the same
+    without re-read (`unknown`).
+
+**Not yet:** no real capture has been run, so no real incidence is known yet.

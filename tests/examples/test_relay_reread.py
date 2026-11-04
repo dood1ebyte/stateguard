@@ -446,3 +446,48 @@ def test_without_reread_a_lost_read_is_unknown_and_idle_only_still_refuses() -> 
         assert len(rig.servers) == 1 and _received(rig, "search") == 1
     finally:
         rig.close()
+
+
+# ---------------------------------------------------------------------------
+# The invocation record (stateguard.adapters.mcp.incidence) of a re-read
+# ---------------------------------------------------------------------------
+
+
+def _record(rig: Rig, identifier: int) -> dict[str, Any]:
+    (record,) = [
+        e for e in rig.audit if e.get("event") == "invocation" and e.get("id") == identifier
+    ]
+    return record
+
+
+def test_a_hung_read_answered_by_its_reread_is_recorded_recovered() -> None:
+    rig = _rig(Plan(ServerAction.HANG_BEFORE_EXECUTE), deadline=0.15)
+    try:
+        identifier = _send(rig, "search")
+        _answers(rig, identifier)
+        record = _record(rig, identifier)
+        assert record["resolution"] == "recovered" and record["attempts"] == 2
+        assert record["faults"]  # what made the re-read necessary
+    finally:
+        rig.close()
+
+
+def test_a_read_lost_with_its_server_and_reread_is_recorded_recovered() -> None:
+    rig = _rig(Plan(ServerAction.CLOSE_AFTER_EXECUTE), restarts=2, policy="after-unknown")
+    try:
+        identifier = _send(rig, "search")
+        _answers(rig, identifier)
+        record = _record(rig, identifier)
+        assert record["resolution"] == "recovered" and record["attempts"] == 2
+    finally:
+        rig.close()
+
+
+def test_without_reread_a_hung_read_is_recorded_unknown() -> None:
+    rig = _rig(Plan(ServerAction.HANG_BEFORE_EXECUTE), deadline=0.15, reread=False)
+    try:
+        identifier = _send(rig, "search")
+        _answers(rig, identifier)
+        assert _record(rig, identifier)["resolution"] == "unknown"
+    finally:
+        rig.close()

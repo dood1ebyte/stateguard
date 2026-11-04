@@ -1795,10 +1795,10 @@ injection on named, pinned servers, never a production rate.
     cancellations dropped;
   - the fault proxy now closes each exchange whatever the server's keep-alive.
 - **Incidence:**
-  - the HTTP relay writes one `invocation` record per client request (faults met, how it ended;
+  - both relays write one `invocation` record per client request (faults met, how it ended;
     no arguments or results);
   - `stateguard incidence` reports per-invocation fault incidence with Wilson intervals.
   - Real incidence is still unmeasured.
 
-Next: the same record in the stdio relay, then a real capture to measure fault incidence.
+Next: a real capture, to measure fault incidence.
 

@@ -183,6 +183,8 @@ class Invocation:
     postcondition: Postcondition = Postcondition.NOT_CHECKED
     attribution: str | None = None
     reconciliation: list[dict[str, Any]] = field(default_factory=list)
+    #: An ``invocation`` record was written for it (``mark_recorded``): one per request.
+    recorded: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -284,6 +286,19 @@ class InvocationLedger:
     def unknown(self, request_id: Any, reason: str) -> Invocation | None:
         """A PENDING or SENT request whose outcome the proxy cannot establish."""
         return self._unknown(request_id, reason)
+
+    def mark_recorded(self, request_id: Any) -> Invocation | None:
+        """
+        The invocation, the first time its ``invocation`` record is asked for; ``None`` after
+        that, or for an id this ledger never saw. One record per request, whichever thread asks.
+        """
+        key = _key(request_id)
+        with self._lock:
+            invocation = self._live.get(key) or self._finished.get(key)
+            if invocation is None or invocation.recorded:
+                return None
+            invocation.recorded = True
+            return invocation
 
     def record_result_check(self, request_id: Any, validity: ResultValidity) -> bool:
         """Record whether a COMPLETED request's result was valid. Never changes the state."""

@@ -157,3 +157,68 @@ def test_a_refused_call_is_answered_locally_and_never_sent() -> None:
         assert rig.server.executed == []
     finally:
         rig.close()
+
+
+# -- one invocation record per request (stateguard.adapters.mcp.incidence) ----------------------
+
+
+def _records(rig: Rig) -> list[dict[str, Any]]:
+    time.sleep(0.1)
+    return [e for e in rig.audit if e.get("event") == "invocation" and e["method"] == "tools/call"]
+
+
+def test_a_fault_free_call_gets_one_answered_record() -> None:
+    rig = _rig(ServerAction.NORMAL)
+    try:
+        rig.call("search", {"query": "secret-text"})
+        (record,) = _records(rig)
+        assert record["resolution"] == "answered" and record["faults"] == []
+        assert record["tool"] == "search" and record["attempts"] == 1
+        assert "secret-text" not in str(record)  # no arguments, no results
+    finally:
+        rig.close()
+
+
+@pytest.mark.parametrize(
+    "action", [ServerAction.CLOSE_BEFORE_EXECUTE, ServerAction.CLOSE_AFTER_EXECUTE]
+)
+def test_a_server_death_is_recorded_unknown_with_its_fault(action: ServerAction) -> None:
+    rig = _rig(action)
+    try:
+        rig.call("search", {"query": "x"}, timeout=2.0)
+        (record,) = _records(rig)
+        assert record["resolution"] == "unknown" and record["faults"] == ["transport_closed"]
+    finally:
+        rig.close()
+
+
+def test_a_deadline_is_recorded_once_and_the_late_answer_adds_nothing() -> None:
+    rig = _rig(ServerAction.DELAYED_RESPONSE, call_deadline=0.15)
+    try:
+        rig.call("search", {"query": "x"}, timeout=2.0)
+        time.sleep(DELAY_SECONDS)
+        (record,) = _records(rig)
+        assert record["resolution"] == "unknown" and record["faults"] == ["deadline"]
+    finally:
+        rig.close()
+
+
+def test_a_refused_call_is_recorded_refused() -> None:
+    rig = _rig(ServerAction.NORMAL)
+    try:
+        rig.call("search", {"query": "x", "limit": 99})
+        (record,) = _records(rig)
+        assert record["resolution"] == "refused"
+    finally:
+        rig.close()
+
+
+@pytest.mark.parametrize("mode", [RelayMode.AUTO, RelayMode.SHADOW])
+def test_a_duplicate_response_still_makes_one_record(mode: RelayMode) -> None:
+    rig = _rig(ServerAction.DUPLICATE_RESPONSE, mode)
+    try:
+        rig.call("search", {"query": "x"})
+        (record,) = _records(rig)
+        assert record["resolution"] == "answered"
+    finally:
+        rig.close()

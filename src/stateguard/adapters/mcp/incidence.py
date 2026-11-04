@@ -5,8 +5,14 @@ invocation ended.
 Every number StateGuard has published about failure rates comes from fault injection, where each
 fault is made to happen and every fault weighs the same. A traffic-weighted rate needs the
 opposite: the faults real traffic meets, counted per invocation. A relay already sees every
-fault on its hop to the server, so it writes one ``invocation`` record per client request
-(``examples/mcp/http_proxy.py``), and this module turns those records into rates.
+fault on its hop to the server, so each relay writes one ``invocation`` record per client
+request to its audit log, and this module turns those records into rates:
+
+* the HTTP relay (``examples/mcp/http_proxy.py``): faults ``connect_retry``, ``not_sent``,
+  ``transport_lost``, ``server_error``, ``session_lost``, ``stream_cut``, ``deadline``;
+* the stdio relay (``examples/mcp/stdio_proxy.py``), from its ``InvocationLedger``: why the
+  request went UNKNOWN, if it did (``transport_closed``, ``send_failed``, ``deadline``,
+  ``not_sent_unconfirmed``, ...), or ``resent`` if it was sent again for another reason.
 
 A record holds no arguments, no results and no message text: the method, the tool's name,
 whether the call was keyed, how many attempts it took, the faults met (in order), how it ended,
@@ -59,7 +65,8 @@ EXECUTION_STATE = "io.stateguard/executionState"
 IN_DOUBT_CODE = -32010
 IN_PROGRESS_CODE = -32011
 
-#: Fault names a record may carry (``faults``), in the order they happened.
+#: Fault names an HTTP relay record may carry (``faults``), in the order they happened. The stdio
+#: relay records its ledger's UNKNOWN reasons instead (see the module docstring).
 FAULTS = (
     "connect_retry",  # the connection could not be opened at first; sent once it could
     "not_sent",  # the connection never opened within the retry budget
