@@ -7,8 +7,12 @@ ground truth. Labels: VERIFIED / INFERRED / UNVERIFIED.
 
 ## Rules for scheduled sessions (owner, 2026-11-05)
 
-- Branch `claude/serene-bohr-o28snr`. Push to that branch only. Never push to
-  `main`, merge, force-push or rewrite history.
+- Branch `claude/serene-bohr-o28snr` (the head of PRs #14–#18; VERIFIED
+  2026-11-05: 0 behind and 9 ahead of `main`). Push to that branch only, with a
+  plain fast-forward `git push`. Never push to `main`, merge, rebase,
+  force-push or rewrite history. If the local branch and `origin` have
+  diverged, or a push is rejected, stop: record the conflict in the session
+  log and leave it for the owner.
 - One draft PR from the branch to `main` may be open for review; keep it
   current. Never mark it ready or merge it.
 - One task per session, within the time cap set in the session prompt. No new
