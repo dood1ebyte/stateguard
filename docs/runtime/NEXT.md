@@ -29,33 +29,42 @@ ground truth. Labels: VERIFIED / INFERRED / UNVERIFIED.
 - Also run `ruff check src/ tests/`, `ruff format --check src/ tests/` and
   `mypy src/` before pushing (CI runs them).
 
-## State at handoff (2026-11-05)
+## Phase 1 (2026-11-05 to 11-18): MCP reliability, the founder's mandate
 
-- 8 commits on the branch since PR #18 (2026-11-02 to 11-04): idempotency
-  keys (Python and TypeScript adapters), Python key injection, the Streamable
-  HTTP relay, per-invocation incidence records. No CI run exists for them
-  (CI ran last on `ec339ab`, 2026-10-16). No open PR.
-- Latest results: M16–M20 (controlled fault injection only). Real fault
-  incidence is unmeasured.
+The founder's Phase 1 mandate supersedes "one task per session". Work continuously: take the
+next item, finish it, take the next. The git rules above still hold. Report only at completion
+(Phase Completion Report, then stop and wait for Phase 2 authorization) or on a genuine blocker.
 
-## Queue (take the first item that is not done or blocked)
+**Facts (VERIFIED 2026-11-05):**
+- The container was replaced between sessions. Everything outside the repository was lost:
+  `/root/stateguard-captures` held the raw rows, plans, snapshots and drivers behind M16–M20,
+  and the three untracked outreach notes (never committed, so not recoverable).
+- From now on, measurement code lives in `benchmarks/runtime/realhttp/` and evidence in
+  `benchmarks/evidence/realhttp/<batch>/`, both committed.
+- The toolchain must be rebuilt per container (see "Environment" below).
+- No open PR, and no CI run on the branch since `ec339ab`. Opening a PR needs the founder.
 
-1. **Get CI on the branch.** Open a draft PR `claude/serene-bohr-o28snr` →
-   `main` titled "MCP idempotency keys, key injection, HTTP relay, incidence
-   records". Read CI; fix only genuine failures introduced by these commits.
-2. **Stale pooled connection** (KEY_INJECTION §7, "unmeasured"). Add a fault
-   case where the server closes an idle keep-alive connection as the relay
-   reuses it; measure keyed and unkeyed outcomes; then set the relay's pool
-   idle timeout below the server's (httpx and Node both default to 5 s) and
-   re-measure. Record as M21.
-3. **Real capture for fault incidence.** Follow `CAPTURE_1_PLAN.md` and
-   `REAL_CAPTURE.md`: shadow-only, mask-only capture against local real
-   servers through both relays, then `stateguard incidence`. Label it as
-   local real-stack evidence, never a production rate. If any step needs the
-   owner (traffic, accounts, consent), stop and record the exact action here.
-4. **T9 circuit breaker** (TASKMAP "Next task").
-5. **Second MCP domain** with `outputSchema`, enums/bounds, closed schemas and
-   the SDK 2.x lifecycle (TASKMAP "Next task").
+**Environment (each fresh container):**
+`python3 -m venv .venv && .venv/bin/pip install -e ".[pydantic,mcp,dev]"`;
+`python3 -m venv /tmp/mcp1 && /tmp/mcp1/bin/pip install mcp==1.9.4 mcp-server-sqlite==2025.4.25 pydantic==2.11.7`;
+`(cd adapters/typescript && npm ci)`; server-everything 2026.8.31 into `/opt/sg-servers/everything`.
+Full suite: `STATEGUARD_MCP1_PYTHON=/tmp/mcp1/bin/python .venv/bin/pytest tests/`.
+
+## Phase 1 queue (first not done or blocked; mark done here with its commit)
+
+1. In-repo measurement harness and spec (`benchmarks/runtime/realhttp/`). Re-run the HTTP
+   baseline (notes, tsnotes, everything; all arms; controls) on the current commit as batch
+   B1, so the M17–M19 evidence exists in the repository again.
+2. Stale pooled connection (old queue item 2): fault case, measure, fix (relay pool idle
+   timeout below the server's), re-measure.
+3. Concurrency adversarial validation for the HTTP relay: concurrent sessions and calls under
+   session loss, lost responses and deadlines. Each write exactly once; no cross-session leak.
+4. stdio relay batch in-repo: Python sqlite (keys via injector) and the TypeScript servers
+   (filesystem, memory; keys via preload). The M16 and TS evidence was lost with the container.
+5. Crash-window residual (in doubt, 24/204 per stdio server): bound it, or close it where a
+   sound recovery check exists.
+6. Real capture for incidence (old queue item 3). Owner-only steps go to the session log.
+7. Phase Completion Report (`docs/runtime/PHASE1_COMPLETION_REPORT.md`), then notify the founder.
 
 ## Session log
 

@@ -79,7 +79,7 @@ jobs:
       - name: mcp 1.x environment
         run: |
           python -m venv /tmp/mcp1
-          /tmp/mcp1/bin/pip install "mcp==1.9.4" "mcp-server-sqlite==2025.4.25"
+          /tmp/mcp1/bin/pip install "mcp==1.9.4" "mcp-server-sqlite==2025.4.25" "pydantic==2.11.7"
 
       - name: Run mypy strict on the mcp 1.x modules, against mcp 1.x
         run: >-
@@ -128,7 +128,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
         run: |
           python -m venv /tmp/mcp1
-          /tmp/mcp1/bin/pip install "mcp==1.9.4" "mcp-server-sqlite==2025.4.25"
+          /tmp/mcp1/bin/pip install "mcp==1.9.4" "mcp-server-sqlite==2025.4.25" "pydantic==2.11.7"
           echo "STATEGUARD_MCP1_PYTHON=/tmp/mcp1/bin/python" >> "$GITHUB_ENV"
 
       - name: Run unit + integration tests with coverage

@@ -41,8 +41,14 @@ def _mcp1_python() -> str | None:
         "import importlib.metadata as m, mcp_server_sqlite;"
         "raise SystemExit(0 if int(m.version('mcp').split('.')[0]) < 2 else 1)"
     )
-    ok = subprocess.run([python, "-c", probe], capture_output=True, timeout=60).returncode == 0
-    return python if ok else None
+    done = subprocess.run([python, "-c", probe], capture_output=True, text=True, timeout=60)
+    if done.returncode != 0:
+        # Set but unusable is an error, never a silent skip (CI sets it to run these tests).
+        raise RuntimeError(
+            f"STATEGUARD_MCP1_PYTHON={python} has no usable mcp 1.x and mcp-server-sqlite: "
+            f"{done.stderr.strip().splitlines()[-1:] or done.returncode}"
+        )
+    return python
 
 
 MCP1 = _mcp1_python()
