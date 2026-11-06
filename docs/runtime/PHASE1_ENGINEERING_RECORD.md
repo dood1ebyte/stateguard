@@ -189,6 +189,27 @@ answer came as JSON or as an event stream. The incidence record names the fault
 
 The fault proxy gains TEST-ONLY `rpc_internal_error` and `rpc_internal_error_sse` modes.
 
+### B2: the HTTP matrix on the current code (`benchmarks/evidence/realhttp/B2`, code `1852365`)
+
+B1 repeated on the commit after D4 (pool idle timeout) and D8 (`-32603` retry where safe), as a
+regression check. Same servers, arms, 12 trials, 60-trial controls and 4 workers.
+
+- **Every failure, unsafe and unresolved count matches B1 cell for cell:**
+  - notes and tsnotes: raw 168/168, naive 48/168 (48 duplicates), sg 84/168, sg_keyed 24/168,
+    sg_keyed_deadline 0/168;
+  - everything: raw 72/84, naive 0/84, sg 12/84, sg_deadline 0/84.
+- Fault-free 0 in every arm; no unsafe outcome in a StateGuard arm; 0 relay records disagree
+  with ground truth.
+- As expected: none of B1's faults injects a `-32603`, and the fault proxy closes every
+  connection, so neither change could move a cell. This shows they broke nothing; S1 and the
+  D8 tests are their evidence.
+- **Observed gap in incidence records (B1 and B2 alike).** In the `sg` arm's `hang_after` cells
+  (no deadline), 15 rows in B1 and 18 in B2 have no `invocation` record. The client gives up
+  while the relay still waits on the hung server, and the run ends before the relay finishes
+  the request. A relay writes a record when a request finishes, so one stopped mid-request
+  writes none. The deadline arms always write one. The incidence denominator therefore misses
+  requests that were still open when a relay stopped.
+
 ### Queue item 3: the crash-window residual is a floor without server cooperation
 
 A key claimed and never recorded (`after_begin`, `after_effect`) leaves an effect that carries no
