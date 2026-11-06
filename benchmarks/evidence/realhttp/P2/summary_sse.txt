@@ -1,0 +1,1 @@
+sse: failed 0/60 (0.0%, ci 0.0%-6.0%)  faults {}  resolutions {'answered': 60}  dup 0  false_success 0  not_executed 0  connections 64  call latency {'n': 60, 'mean': 0.091, 'median': 0.089, 'p95': 0.094}
