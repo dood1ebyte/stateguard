@@ -125,19 +125,28 @@ allowed. Early completion or idle capacity never advances the schedule.
 
 ## Phase 1 queue (first not done or blocked; mark done here with its commit)
 
-1. In-repo measurement harness and spec (`benchmarks/runtime/realhttp/`). Re-run the HTTP
-   baseline (notes, tsnotes, everything; all arms; controls) on the current commit as batch
-   B1, so the M17–M19 evidence exists in the repository again.
-2. Stale pooled connection (old queue item 2): fault case, measure, fix (relay pool idle
-   timeout below the server's), re-measure.
-3. Concurrency adversarial validation for the HTTP relay: concurrent sessions and calls under
-   session loss, lost responses and deadlines. Each write exactly once; no cross-session leak.
-4. stdio relay batch in-repo: Python sqlite (keys via injector) and the TypeScript servers
-   (filesystem, memory; keys via preload). The M16 and TS evidence was lost with the container.
-5. Crash-window residual (in doubt, 24/204 per stdio server): bound it, or close it where a
-   sound recovery check exists.
-6. Real capture for incidence (old queue item 3). Owner-only steps go to the session log.
-7. Phase Completion Report (`docs/runtime/PHASE1_COMPLETION_REPORT.md`), then notify the founder.
+Done in Session 1 (2026-11-06); details are in `PHASE1_ENGINEERING_RECORD.md`:
+- in-repo harnesses and evidence; B1 (HTTP baseline, `6181cc2`);
+- the stale pooled connection fix with S1 (`8de3735`, `cbb396a`);
+- the concurrency crash test (`8de3735`);
+- the stdio baseline S2 (`24a975c`);
+- the `-32603` retry where safe, with S3 (`a8ed63d`, `dcf0b0c`);
+- defects D2, D3, D5 and D6, and the regression on Python 3.11, 3.13 and 3.14.
+
+Next, in order:
+1. **One full stdio re-run on the current commit** (S4: S2's matrix), so the stdio residual is a
+   single-batch number. Expected sg_keyed: 24/132 per server.
+2. **HTTP parity for `-32603`.** The HTTP relay delivers a server's JSON-RPC error as is. Apply
+   the same rule to recoverable requests: declared reads and keyed calls.
+3. **Crash-window residual** (after_begin and after_effect, in doubt): bound it, or close it
+   where a sound recovery check exists (e.g. sqlite: an INSERT's row is findable only if the
+   statement carries a unique marker, which the tool does not guarantee). Research first.
+4. **The cost of event-stream answers.** The relay opens a new upstream connection per answer:
+   measure it, and decide whether reading to the stream's end (to allow reuse) is worth it.
+5. **Paired single-worker overhead** for the stdio relay. S2's means include starting the relay
+   process.
+6. **Real capture for incidence** (owner-dependent; see the old queue item 3).
+7. Phase Completion Report (Session 6).
 
 ## Session log
 

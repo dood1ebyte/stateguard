@@ -124,10 +124,31 @@ per fault-free cell. Strict scoring, Wilson 95%.
   - sqlite: raw 1.307 s, sg 1.535 s, sg_keyed 1.701 s;
   - memory: raw 1.129 s, sg 1.366 s, sg_keyed 1.453 s.
 
-### Next: retrying `-32603` where it is safe
+### D7: retrying a server's internal error (-32603) where it is safe (`a8ed63d`)
 
-`decide_retry` treats every JSON-RPC error as "the server rejected the request; it would
-again". That is right for -32600, -32601 and -32602. A `-32603` (internal error) may be
-transient. Retrying it once is safe for a declared read, a declared idempotent tool and a keyed
-call, and never for an unkeyed non-idempotent write: an internal error may come after the
-effect.
+**The change.**
+- `classify_response` gives JSON-RPC `-32603` its own class, `SERVER` (`Observed.SERVER_ERROR`).
+- `decide_retry` treats it like a tool error: it is retried once for a keyed call, or for a tool
+  the operator declared `read_only` or `idempotent`.
+- Otherwise it is delivered as the server sent it, because an internal error may come after the
+  effect.
+- Every other JSON-RPC error is still never retried. Auth signals and an upstream relay's
+  execution state still take precedence.
+
+**Tests:** classification and precedence, the rule, the attempt limit, the property test, and
+the stdio relay end to end.
+
+**S3** (`benchmarks/evidence/realstdio/S3`, code `a8ed63d`): the transient cells, 12 trials,
+both servers.
+
+| Cell | S2 (before): sg / sg_keyed | S3 (after): sg / sg_keyed |
+|---|---|---|
+| read/transient | 12/12 / 12/12 | **0/12 / 0/12** |
+| write/transient | 12/12 / 12/12 | 12/12 (never resent: unkeyed non-idempotent) / **0/12** |
+
+- 0 unsafe outcomes; fault-free 0/24 per arm; all 192 relay records match ground truth.
+- **Combined stdio picture, per server.** Taking S2's other cells with S3's transient cells, the
+  keyed relay's residual is **24/132**: the after_begin and after_effect crash windows, in
+  doubt by design.
+  - These are two batches at different commits. The change affects only `-32603` handling, but
+    a single-batch confirmation remains open (queue).
