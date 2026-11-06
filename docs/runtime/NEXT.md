@@ -131,22 +131,22 @@ Done in Session 1 (2026-11-06); details are in `PHASE1_ENGINEERING_RECORD.md`:
 - the concurrency crash test (`8de3735`);
 - the stdio baseline S2 (`24a975c`);
 - the `-32603` retry where safe, with S3 (`a8ed63d`, `dcf0b0c`);
-- defects D2, D3, D5 and D6, and the regression on Python 3.11, 3.13 and 3.14.
+- defects D2, D3, D5 and D6, and the regression on Python 3.11, 3.13 and 3.14;
+- S4, the stdio matrix in one batch (`37a54cb`): sg_keyed 24/132 per server, only the two crash
+  windows, in doubt;
+- D8, HTTP parity for `-32603` (`1852365`);
+- queue item 3 concluded: the crash-window residual is a floor without server cooperation
+  (record, "Queue item 3").
 
 Next, in order:
-1. **One full stdio re-run on the current commit** (S4: S2's matrix), so the stdio residual is a
-   single-batch number. Expected sg_keyed: 24/132 per server.
-2. **HTTP parity for `-32603`.** The HTTP relay delivers a server's JSON-RPC error as is. Apply
-   the same rule to recoverable requests: declared reads and keyed calls.
-3. **Crash-window residual** (after_begin and after_effect, in doubt): bound it, or close it
-   where a sound recovery check exists (e.g. sqlite: an INSERT's row is findable only if the
-   statement carries a unique marker, which the tool does not guarantee). Research first.
-4. **The cost of event-stream answers.** The relay opens a new upstream connection per answer:
-   measure it, and decide whether reading to the stream's end (to allow reuse) is worth it.
-5. **Paired single-worker overhead** for the stdio relay. S2's means include starting the relay
-   process.
-6. **Real capture for incidence** (owner-dependent; see the old queue item 3).
-7. Phase Completion Report (Session 6).
+1. **B2** (HTTP matrix on `1852365`, a regression check of D4 and D8): plan in
+   `benchmarks/evidence/realhttp/B2/PLAN.md`.
+2. **P1** (paired single-worker overhead, HTTP and stdio) and **P2** (the cost of event-stream
+   answers): plans in `benchmarks/evidence/{realhttp,realstdio}/P1/` and `realhttp/P2/`.
+3. **Decide on event-stream reuse** from P2: reading to the stream's end would let the relay
+   reuse the connection; only worth it if P2 shows a material cost.
+4. **Real capture for incidence** (owner-dependent; see the old queue item 3).
+5. Phase Completion Report (Session 6).
 
 ## Session log
 
