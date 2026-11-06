@@ -1,0 +1,27 @@
+rows 120  driver_errors 0
+
+===== sqlite
+
+raw
+  fault-free  0/40 (0.0%, ci 0.0%-8.8%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw -  recovered_vs_raw -
+  latency fault-free {'n': 40, 'mean': 1.216, 'median': 1.207, 'p95': 1.311}
+
+sg
+  fault-free  0/40 (0.0%, ci 0.0%-8.8%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 40, mismatching ground truth 0
+  latency fault-free {'n': 40, 'mean': 1.435, 'median': 1.434, 'p95': 1.54}
+
+sg_keyed
+  fault-free  0/40 (0.0%, ci 0.0%-8.8%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 40, mismatching ground truth 0
+  latency fault-free {'n': 40, 'mean': 1.571, 'median': 1.574, 'p95': 1.705}
+
+op/mode                                 raw                 sg           sg_keyed
+read/none                          0/20               0/20               0/20    
+write/none                         0/20               0/20               0/20    
