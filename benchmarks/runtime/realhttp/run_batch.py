@@ -19,6 +19,7 @@ Run one recorded realhttp batch (TEST-ONLY harness).
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -84,11 +85,18 @@ def main(argv: list[str]) -> int:
         raise SystemExit(f"refusing to overwrite {rows_path}")
     commit = _out(["git", "rev-parse", args.commit], REPO)
     worktree = Path(tempfile.gettempdir()) / f"sg-code-{commit[:12]}"
-    if not worktree.exists():
-        subprocess.run(
-            ["git", "worktree", "add", "--detach", str(worktree), commit], cwd=REPO, check=True
-        )
-    # The node_modules link (added below) is the one entry allowed: the repository ignores
+    # Parts run in parallel share the worktree: one creates it, the others wait for it.
+    with (Path(tempfile.gettempdir()) / f"sg-code-{commit[:12]}.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not worktree.exists():
+            subprocess.run(
+                ["git", "worktree", "add", "--detach", str(worktree), commit], cwd=REPO, check=True
+            )
+        modules = REPO / "adapters" / "typescript" / "node_modules"
+        link = worktree / "adapters" / "typescript" / "node_modules"
+        if modules.exists() and not link.exists():
+            link.symlink_to(modules)
+    # The node_modules link (added above) is the one entry allowed: the repository ignores
     # "node_modules/", which matches a directory but not a symlink.
     dirty = _out(
         ["git", "status", "--porcelain", "--", ".", ":(exclude)adapters/typescript/node_modules"],
@@ -96,10 +104,6 @@ def main(argv: list[str]) -> int:
     )
     if dirty:
         raise SystemExit(f"{worktree} is not clean:\n{dirty}")
-    modules = REPO / "adapters" / "typescript" / "node_modules"
-    link = worktree / "adapters" / "typescript" / "node_modules"
-    if modules.exists() and not link.exists():
-        link.symlink_to(modules)
     python = os.environ.get("STATEGUARD_PYTHON", sys.executable)
     node = os.environ.get("NODE") or shutil.which("node") or "/opt/node22/bin/node"
     lock = worktree / "adapters" / "typescript" / "package-lock.json"
