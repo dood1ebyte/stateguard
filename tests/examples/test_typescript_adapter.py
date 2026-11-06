@@ -48,13 +48,27 @@ PROBE = TS / "test" / "fixtures" / "contract_probe.ts"
 TS_SERVER = TS / "examples" / "keyed_reference_server.ts"
 PRELOAD = TS / "src" / "preload.ts"
 RELAY = ROOT / "examples" / "mcp" / "stdio_proxy.py"
-FS_SERVER = Path(
+
+
+def _pinned(env: str, *candidates: str) -> Path:
+    """A pinned third-party server: $env, else the first install location that exists."""
+    if os.environ.get(env):
+        return Path(os.environ[env])
+    paths = [Path(c) for c in candidates]
+    return next((p for p in paths if p.exists()), paths[0])
+
+
+FS_SERVER = _pinned(
+    "STATEGUARD_FS_SERVER",
+    "/opt/sg-servers/filesystem/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
     "/root/stateguard-captures/domain2-fs/server/node_modules/@modelcontextprotocol/"
-    "server-filesystem/dist/index.js"
+    "server-filesystem/dist/index.js",
 )
-MEM_SERVER = Path(
+MEM_SERVER = _pinned(
+    "STATEGUARD_MEM_SERVER",
+    "/opt/sg-servers/memory/node_modules/@modelcontextprotocol/server-memory/dist/index.js",
     "/root/stateguard-captures/domain2-candidates/mem/node_modules/@modelcontextprotocol/"
-    "server-memory/dist/index.js"
+    "server-memory/dist/index.js",
 )
 INIT = {
     "protocolVersion": "2025-11-25",

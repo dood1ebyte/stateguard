@@ -46,7 +46,7 @@ next item, finish it, take the next. The git rules above still hold. Report only
 **Environment (each fresh container):**
 `python3 -m venv .venv && .venv/bin/pip install -e ".[pydantic,mcp,dev]"`;
 `python3 -m venv /tmp/mcp1 && /tmp/mcp1/bin/pip install mcp==1.9.4 mcp-server-sqlite==2025.4.25 pydantic==2.11.7`;
-`(cd adapters/typescript && npm ci)`; server-everything 2026.8.31 into `/opt/sg-servers/everything`.
+`(cd adapters/typescript && npm ci)`; pinned third-party servers into `/opt/sg-servers/` (`npm install` in `everything/`, `memory/`, `filesystem/`: `@modelcontextprotocol/server-everything@2026.8.31`, `server-memory@2026.8.31`, `server-filesystem@2026.8.31`). Other Pythons for CI's matrix: `/usr/bin/python3.11`, `/usr/bin/python3.12`; 3.14 with `uv python install 3.14 --install-dir /opt/uvpython` (not under /root: the executor-scope tests run a child as an unprivileged user).
 Full suite: `STATEGUARD_MCP1_PYTHON=/tmp/mcp1/bin/python .venv/bin/pytest tests/`.
 
 ## STOPPED by the founder (2026-11-05, ~21:50 UTC): resume Monday 2026-11-09 09:00 IST
