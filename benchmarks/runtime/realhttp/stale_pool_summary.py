@@ -11,6 +11,7 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, __import__("os").path.dirname(__file__))
+from summarize import latency as _latency  # noqa: E402
 from summarize import wilson  # noqa: E402
 
 
@@ -49,13 +50,15 @@ def main(argv: list[str]) -> None:
             "false_success": sum(r["false_success"] for r in a),
             "not_executed": sum(r["count"] == 0 for r in a),
             "upstream_connections": connections.get(arm),
+            "call_latency_s": _latency([r["answer"] for r in a]),
         }
         e = result[arm]
         print(
             f"{arm}: failed {fail}/{len(a)} ({e['rate']:.1%}, ci {lo:.1%}-{hi:.1%})  "
             f"faults {e['relay_faults']}  resolutions {e['relay_resolutions']}  "
             f"dup {e['duplicates']}  false_success {e['false_success']}  "
-            f"not_executed {e['not_executed']}  connections {e['upstream_connections']}"
+            f"not_executed {e['not_executed']}  connections {e['upstream_connections']}  "
+            f"call latency {e['call_latency_s']}"
         )
     if out_json:
         with open(out_json, "w") as fh:
