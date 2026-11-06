@@ -65,6 +65,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("batch")
     parser.add_argument("commit")
     parser.add_argument("--part", default="")
+    parser.add_argument("--driver", default="driver.py", help="driver.py or stale_pool.py")
     args = parser.parse_args(argv[:split])
     driver_args = argv[split + 1 :]
     out = EVIDENCE / args.batch
@@ -104,6 +105,7 @@ def main(argv: list[str]) -> int:
         "harness_dirty": bool(
             _out(["git", "status", "--porcelain", "--", "benchmarks/runtime"], REPO)
         ),
+        "driver": args.driver,
         "driver_args": driver_args,
         "trial_offset": os.environ.get("TRIAL_OFFSET", "0"),
         "python": _out([python, "-c", "import sys; print(sys.version.split()[0])"]),
@@ -130,7 +132,7 @@ def main(argv: list[str]) -> int:
     }
     with rows_path.open("w") as rows, (out / f"rows{suffix}.err").open("w") as err:
         code = subprocess.run(
-            [python, str(HERE / "driver.py"), *driver_args],
+            [python, str(HERE / args.driver), *driver_args],
             stdout=rows,
             stderr=err,
             env=env,
@@ -144,11 +146,12 @@ def main(argv: list[str]) -> int:
         with tarfile.open(out / f"failing{suffix}.tar.gz", "w:gz") as tar:
             tar.add(failing, arcname=f"failing{suffix}")
     shutil.rmtree(runs, ignore_errors=True)
+    scorer = "summarize.py" if args.driver == "driver.py" else "stale_pool_summary.py"
     with (out / f"summary{suffix}.txt").open("w") as summary:
         subprocess.run(
             [
                 python,
-                str(HERE / "summarize.py"),
+                str(HERE / scorer),
                 str(rows_path),
                 "--json",
                 str(out / f"summary{suffix}.json"),
