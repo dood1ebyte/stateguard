@@ -18,7 +18,7 @@ Arms:
   raw        client -> shim -> server
   naive      raw, plus a blind resend on a new session after any failure (no key)
   sg         client -> stdio relay (--retry auto, --restart 2 after-unknown, the write declared
-             non_idempotent, --call-deadline 2) -> shim -> server
+             non_idempotent and the read read_only, --call-deadline 2) -> shim -> server
   sg_keyed   sg, and the server keyed (injector / preload)
 
 Faults (TEST-ONLY): transport faults from ``shim.py`` (kill_before, lost_exit, hang, transient)
@@ -67,6 +67,7 @@ CELLS = {
 }
 ARMS = {s: ["raw", "naive", "sg", "sg_keyed"] for s in ("sqlite", "memory")}
 WRITE_TOOL = {"sqlite": "write_query", "memory": "add_observations"}
+READ_TOOL = {"sqlite": "read_query", "memory": "search_nodes"}
 CLIENT_WAIT = 8.0
 
 
@@ -126,8 +127,12 @@ def run(server: str, cell: str, arm: str, t: int) -> dict:
                str(base / "fault_flag"), "--log", str(base / "shim.log"), "--", *cmd]
     if arm.startswith("sg"):
         effects = base / "effects.json"
-        effects.write_text(json.dumps({"tools": [{"name": WRITE_TOOL[server],
-                                                  "effect": "non_idempotent"}]}))
+        # As an operator declares them: the stdio relay re-requests only a declared read (a
+        # server's readOnlyHint is never a declaration), and never resends the write.
+        effects.write_text(json.dumps({"tools": [
+            {"name": WRITE_TOOL[server], "effect": "non_idempotent"},
+            {"name": READ_TOOL[server], "effect": "read_only"},
+        ]}))
         command = [PY, RELAY, "--retry", "auto", "--restart", "2", "--restart-policy",
                    "after-unknown", "--effects", str(effects), "--trust-read-only-hints",
                    "--call-deadline", "2", "--audit", str(base / "audit.jsonl"), "--", *command]

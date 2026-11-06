@@ -13,6 +13,12 @@ its container. S2 re-establishes it with the in-repo harness (`benchmarks/runtim
 **Arms:** raw, naive (blind resend on a new process), sg (relay: retry auto, restart 2
 after-unknown, write declared non_idempotent, call deadline 2 s), sg_keyed.
 
+**Amendment (2026-11-06 09:52 IST, after an aborted first start).** The first start
+declared only the write. The stdio relay re-requests only an operator-declared read: a
+server's `readOnlyHint` is never a declaration, and mcp-server-sqlite has none anyway. So no
+read could recover; the relay was right, the configuration was incomplete. Its 68 rows are in
+`aborted/`. The relay arms now declare the read tool `read_only` too. Nothing else changes.
+
 **Cells (13):**
 - read/none and write/none;
 - read and write × the shim faults kill_before, lost_exit, hang, transient;
@@ -26,6 +32,7 @@ after-unknown, write declared non_idempotent, call deadline 2 s), sg_keyed.
   after_effect, after_record. It cannot duplicate on memory.
 - sg_keyed recovers every transport cell and after_record. after_begin and after_effect stay
   in doubt (failed, never success): 24/132 faulted per server.
-- sg recovers reads. Unkeyed writes whose outcome is unknown stay unknown, and none is resent.
+- sg recovers declared reads after kill_before, lost_exit and hang. A `transient` answer (a
+  JSON-RPC -32603 error) is delivered as the server sent it: protocol errors are not retried. Unkeyed writes whose outcome is unknown stay unknown, and none is resent.
 - 0 duplicates and 0 false successes in sg and sg_keyed; fault-free 0 in every arm; 0
   invocation-record mismatches.
