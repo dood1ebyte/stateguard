@@ -26,7 +26,7 @@ from stateguard.adapters.mcp.failures import MAX_TEXT_SCANNED
 AUTHN, AUTHZ = FailureClass.AUTHENTICATION, FailureClass.AUTHORIZATION
 
 
-def rpc(message: Any = "Request failed", *, code: int = -32603, data: Any = None) -> dict[str, Any]:
+def rpc(message: Any = "Request failed", *, code: int = -32000, data: Any = None) -> dict[str, Any]:
     error: dict[str, Any] = {"code": code, "message": message}
     if data is not None:
         error["data"] = data
@@ -100,10 +100,24 @@ def test_structured_non_signals(data: Any) -> None:
     assert classify_response(rpc(data=data)).failure is FailureClass.PROTOCOL
 
 
-@pytest.mark.parametrize("code", [-32000, -32001, -32002, -32600, -32601, -32602, -32603, 401, 403])
+@pytest.mark.parametrize("code", [-32000, -32001, -32002, -32600, -32601, -32602, 401, 403])
 def test_json_rpc_codes_alone_never_mean_auth(code: int) -> None:
     # MCP has no auth error code; -32001 is the SDK's request timeout.
     assert classify_response(rpc("Request failed", code=code)).failure is FailureClass.PROTOCOL
+
+
+def test_an_internal_error_is_a_server_failure_not_a_rejection() -> None:
+    """-32603: the server failed (perhaps transiently); it did not reject the request."""
+    result = classify_response(rpc("Internal error", code=-32603))
+    assert result.failure is FailureClass.SERVER and result.signal == "code:-32603"
+    assert result.observed is Observed.SERVER_ERROR and not result.is_auth
+
+
+def test_auth_and_execution_state_still_win_over_an_internal_error_code() -> None:
+    assert classify_response(rpc("401 Unauthorized", code=-32603)).is_auth
+    assert classify_response(rpc(code=-32603, data={"status": 403})).is_auth
+    unknown = {"io.stateguard/executionState": "unknown"}
+    assert classify_response(rpc(code=-32603, data=unknown)).failure is FailureClass.UNKNOWN
 
 
 def test_tool_structured_content_is_never_read() -> None:

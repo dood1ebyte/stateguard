@@ -77,6 +77,7 @@ class ServerAction(StrEnum):
     HANG_BEFORE_EXECUTE = "hang_before_execute"  # never execute, never answer
     TRANSIENT_ERROR = "transient_error"  # do not execute, answer isError (temporary)
     AUTH_EXPIRED = "auth_expired"  # do not execute, answer a JSON-RPC auth error
+    INTERNAL_ERROR = "internal_error"  # do not execute, answer a JSON-RPC -32603
     DELAYED_RESPONSE = "delayed_response"  # execute, answer correctly after DELAY_SECONDS
     # execute, answer success with structuredContent breaking the tool's
     # outputSchema (the definition's "x-bad-structured")
@@ -325,6 +326,19 @@ class ScriptedServer:
         if action is ServerAction.TRANSIENT_ERROR:
             self._free_key(key)
             self._reply(writer, identifier, _error_result(f"{name}: temporarily unavailable"))
+            return True
+        if action is ServerAction.INTERNAL_ERROR:
+            self._free_key(key)
+            self._write(
+                writer,
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": identifier,
+                        "error": {"code": -32603, "message": "Internal error"},
+                    }
+                ).encode(),
+            )
             return True
         if action is ServerAction.AUTH_EXPIRED:
             self._free_key(key)

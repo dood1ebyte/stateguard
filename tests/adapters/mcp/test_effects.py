@@ -159,7 +159,8 @@ def test_property_the_safety_invariants_hold_everywhere(
             Observed.AUTH_ERROR,
             Observed.PROTOCOL_ERROR,
         )
-        assert observed is Observed.TOOL_ERROR  # only a knowingly failed attempt
+        # only a knowingly failed attempt: a tool error, or a server's internal error
+        assert observed in (Observed.TOOL_ERROR, Observed.SERVER_ERROR)
     if observed.outcome_unknown:
         assert v.decision is T.AMBIGUOUS  # never retried, whatever the effect
     if observed.outcome_unknown:
@@ -173,3 +174,48 @@ def test_property_the_safety_invariants_hold_everywhere(
         connection_available=connected,
     )
     assert bare == v
+
+
+# -- a server's internal error (-32603) is retried only where repeating is safe ---------------
+
+
+@pytest.mark.parametrize(
+    ("effect", "declared", "keyed", "retried"),
+    [
+        (Effect.READ_ONLY, True, False, True),
+        (Effect.IDEMPOTENT, True, False, True),
+        (Effect.NON_IDEMPOTENT, True, False, False),  # it may have taken effect
+        (Effect.UNKNOWN, False, False, False),
+        (Effect.READ_ONLY, False, False, False),  # a hint or a guess is never a declaration
+        (Effect.NON_IDEMPOTENT, True, True, True),  # keyed: answered from the server's record
+    ],
+)
+def test_a_server_internal_error_is_retried_only_where_safe(
+    effect: Effect, declared: bool, keyed: bool, retried: bool
+) -> None:
+    verdict = decide_retry(
+        Observed.SERVER_ERROR,
+        EffectDeclaration(effect, declared=declared),
+        attempts_made=1,
+        keyed=keyed,
+    )
+    assert verdict.retry is retried
+
+
+def test_a_server_internal_error_is_retried_at_most_up_to_the_attempt_limit() -> None:
+    read = EffectDeclaration(Effect.READ_ONLY, declared=True)
+    assert not decide_retry(Observed.SERVER_ERROR, read, attempts_made=2, max_attempts=2).retry
+    assert not decide_retry(
+        Observed.SERVER_ERROR, read, attempts_made=2, max_attempts=2, keyed=True
+    ).retry
+
+
+def test_a_protocol_error_is_still_never_retried() -> None:
+    for keyed in (False, True):
+        verdict = decide_retry(
+            Observed.PROTOCOL_ERROR,
+            EffectDeclaration(Effect.READ_ONLY, declared=True),
+            attempts_made=1,
+            keyed=keyed,
+        )
+        assert not verdict.retry

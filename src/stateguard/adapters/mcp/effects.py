@@ -49,7 +49,9 @@ The rules, in order:
 2. An authentication or authorization failure: never retried -- it is the
    operator's (or the user's) to resolve, and repeating it cannot help.
 3. A JSON-RPC protocol error: never retried -- the server rejected the
-   request itself; sending it again gets the same answer.
+   request itself; sending it again gets the same answer. A JSON-RPC
+   *internal* error (-32603, ``SERVER_ERROR``) is not a rejection: the server
+   failed, perhaps transiently. It goes on to rule 5, like a tool error.
 4. An unknown outcome (no answer by the deadline, or the connection lost
    with the request in flight): **never retried** -- escalated. It may have
    executed; replaying an uncertain side effect is not StateGuard's call,
@@ -68,7 +70,9 @@ The rules, in order:
      honours. The resend is the same request with the same key; the server
      answers it from its own durable record (the recorded result, or "in
      doubt") and never executes it twice. See ``idempotency``.
-5. From here the attempt failed *knowingly* (a tool error). The attempt
+5. From here the attempt failed *knowingly* (a tool error, or a server's
+   internal error, after which the call may or may not have taken effect:
+   so, as for a tool error, only what is safe to repeat is repeated). The attempt
    budget is spent: deliver the error. A keyed call (see below) is resent
    once: the server answers a recorded error from its record, and executes
    only a key it never claimed.
@@ -229,6 +233,9 @@ class Observed(StrEnum):
     ANSWERED_LOCALLY = "answered_locally"  # StateGuard refused / escalated; never sent
     TOOL_ERROR = "tool_error"  # the server answered with isError: true
     PROTOCOL_ERROR = "protocol_error"  # the server answered with a JSON-RPC error
+    # the server answered a JSON-RPC internal error (-32603): it failed, perhaps transiently;
+    # retried only where repeating is safe (keyed, or declared read_only / idempotent)
+    SERVER_ERROR = "server_error"
     # authentication or authorization failure (stateguard.adapters.mcp.failures)
     AUTH_ERROR = "auth_error"
     UNKNOWN_DEADLINE = "unknown_deadline"  # sent, unanswered in time; may have executed
@@ -316,7 +323,9 @@ def decide_retry(
             "outcome unknown: it may have executed, and an unknown outcome is never re-sent "
             "automatically, whatever the tool's declared effect; escalated",
         )
-    # From here on the attempt failed *knowingly* (a tool error).
+    # From here on the attempt failed *knowingly*: a tool error, or a server's internal error
+    # (SERVER_ERROR), after which the call may or may not have taken effect -- so only what
+    # is safe to repeat is repeated.
     if attempts_made >= max_attempts:
         return RetryVerdict(reject, f"{attempts_made} attempt(s) made, the most allowed")
     if keyed:

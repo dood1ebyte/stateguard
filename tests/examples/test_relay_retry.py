@@ -220,3 +220,33 @@ def test_retry_off_records_nothing() -> None:
         assert _decisions(rig) == []
     finally:
         rig.close()
+
+
+# -- a server's internal error (JSON-RPC -32603) ------------------------------------------------
+
+
+@pytest.mark.parametrize("tool", ["search", "upsert"])
+def test_an_internal_error_on_a_tool_declared_safe_to_repeat_is_retried(tool: str) -> None:
+    rig = _rig({0: ServerAction.INTERNAL_ERROR})
+    try:
+        response = rig.call(tool, {"q": "x"})
+        assert _ok(response) and response["id"] == rig.sent_ids[-1]
+        assert len(rig.server.executed) == 1
+        (decision,) = _decisions(rig)
+        assert decision["observed"] == "server_error" and decision["acted"] is True
+    finally:
+        rig.close()
+
+
+@pytest.mark.parametrize("tool", ["pay", "hinted"])
+def test_an_internal_error_on_any_other_tool_is_delivered_never_retried(tool: str) -> None:
+    """Non-idempotent, or only hinted safe: an internal error may come after the effect."""
+    rig = _rig({0: ServerAction.INTERNAL_ERROR})
+    try:
+        response = rig.call(tool, {"q": "x"})
+        assert response is not None and response["error"]["code"] == -32603
+        assert rig.server.executed == [] and _calls_sent(rig) == 1
+        (decision,) = _decisions(rig)
+        assert decision["observed"] == "server_error" and decision["acted"] is False
+    finally:
+        rig.close()
