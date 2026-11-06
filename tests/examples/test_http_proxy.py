@@ -1122,3 +1122,40 @@ def test_concurrent_sessions_across_a_server_crash_never_duplicate_or_misreport(
     for text in late:
         assert _ok(answers[text]), (text, answers[text])
     assert "session_reopened" in rig.events()
+
+
+# -- a server's internal error (JSON-RPC -32603) ------------------------------------------------
+
+
+def test_an_internal_error_on_a_declared_read_is_requested_again(rig: Rig) -> None:
+    effects = rig.tmp / "effects.json"
+    effects.write_text(json.dumps({"tools": [{"name": "list_notes", "effect": "read_only"}]}))
+    rig.server()
+    rig.faults("rpc_internal_error", tool="list_notes")
+    rig.relay("--retry", "auto", "--effects", str(effects))
+    answer = _session(rig.relay_url, _call("list_notes", {}))
+    assert _ok(answer) and rig.calls_reaching_server() == 1  # the fault answered the first
+    (record,) = [
+        e for e in rig.audit() if e["event"] == "invocation" and e["method"] == "tools/call"
+    ]
+    assert record["faults"] == ["internal_error"] and record["resolution"] == "recovered"
+
+
+@pytest.mark.parametrize("mode", ["rpc_internal_error", "rpc_internal_error_sse"])
+def test_an_internal_error_on_a_keyed_write_is_resent_and_runs_once(rig: Rig, mode: str) -> None:
+    """Answered as JSON (the relay settles it) or as an event stream (the relay streams it)."""
+    rig.server(keyed=True)
+    rig.faults(mode)
+    rig.relay("--retry", "auto")
+    answer = _session(rig.relay_url, _add_note())
+    assert _ok(answer) and (answer.meta or {}).get(OUTCOME) == "executed"
+    assert rig.notes() == ["a"]
+
+
+def test_an_internal_error_on_an_unkeyed_write_is_delivered_never_resent(rig: Rig) -> None:
+    rig.server()
+    rig.faults("rpc_internal_error")
+    rig.relay("--retry", "auto")
+    answer = _session(rig.relay_url, _add_note())
+    assert getattr(answer, "code", None) == -32603
+    assert rig.notes() == [] and rig.calls_reaching_server() == 0

@@ -135,6 +135,7 @@ from stateguard.adapters.mcp import (
     ToolNotFoundError,
     ToolRegistry,
     ToolSchemaUnusableError,
+    classify_response,
     forward_message,
     refusal_response,
 )
@@ -144,6 +145,7 @@ from stateguard.adapters.mcp.effects import (
     Observed,
     decide_retry,
 )
+from stateguard.adapters.mcp.failures import INTERNAL_ERROR_CODE
 from stateguard.adapters.mcp.idempotency import (
     IDEMPOTENCY_KEY,
     new_key,
@@ -991,7 +993,16 @@ class Relay:
                 elif kind == "end":
                     answer = item
             if answer is not None:
-                final = {**answer, "id": client_id}
+                again = await self._again_after_internal_error(
+                    request, message, sent, session, state, answer, keyed, tool
+                )
+                if again is not None:
+                    settled = await self._settle(
+                        request, message, sent, session, state, again, keyed, tool
+                    )
+                    final = _as_message(client_id, settled)
+                else:
+                    final = {**answer, "id": client_id}
                 self._learn(str(message.get("method")), final)
                 self._release(session, client_id, state)
                 state["final"] = final
@@ -1029,8 +1040,17 @@ class Relay:
                 yield sse(final_message)
                 return
             if attempt.message is not None:
+                again = await self._again_after_internal_error(
+                    request, message, sent, session, state, attempt.message, keyed, tool
+                )
+                if again is not None:
+                    settled = await self._settle(
+                        request, message, sent, session, state, again, keyed, tool
+                    )
+                    final = _as_message(client_id, settled)
+                else:
+                    final = {**attempt.message, "id": client_id}
                 self._release(session, client_id, state)
-                final = {**attempt.message, "id": client_id}
                 self._learn(str(message.get("method")), final)
                 state["final"] = final
                 yield sse(final)
@@ -1051,14 +1071,18 @@ class Relay:
         client_id = message.get("id")
         while True:
             if attempt.kind == "answer":
-                if attempt.message is not None:
-                    self._release(session, client_id, state)
-                    return {**attempt.message, "id": client_id}
-                answer: dict[str, Any] | None = None
-                async for kind, item in self._events(request, attempt, session, state):
-                    if kind == "end":
-                        answer = item
+                answer: dict[str, Any] | None = attempt.message
+                if answer is None:
+                    async for kind, item in self._events(request, attempt, session, state):
+                        if kind == "end":
+                            answer = item
                 if answer is not None:
+                    again = await self._again_after_internal_error(
+                        request, message, sent, session, state, answer, keyed, tool
+                    )
+                    if again is not None:
+                        attempt = again
+                        continue
                     self._release(session, client_id, state)
                     return {**answer, "id": client_id}
                 attempt = Attempt("unknown", reason="stream_cut")
@@ -1083,6 +1107,48 @@ class Relay:
             if attempt.kind in ("not_sent", "unknown", "session_lost", "final"):
                 self._release(session, client_id, state)
                 return self._final(client_id, attempt)
+
+    async def _again_after_internal_error(
+        self,
+        request: Request,
+        message: dict[str, Any],
+        sent: dict[str, Any],
+        session: Session | None,
+        state: dict[str, Any],
+        answer: dict[str, Any],
+        keyed: bool,
+        tool: str | None,
+    ) -> Attempt | None:
+        """
+        The server answered a JSON-RPC internal error (-32603): one more attempt if the request
+        is safe to repeat (a keyed call, a declared read or idempotent tool, a request that
+        changes nothing), as the stdio relay decides it. Otherwise ``None``: the answer stands.
+        """
+        error = answer.get("error")
+        if (
+            self.passthrough
+            or self.retry != "auto"
+            or not isinstance(error, dict)
+            or error.get("code") != INTERNAL_ERROR_CODE
+            or classify_response(answer).observed is not Observed.SERVER_ERROR
+        ):
+            return None
+        retry, why = self._decide(message, Observed.SERVER_ERROR, state["attempts"], keyed, tool)
+        self.log(
+            "retry_decision",
+            id=message.get("id"),
+            method=message.get("method"),
+            tool=tool,
+            keyed=keyed,
+            observed=Observed.SERVER_ERROR.value,
+            attempts=state["attempts"],
+            retry=retry,
+            reason=why,
+        )
+        if not retry:
+            return None
+        state["faults"].append("internal_error")
+        return await self._attempt(request, sent, session, state)
 
     async def _recover(
         self,
@@ -1298,6 +1364,16 @@ async def _released(
     finally:
         relay._release(session, message.get("id"), state)
         relay._record(session, message, state, state.get("final"))
+
+
+def _as_message(client_id: Any, settled: dict[str, Any] | Response) -> dict[str, Any]:
+    """A settled answer for an event stream: the server's error status becomes its body."""
+    if isinstance(settled, dict):
+        return settled
+    parsed = _json_object(bytes(settled.body))
+    if parsed is not None:
+        return {**parsed, "id": client_id}
+    return unknown_outcome_response(client_id, "server_error")
 
 
 def _key(identifier: Any) -> str:

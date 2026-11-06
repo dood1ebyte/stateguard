@@ -152,3 +152,52 @@ both servers.
   doubt by design.
   - These are two batches at different commits. The change affects only `-32603` handling, but
     a single-batch confirmation remains open (queue).
+
+### S4: the stdio matrix in one batch (`benchmarks/evidence/realstdio/S4`, code `180fae6`)
+
+S2's matrix again, on one commit after D7. The results are per server, and sqlite and memory
+match cell for cell except the naive arm.
+
+| Arm | Faulted failures | Transport | Unsafe outcomes |
+|---|---|---|---|
+| raw | 132/132 | 96/96 | 36 false failures |
+| naive | sqlite 48/132, **48 duplicate rows**; memory 0/132 | — | sqlite: 48 duplicates |
+| sg | 84/132 | 48/96 | 0 |
+| **sg_keyed** | **24/132 (18.2%, CI 12.5–25.6%)** | **0/96 (≤ 3.9%)** | **0** |
+
+- The sg_keyed residual is only after_begin and after_effect, reported unknown or in doubt,
+  never success.
+- Fault-free 0/144 per arm; all 1,104 relay records match ground truth.
+- Session latency, fault-free mean (relay process start included):
+  - sqlite: raw 1.251 s, sg 1.453 s, sg_keyed 1.607 s;
+  - memory: raw 1.061 s, sg 1.280 s, sg_keyed 1.360 s.
+
+### D8: the same `-32603` rule in the HTTP relay
+
+**The gap.** The HTTP relay delivered a server's JSON-RPC error as it arrived.
+
+**The change.** On a `-32603` answer, the relay asks `decide_retry` with `SERVER_ERROR`, as the
+stdio relay does. A keyed call, a declared read or idempotent tool, or a request that changes
+nothing is sent once more; anything else gets the server's error. This applies whether the
+answer came as JSON or as an event stream. The incidence record names the fault
+`internal_error`, apart from HTTP 5xx (`server_error`).
+
+**Tests:**
+- a declared read is requested again, recorded `recovered`;
+- a keyed write is resent once and written once, as JSON and as an event stream;
+- an unkeyed write is delivered the error and never resent.
+
+The fault proxy gains TEST-ONLY `rpc_internal_error` and `rpc_internal_error_sse` modes.
+
+### Queue item 3: the crash-window residual is a floor without server cooperation
+
+A key claimed and never recorded (`after_begin`, `after_effect`) leaves an effect that carries no
+key. Nothing outside the server can tell whether it happened. A probe of the effect cannot
+attribute it to this call either: another actor, or a state that already held, looks the same
+(`RECONCILIATION_CONTRACT_V2.md`). Only these can close it:
+- a transactional effect, where the key's record commits with the effect;
+- a recovery check bound to the key, which the server or its operator supplies (the adapters'
+  `recover=`, K-6).
+
+Neither is available for an unmodified third-party server, so the residual stays reported in
+doubt, never re-run, and never counted as success.

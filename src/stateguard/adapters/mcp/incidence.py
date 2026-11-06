@@ -9,7 +9,8 @@ fault on its hop to the server, so each relay writes one ``invocation`` record p
 request to its audit log, and this module turns those records into rates:
 
 * the HTTP relay (``examples/mcp/http_proxy.py``): faults ``connect_retry``, ``not_sent``,
-  ``transport_lost``, ``server_error``, ``session_lost``, ``stream_cut``, ``deadline``;
+  ``transport_lost``, ``server_error``, ``internal_error``, ``session_lost``, ``stream_cut``,
+  ``deadline``;
 * the stdio relay (``examples/mcp/stdio_proxy.py``), from its ``InvocationLedger``: why the
   request went UNKNOWN, if it did (``transport_closed``, ``send_failed``, ``deadline``,
   ``not_sent_unconfirmed``, ...), or ``resent`` if it was sent again for another reason.
@@ -72,6 +73,7 @@ FAULTS = (
     "not_sent",  # the connection never opened within the retry budget
     "transport_lost",  # the connection broke after the request was sent
     "server_error",  # an HTTP 5xx
+    "internal_error",  # a JSON-RPC internal error (-32603), sent again because that was safe
     "session_lost",  # the server no longer knew the session (404, or a 400 naming it)
     "stream_cut",  # an event stream ended before its answer
     "deadline",  # no answer within --call-deadline

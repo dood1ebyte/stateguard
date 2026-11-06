@@ -19,6 +19,8 @@ Modes (the fault fires once per ``--fault-file``; every other request passes):
 ``cut_stream``       forward; relay the event stream up to (not including)
                      the event carrying the answer, then close mid-stream
                      (a JSON answer is lost whole, as ``lost_response``)
+``rpc_internal_error`` answer a JSON-RPC -32603 itself, without forwarding
+                     (never executed); ``rpc_internal_error_sse`` the same as an event stream
 
 Each request runs on its own connection (``Connection: close`` both ways), so
 a fault ends exactly one exchange. The server's answer is read by its own
@@ -51,6 +53,8 @@ MODES = (
     "http_502_after",
     "hang_after",
     "cut_stream",
+    "rpc_internal_error",
+    "rpc_internal_error_sse",
 )
 
 
@@ -116,6 +120,24 @@ class Proxy:
             client_w.write(
                 b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n"
                 b"Connection: close\r\n\r\n"
+            )
+            await client_w.drain()
+            return
+        if fault in ("rpc_internal_error", "rpc_internal_error_sse"):
+            body = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": message.get("id") if isinstance(message, dict) else None,
+                    "error": {"code": -32603, "message": "Internal error (TEST-ONLY fault)"},
+                }
+            ).encode()
+            kind = "application/json"
+            if fault == "rpc_internal_error_sse":
+                kind, body = "text/event-stream", b"event: message\r\ndata: " + body + b"\r\n\r\n"
+            client_w.write(
+                f"HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\n".encode()
+                + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+                + body
             )
             await client_w.drain()
             return
