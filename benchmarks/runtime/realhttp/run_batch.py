@@ -80,8 +80,14 @@ def main(argv: list[str]) -> int:
         subprocess.run(
             ["git", "worktree", "add", "--detach", str(worktree), commit], cwd=REPO, check=True
         )
-    if _out(["git", "status", "--porcelain"], worktree):
-        raise SystemExit(f"{worktree} is not clean")
+    # The node_modules link (added below) is the one entry allowed: the repository ignores
+    # "node_modules/", which matches a directory but not a symlink.
+    dirty = _out(
+        ["git", "status", "--porcelain", "--", ".", ":(exclude)adapters/typescript/node_modules"],
+        worktree,
+    )
+    if dirty:
+        raise SystemExit(f"{worktree} is not clean:\n{dirty}")
     modules = REPO / "adapters" / "typescript" / "node_modules"
     link = worktree / "adapters" / "typescript" / "node_modules"
     if modules.exists() and not link.exists():
@@ -94,6 +100,10 @@ def main(argv: list[str]) -> int:
         "part": args.part or None,
         "started": datetime.now(UTC).isoformat(),
         "commit": commit,
+        "harness_commit": _out(["git", "rev-parse", "HEAD"], REPO),
+        "harness_dirty": bool(
+            _out(["git", "status", "--porcelain", "--", "benchmarks/runtime"], REPO)
+        ),
         "driver_args": driver_args,
         "trial_offset": os.environ.get("TRIAL_OFFSET", "0"),
         "python": _out([python, "-c", "import sys; print(sys.version.split()[0])"]),
