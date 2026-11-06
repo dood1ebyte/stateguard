@@ -33,7 +33,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
-EVIDENCE = REPO / "benchmarks" / "evidence" / "realhttp"
+EVIDENCE_ROOT = REPO / "benchmarks" / "evidence"
 EVERYTHING_DIR = Path(
     os.environ.get(
         "EVERYTHING_DIR", "/opt/sg-servers/everything/node_modules/@modelcontextprotocol"
@@ -65,10 +65,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument("batch")
     parser.add_argument("commit")
     parser.add_argument("--part", default="")
-    parser.add_argument("--driver", default="driver.py", help="driver.py or stale_pool.py")
+    parser.add_argument(
+        "--driver",
+        default="driver.py",
+        help="driver.py, stale_pool.py, or ../realstdio/driver.py (relative to this directory)",
+    )
+    parser.add_argument(
+        "--suite", default="realhttp", help="evidence directory: realhttp, realstdio"
+    )
     args = parser.parse_args(argv[:split])
     driver_args = argv[split + 1 :]
-    out = EVIDENCE / args.batch
+    out = EVIDENCE_ROOT / args.suite / args.batch
     if not (out / "PLAN.md").exists():
         raise SystemExit(f"{out / 'PLAN.md'} does not exist: write the plan before any row")
     suffix = f"_{args.part}" if args.part else ""
@@ -146,7 +153,7 @@ def main(argv: list[str]) -> int:
         with tarfile.open(out / f"failing{suffix}.tar.gz", "w:gz") as tar:
             tar.add(failing, arcname=f"failing{suffix}")
     shutil.rmtree(runs, ignore_errors=True)
-    scorer = "summarize.py" if args.driver == "driver.py" else "stale_pool_summary.py"
+    scorer = "stale_pool_summary.py" if args.driver == "stale_pool.py" else "summarize.py"
     with (out / f"summary{suffix}.txt").open("w") as summary:
         subprocess.run(
             [
