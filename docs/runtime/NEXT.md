@@ -30,8 +30,9 @@ ground truth. Labels: VERIFIED / INFERRED / UNVERIFIED.
 
 ## Phase 1 (2026-11-05 to 11-18): MCP reliability, the founder's mandate
 
-The founder's Phase 1 mandate supersedes "one task per session". Work continuously: take the
-next item, finish it, take the next. The git rules above still hold. Report only at completion
+The founder's Phase 1 mandate supersedes "one task per session". Within the scheduled windows
+below, work continuously: take the next item, finish it, take the next. The git rules above
+still hold. Report only at completion
 (Phase Completion Report, then stop and wait for Phase 2 authorization) or on a genuine blocker.
 
 **Facts (VERIFIED 2026-11-05):**
@@ -49,35 +50,6 @@ next item, finish it, take the next. The git rules above still hold. Report only
 `(cd adapters/typescript && npm ci)`; pinned third-party servers into `/opt/sg-servers/` (`npm install` in `everything/`, `memory/`, `filesystem/`: `@modelcontextprotocol/server-everything@2026.8.31`, `server-memory@2026.8.31`, `server-filesystem@2026.8.31`). Other Pythons for CI's matrix: `/usr/bin/python3.11`, `/usr/bin/python3.12`; 3.14 with `uv python install 3.14 --install-dir /opt/uvpython` (not under /root: the executor-scope tests run a child as an unprivileged user).
 Full suite: `STATEGUARD_MCP1_PYTHON=/tmp/mcp1/bin/python .venv/bin/pytest tests/`.
 
-## STOPPED by the founder (2026-11-05, ~21:50 UTC): resume Monday 2026-11-09 09:00 IST
-
-Phase 1 work began before the approved schedule; the founder stopped it. The schedule is
-mandatory: no engineering outside the approved windows (2026-11-09, 11, 13, 16, 18, 09:00 IST).
-
-- **Done and pushed:** `237a332`, the in-repo realhttp harness, measurement spec, CI pydantic pin
-  for mcp 1.x, a loud failure for a broken `STATEGUARD_MCP1_PYTHON`, and this queue.
-- **Committed locally, NOT pushed:** `4017672`, the B1 plan
-  (`benchmarks/evidence/realhttp/B1/PLAN.md`). The branch is 1 ahead of `origin`.
-- **Stopped mid-run (uncommitted, kept as is):** the B1 batch, after 70 of 960 rows of its
-  first part (`B1/rows_notes.jsonl`, `rows_notes.err`). There is no `codestate_notes.json` or
-  summary. This part is **incomplete and must not be reported as a result**. Every B1 process
-  was stopped; none remains.
-- **Left in place:** the git worktree `/tmp/sg-code-237a3326cfc7` (detached at `237a332`,
-  used by `run_batch.py`), the venvs `.venv` and `/tmp/mcp1` (pydantic 2.11.7), TypeScript
-  `node_modules`, and server-everything at `/opt/sg-servers/everything`. All of these are lost
-  if the container is replaced; rebuild them per "Environment" above.
-- **Baseline suite on this container** (Python 3.13, head `3c44f3e` plus setup): 6337 passed,
-  16 skipped, 1 failed. The failure is the known sandbox-only executor-scope test. 13 of the
-  skips were the mcp 1.x injector tests (pydantic too new). They pass, 15/15, with
-  pydantic 2.11.7.
-- **Queue item 2 (stale pooled connection) was not started:** nothing written yet.
-- **Exact next action (2026-11-09 09:00 IST):**
-  1. Push `4017672`, unless `origin` has moved.
-  2. Decide on the partial B1 rows: keep them as `rows_notes_aborted.jsonl`, with a note in
-     `B1/PLAN.md` that the run was stopped.
-  3. Re-run B1 in full with new part names (`run_batch.py` refuses to overwrite).
-  4. Then queue item 2.
-
 ## Schedule (founder, 2026-11-05): mandatory
 
 Engineering only inside the approved windows, each 5 h from 09:00 IST: Fri 2026-11-06, Mon 11-09,
@@ -94,34 +66,20 @@ allowed. Early completion or idle capacity never advances the schedule.
   - Session 6, `trig_01JBfioVdCgAAaNB85oA8n9C`, 11-18.
 - **The 14:00 IST end** is enforced by each session's own clock checks, not by the platform.
 
-## Handoff (2026-11-05, stopped by the founder: work began before the first window)
+## Handoff (end of Session 1, Fri 2026-11-06)
 
-- **Done and pushed:**
-  - `237a332`: the in-repo harness (`benchmarks/runtime/realhttp/`), the CI pin of pydantic
-    2.11.7 for mcp 1.9.4, and a loud error when `STATEGUARD_MCP1_PYTHON` is unusable.
-  - `4017672`: the B1 plan (`benchmarks/evidence/realhttp/B1/PLAN.md`).
-  - Session baseline before any change: 6337 passed, 16 skipped, 1 known sandbox failure. The 13
-    mcp 1.x skips were the pydantic defect, fixed in `237a332` (15/15 injector tests pass).
-- **Stopped (not committed):**
-  - B1 part `notes`: killed after 70 of 960 rows.
-  - Kept as they were: `benchmarks/evidence/realhttp/B1/rows_notes.jsonl` (70 rows, partial),
-    the empty `rows_notes.err`, no `codestate_notes.json`, the temp run dir
-    `/tmp/realhttp-B1-52fcakil`, and the git worktree `/tmp/sg-code-237a3326cfc7`.
-  - The partial rows are not evidence. `run_batch.py` refuses to overwrite them, so the next
-    session moves them aside (e.g. `rows_notes.partial-killed.jsonl`) before re-running that part.
-- **Uncommitted:** this file only.
-- **Started, not implemented:** stale pooled connection (queue item 2). Design:
-  - the relay gets `--pool-idle-timeout` (httpx `keepalive_expiry`), default about 1 s, below
-    gunicorn's 2 s and uvicorn's and Node's 5 s;
-  - a delay-injecting TCP proxy (40 ms each way) between the relay and the notes server, which
-    widens the race window to about 80 ms;
-  - unkeyed `add_note` calls spaced 4.9–5.1 s apart;
-  - arms: the old default (5 s) against the new, plus a keyed arm;
-  - scored with the ground truth and the relay's invocation records.
-- **Exact next action (Fri 11-06, 09:00 IST):**
-  - Rebuild the environment if the container is new.
-  - Rename the partial B1 rows aside, run B1 (all six parts; the commands are in the
-    background job of 2026-11-05, see `run_batch.py` usage), then queue item 2.
+- **Pushed:** everything up to the commit that adds this section. `origin` and the local branch
+  are level. The 2026-11-05 state (STOPPED) was resolved in Session 1: `4017672` pushed, the
+  partial B1 rows set aside in `B1/aborted/`, B1 re-run in full.
+- **Uncommitted:** nothing. **Running:** nothing; every batch, relay and server process ended.
+- **Left in place (lost if the container is replaced):** the venvs `.venv` and `/tmp/mcp1`,
+  TypeScript `node_modules`, `/opt/sg-servers/*`, Python 3.14 in `/opt/uvpython`, and the
+  `run_batch.py` worktrees `/tmp/sg-code-<sha12>` (detached, read-only use). Rebuild per
+  "Environment" if they are gone.
+- **Results and reasoning:** `docs/runtime/PHASE1_ENGINEERING_RECORD.md`; evidence in
+  `benchmarks/evidence/{realhttp,realstdio}/`.
+- **Exact next action (Mon 2026-11-09, 09:00 IST):** check the environment, then queue item 1
+  below (incidence records for requests open when a relay stops).
 
 ## Phase 1 queue (first not done or blocked; mark done here with its commit)
 
@@ -136,17 +94,30 @@ Done in Session 1 (2026-11-06); details are in `PHASE1_ENGINEERING_RECORD.md`:
   windows, in doubt;
 - D8, HTTP parity for `-32603` (`1852365`);
 - queue item 3 concluded: the crash-window residual is a floor without server cooperation
-  (record, "Queue item 3").
+  (record, "Queue item 3");
+- B2, the HTTP matrix on `1852365` (`40bbf4a`): matches B1 cell for cell;
+- P1, paired uncontended overhead (`5721c12`): HTTP relay +0.006 to +0.066 s per session;
+  stdio relay +0.20 to +0.37 s including the relay process start;
+- P2, event-stream answers (`5721c12`): one upstream connection per call confirmed; the
+  network cost was not measurable with the delay proxy (record, "P2").
 
-Next, in order:
-1. **B2** (HTTP matrix on `1852365`, a regression check of D4 and D8): plan in
-   `benchmarks/evidence/realhttp/B2/PLAN.md`.
-2. **P1** (paired single-worker overhead, HTTP and stdio) and **P2** (the cost of event-stream
-   answers): plans in `benchmarks/evidence/{realhttp,realstdio}/P1/` and `realhttp/P2/`.
-3. **Decide on event-stream reuse** from P2: reading to the stream's end would let the relay
-   reuse the connection; only worth it if P2 shows a material cost.
-4. **Real capture for incidence** (owner-dependent; see the old queue item 3).
-5. Phase Completion Report (Session 6).
+Next, in order (Session 2, Mon 2026-11-09, is metrics and measurement):
+1. **Incidence records for requests still open when a relay stops.** B1 and B2 show `sg`
+   `hang_after` rows with no `invocation` record: a relay writes one when a request finishes.
+   On shutdown (and, for HTTP, when the client disconnects), write a record for each open
+   request as unresolved, so the incidence denominator is complete. Test it; check
+   records == rows on the hang cells.
+2. **One Phase 1 residual-failure table from the evidence** (B2 and S4): RFR =
+   (failed + unresolved) / eligible per server, family and arm, Wilson 95%, with unsafe and
+   induced counts. A script under `benchmarks/runtime/`, so the Completion Report cites
+   generated numbers.
+3. **Per-call overhead of a running stdio relay**: many calls in one session, so the relay's
+   start is separated from the per-call cost (P1 could not).
+4. **P2b: the event-stream connection cost with a kernel delay** (iproute2 netem in a network
+   namespace; this container has neither `tc` nor `ip`), then decide whether to read event
+   streams to their end so the connection can be reused. Session 3 or 5.
+5. **Real capture for incidence** (owner-dependent; see the old queue item 3).
+6. Phase Completion Report (Session 6).
 
 ## Session log
 

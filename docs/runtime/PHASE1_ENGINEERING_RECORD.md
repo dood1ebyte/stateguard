@@ -210,6 +210,57 @@ regression check. Same servers, arms, 12 trials, 60-trial controls and 4 workers
   writes none. The deadline arms always write one. The incidence denominator therefore misses
   requests that were still open when a relay stopped.
 
+### P1: relay overhead, paired and uncontended (`benchmarks/evidence/{realhttp,realstdio}/P1`, code `1852365`)
+
+- **Setup:** one worker, with arms interleaved trial by trial, 20 trials per fault-free cell
+  (TRIAL_OFFSET=2000).
+- **Measure:** each arm's session latency minus raw's on the same trial
+  (`paired_overhead.py`): the mean with a normal 95% interval, client process start included.
+- **Failures:** 0 in every arm, and every trial paired.
+
+| Relay | Server | Arm | Mean overhead (95% CI) | raw session |
+|---|---|---|---|---|
+| HTTP | notes | sg | read +0.008 s (−0.018–0.035), write +0.025 s (0.001–0.049) | 0.81–0.83 s |
+| HTTP | notes | sg_keyed_deadline | read +0.006 s (−0.008–0.021), write +0.029 s (0.011–0.048) | |
+| HTTP | tsnotes | sg | read +0.066 s (0.021–0.110), write +0.022 s (−0.003–0.048) | 0.81–0.82 s |
+| HTTP | tsnotes | sg_keyed_deadline | read +0.026 s (−0.004–0.055), write +0.027 s (−0.002–0.056) | |
+| HTTP | everything | sg / sg_deadline | +0.031 s (0.012–0.050) / +0.037 s (0.017–0.058) | 0.80 s |
+| stdio | sqlite | sg | read +0.209 s, write +0.229 s | 1.21–1.22 s |
+| stdio | sqlite | sg_keyed | read +0.370 s, write +0.340 s | |
+| stdio | memory | sg | read +0.269 s, write +0.200 s | 0.97–0.99 s |
+| stdio | memory | sg_keyed | read +0.295 s, write +0.278 s | |
+
+(stdio intervals are ±0.03 to ±0.04 s; all are in `paired_overhead.txt`.)
+
+- **HTTP:** within the plan's 0.15 s everywhere; the largest cell is 0.066 s. The relay's own
+  start is outside the session and not counted.
+- **stdio:** these numbers include starting the relay process, and for sg_keyed the key store.
+  A host pays that once per server process, not per call. The per-call cost on a running stdio
+  relay is not separated here. These are synthetic, single-machine measurements, not
+  production latencies.
+
+### P2: the cost of event-stream answers (`benchmarks/evidence/realhttp/P2`, code `1852365`)
+
+**Setup:** one SDK session, 60 unkeyed calls with 0.2–0.3 s gaps, 40 ms one way, relay pool
+idle timeout 1 s.
+
+| Arm | Failures | Upstream connections | Call latency mean / p95 |
+|---|---|---|---|
+| json | 0/60 | 3 | 0.089 / 0.091 s |
+| sse | 0/60 | 64 | 0.091 / 0.094 s |
+
+- **Confirmed:** an event-stream answer costs one upstream connection per call (64 for 60,
+  against 3).
+- **Not measured: the network cost of those connections.**
+  - The delay proxy accepts and connects upstream on loopback at once and delays only data, so
+    no arm paid a TCP handshake round trip. The +2 ms is the local cost alone.
+  - The plan's expectation (about +80 ms) assumed a delayed handshake that this setup does not
+    have.
+  - On a real path each new connection costs at least one round trip before the request, and
+    TLS adds one or two more. That is an estimate, not a measurement.
+- Measuring it needs a delay in the kernel (netem), which this container lacks (no `tc` or
+  `ip`); queued.
+
 ### Queue item 3: the crash-window residual is a floor without server cooperation
 
 A key claimed and never recorded (`after_begin`, `after_effect`) leaves an effect that carries no
