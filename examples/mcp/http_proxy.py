@@ -85,6 +85,13 @@ it lists the tools again on the call's session first (``--no-listing-refresh``
 turns that off), and forwards the call unchanged if it cannot. A tool the
 relay has no definition for is forwarded unvalidated.
 
+Idle connections. A server closes a kept-alive connection after its own idle timeout
+(uvicorn and Node: 5 s, gunicorn: 2 s). A request written to such a connection as the server
+closes it is lost unread, and the relay cannot tell that from a crash after execution: for an
+unkeyed write it is "outcome unknown". The relay therefore reuses an idle connection for at
+most ``--pool-idle-timeout`` seconds (default 1), below those timeouts, where httpx's own
+default (5 s) equals two of them.
+
 Limits. One server per relay. A request without a deadline waits for the
 server until ``--upstream-timeout``. No recording, no reconciliation probes. A client
 resuming a response stream itself (``Last-Event-ID`` on its own ``GET``) sees
@@ -322,6 +329,7 @@ class Relay:
         self._audit = open(args.audit, "a", encoding="utf-8") if args.audit else None  # noqa: SIM115
         self.client = httpx2.AsyncClient(
             timeout=httpx2.Timeout(args.upstream_timeout, connect=5.0),
+            limits=httpx2.Limits(keepalive_expiry=args.pool_idle_timeout),
             follow_redirects=False,
         )
 
@@ -1353,6 +1361,13 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=300.0,
         help="seconds to wait for the server's answer",
+    )
+    parser.add_argument(
+        "--pool-idle-timeout",
+        type=float,
+        default=1.0,
+        help="seconds an idle connection to the server is kept for reuse; keep it below the "
+        "server's own keep-alive timeout (uvicorn and Node: 5 s, gunicorn: 2 s)",
     )
     parser.add_argument("--audit", help="append one JSON line per relay decision here")
     parser.add_argument("upstream", help="the MCP server's Streamable HTTP endpoint URL")

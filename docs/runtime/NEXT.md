@@ -21,11 +21,10 @@ ground truth. Labels: VERIFIED / INFERRED / UNVERIFIED.
   `uv run` does not install the package.
 - Tests: run the targeted tests while working; run the full suite once before
   the push (about 9 min wall time in the cloud sandbox, measured 2026-11-05).
-- Known sandbox-only failure (VERIFIED 2026-11-05, head fb49bba):
-  `tests/examples/test_cli_executor_scope.py::test_on_a_platform_without_pid_namespaces_the_scope_is_refused`
-  fails because the venv's `python3` path is not found by the executor scope.
-  Everything else passed. Do not count it as a regression; do not "fix" it
-  by weakening the test.
+- **Corrected 2026-11-06:** `test_on_a_platform_without_pid_namespaces_the_scope_is_refused`
+  was misdiagnosed as sandbox-only. It failed on Python 3.13+, which CI tests, because
+  `shutil.which` follows a patched `sys.platform` ("win32") and the relay resolved the program
+  before checking the platform. The relay now checks the platform first. Expect 0 failures.
 - Also run `ruff check src/ tests/`, `ruff format --check src/ tests/` and
   `mypy src/` before pushing (CI runs them).
 

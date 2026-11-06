@@ -2962,12 +2962,8 @@ def main(argv: list[str] | None = None) -> int:
     server_cwd: str | None = None
     if scoped:
         # Checked before the server starts; a missing capability is never downgraded.
-        resolved = shutil.which(command[0])
-        if resolved is None:
-            parser.error(f"--executor-scope: the server program {command[0]!r} was not found")
-        # Resolve to an absolute path now: the server runs in its own working
-        # directory (default '/'), so a relative command would not resolve there.
-        command = [os.path.abspath(resolved), *command[1:]]
+        # The platform first: where the scope cannot exist, that is the answer, whatever
+        # the program (shutil.which follows sys.platform, so the order is observable).
         # The probe matches the selected architecture (A: CAP_SYS_ADMIN PID namespace;
         # B: unprivileged user+PID namespace). The two are never substituted.
         capability = check_pid_namespace_capability(unprivileged=unprivileged)
@@ -2983,6 +2979,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"{capability.reason}. Nothing was started. Run without --executor-scope "
                 f"(and without reconcile blocks), {hint}."
             )
+        resolved = shutil.which(command[0])
+        if resolved is None:
+            parser.error(f"--executor-scope: the server program {command[0]!r} was not found")
+        # Resolve to an absolute path now: the server runs in its own working
+        # directory (default '/'), so a relative command would not resolve there.
+        command = [os.path.abspath(resolved), *command[1:]]
         # The server's environment is built explicitly, not inherited: a minimal
         # baseline (PATH, needed to exec the program and its children) plus only
         # what the operator passes. Conflicts and missing passthroughs fail here.

@@ -75,10 +75,16 @@ class Rig:
             argv, stdout=log, stderr=subprocess.STDOUT, env=env or self.env
         )
 
-    def server(self, *, keyed: bool = False, resumable: bool = False) -> None:
+    def server(
+        self, *, keyed: bool = False, resumable: bool = False, slow: float = 0, json: bool = False
+    ) -> None:
         argv = [str(SERVER), str(self.tmp / "notes.txt"), str(self.server_port)]
+        if json:
+            argv.append("--json")
         if resumable:
             argv.append("--resumable")
+        if slow:
+            argv += ["--slow", str(slow)]
         env = dict(self.env)
         if keyed:
             env.update(
@@ -147,6 +153,8 @@ class Rig:
 
     def calls_reaching_server(self) -> int:
         path = self.tmp / "faults.txt"
+        if not path.exists():  # the fault proxy writes it on its first request
+            return 0
         return sum(1 for line in path.read_text().splitlines() if line.startswith("call "))
 
     def audit(self) -> list[dict[str, Any]]:
@@ -1003,3 +1011,114 @@ def test_the_incidence_report_reads_a_relays_audit_log(rig: Rig) -> None:
     assert calls["invocations"] == 2
     assert calls["faulted"]["k"] == 1 and calls["unresolved"]["k"] == 1
     assert calls["resolutions"] == {"answered": 1, "unknown": 1}
+
+
+# -- idle pooled connections are dropped before the server's own keep-alive timeout ------------
+
+DELAY_PROXY = ROOT / "benchmarks" / "runtime" / "delay_proxy.py"
+
+
+@pytest.mark.parametrize(("pool_idle", "new_connections"), [("0.2", 1), ("30", 0)])
+def test_an_idle_pooled_connection_is_not_reused_after_the_pool_idle_timeout(
+    rig: Rig, pool_idle: str, new_connections: int
+) -> None:
+    """
+    A server closes a kept-alive connection after its own idle timeout (uvicorn: 5 s); a
+    request written to it as it closes is lost unread. The relay reuses an idle connection
+    only within --pool-idle-timeout: after a longer gap it opens a new one. (JSON answers:
+    after an answer that is an event stream the relay never reuses the connection at all --
+    it stops reading at the answer, before the stream's end.)
+    """
+    rig.server(json=True)
+    accepts = rig.tmp / "accepts.log"
+    rig._spawn(
+        "delay",
+        [
+            sys.executable,
+            str(DELAY_PROXY),
+            "--listen",
+            f"127.0.0.1:{rig.proxy_port}",
+            "--upstream",
+            f"127.0.0.1:{rig.server_port}",
+            "--delay-ms",
+            "0",
+            "--log",
+            str(accepts),
+        ],
+    )
+    _wait_for(rig.proxy_port)
+    rig.relay("--retry", "auto", "--pool-idle-timeout", pool_idle)
+
+    async def body(session: Any) -> Any:
+        await session.call_tool("add_note", {"text": "a"})
+        await anyio.sleep(0.3)
+        before = accepts.read_text().count("accept")
+        await anyio.sleep(0.7)
+        await session.call_tool("add_note", {"text": "b"})
+        return accepts.read_text().count("accept") - before  # before the session closes
+
+    assert _session(rig.relay_url, body) == new_connections
+    assert rig.notes() == ["a", "b"]
+
+
+# -- concurrent sessions across a server crash --------------------------------------------------
+
+
+@pytest.mark.parametrize("keyed", [True, False])
+def test_concurrent_sessions_across_a_server_crash_never_duplicate_or_misreport(
+    rig: Rig, keyed: bool
+) -> None:
+    """
+    Four sessions each have a write in flight when the server process is killed (each call
+    reached the server, which had not yet written its note); four more finished their
+    handshake before the crash and call after the restart, on sessions the new server never
+    saw. Invariants, per session:
+    - no note is written twice;
+    - a session told success has its own note exactly once, and its own answer;
+    - every other session is told the outcome is unknown or in doubt -- never success.
+    The sessions that call after the restart are all answered, on reopened sessions.
+    """
+    rig.server(keyed=keyed, slow=0.8)
+    rig.faults("none")
+    rig.relay("--retry", "auto", "--connect-retry", "15")
+    restarted = threading.Event()
+    answers: dict[str, Any] = {}
+
+    def in_flight(text: str) -> None:
+        answers[text] = _session(rig.relay_url, _add_note(text), survive=True)
+
+    def after_restart(text: str) -> None:
+        async def body(session: Any) -> Any:
+            while not restarted.is_set():
+                await anyio.sleep(0.02)
+            return await _add_note(text)(session)
+
+        answers[text] = _session(rig.relay_url, body, survive=True)
+
+    early = [f"early{i}" for i in range(4)]
+    late = [f"late{i}" for i in range(4)]
+    threads = [threading.Thread(target=in_flight, args=(t,)) for t in early]
+    threads += [threading.Thread(target=after_restart, args=(t,)) for t in late]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + 30
+    while rig.calls_reaching_server() < len(early):
+        assert time.monotonic() < deadline, "the in-flight calls never reached the server"
+        time.sleep(0.02)
+    rig.kill_server()  # every early call is inside add_note's wait: none has written
+    rig.server(keyed=keyed, slow=0.8)
+    restarted.set()
+    for thread in threads:
+        thread.join(90)
+    notes = rig.notes()
+    for text in early + late:
+        answer = answers[text]
+        assert notes.count(text) <= 1, (text, notes)
+        if _ok(answer):
+            assert notes.count(text) == 1 and answer.content[0].text == f"added {text}"
+        else:
+            in_doubt = getattr(answer, "code", None) in (-32010, -32011)
+            assert in_doubt or _state(answer) == "unknown", (text, answer)
+    for text in late:
+        assert _ok(answers[text]), (text, answers[text])
+    assert "session_reopened" in rig.events()

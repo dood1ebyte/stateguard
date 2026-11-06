@@ -3,10 +3,12 @@ A plain ``MCPServer`` (mcp 2.x) over Streamable HTTP, for the HTTP relay tests:
 it knows nothing of StateGuard. ``add_note`` appends one line to a notes file
 (one fsync'd write); ``list_notes`` reads it.
 
-    python tests/examples/http_notes_server.py NOTES PORT [--resumable] [--json]
+    python tests/examples/http_notes_server.py NOTES PORT [--resumable] [--json] [--slow S]
 
 ``--resumable`` keeps the server's events in memory (an ``EventStore``), so a
-client can resume a cut response stream with ``Last-Event-ID``.
+client can resume a cut response stream with ``Last-Event-ID``. ``--slow S`` makes
+``add_note`` wait S seconds before it writes (TEST-ONLY), so a call can be in flight when
+the server is killed.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ import itertools
 import os
 import sys
 from typing import Any
+
+import anyio
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.streamable_http import EventCallback, EventMessage, EventStore
@@ -47,11 +51,14 @@ class MemoryEvents(EventStore):
 
 def main() -> None:
     notes, port = sys.argv[1], int(sys.argv[2])
+    slow = float(sys.argv[sys.argv.index("--slow") + 1]) if "--slow" in sys.argv else 0.0
     app = MCPServer("notes")
 
     @app.tool()
-    def add_note(text: str) -> str:
-        with open(notes, "a") as out:
+    async def add_note(text: str) -> str:
+        if slow:
+            await anyio.sleep(slow)
+        with open(notes, "a") as out:  # noqa: ASYNC230 -- one short fsync'd append
             out.write(text + "\n")
             out.flush()
             os.fsync(out.fileno())

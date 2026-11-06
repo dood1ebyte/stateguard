@@ -92,6 +92,7 @@ def main() -> int:
     p.add_argument("--gap-lo", type=float, default=4.8)
     p.add_argument("--gap-hi", type=float, default=5.1)
     p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--sse", action="store_true", help="server answers as event streams")
     p.add_argument("--wait", type=float, default=15.0)
     a = p.parse_args()
     rng = random.Random(a.seed)
@@ -101,6 +102,8 @@ def main() -> int:
     env = {**os.environ, "PYTHONPATH": str(CODE / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
     server_port, proxy_port, relay_port = _port(), _port(), _port()
     argv = [str(CODE / "tests/examples/http_notes_server.py"), str(notes), str(server_port)]
+    if not a.sse:
+        argv.append("--json")  # JSON answers: the relay returns their connections to its pool
     if a.keyed:
         env.update(
             STATEGUARD_IDEMPOTENCY_DB=str(base / "keys.db"),
