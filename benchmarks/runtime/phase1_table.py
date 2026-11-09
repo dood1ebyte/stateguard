@@ -33,7 +33,7 @@ UNRESOLVED_KINDS = frozenset({"surfaced_unknown", "no_answer_timeout", "no_answe
 UNRESOLVED_CODES = frozenset({-32010, -32011})
 UNSAFE = ("duplicate_effect", "false_success", "false_failure", "wrong_content")
 ORDER = ["raw", "naive", "sg", "sg_keyed", "sg_resumable", "sg_deadline", "sg_keyed_deadline"]
-FAMILIES = ["fault_free", "transport", "session", "crash", "drift"]
+FAMILIES = ["fault_free", "transport", "session", "crash", "slow", "drift"]
 
 #: Injected fault -> failure taxonomy category (TASKMAP.md) and whether it ran before the fault.
 CATEGORY = {
@@ -51,6 +51,7 @@ CATEGORY = {
     "after_record": ("I", "server crash after the key was recorded, before the answer"),
     "session_loss": ("D", "the server restarted between handshake and call; session unknown"),
     "drift": ("A", "the argument's field renamed by the caller (schema drift)"),
+    "slow": ("F", "no fault: the tool is slow; a deadline must not turn it into a failure"),
 }
 
 
@@ -132,7 +133,7 @@ def table(rows: list[dict[str, Any]], by_category: bool = False) -> dict[str, An
     for r in rows:
         fam = family(r)
         groups[(r["suite"], r["server"], r["arm"], fam)].append(r)
-        if fam not in ("fault_free", "drift"):  # every injected fault, all families together
+        if fam not in ("fault_free", "drift", "slow"):  # every injected fault, together
             groups[(r["suite"], r["server"], r["arm"], "faulted")].append(r)
     out: dict[str, Any] = {}
     for key in sorted(groups, key=_sort):

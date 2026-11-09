@@ -25,7 +25,8 @@ Arms:
   sg_keyed_deadline   sg_keyed with --call-deadline 2
 
 Faults (TEST-ONLY): benchmarks/runtime/http_fault_proxy.py modes, plus session_loss (the server
-process killed and restarted between the client's handshake and its call). Ops: read, write,
+process killed and restarted between the client's handshake and its call), and slow (notes
+only, no fault: add_note takes SLOW_SECONDS). Ops: read, write,
 drift (add_note with its field misnamed "Text").
 
 usage: driver.py SERVER N [cells] [arms] [workers] -> JSONL rows on stdout
@@ -74,6 +75,9 @@ ARMS = {"notes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
 KEYED = ("sg_keyed", "sg_keyed_deadline")
 DEADLINE = "2"
 CLIENT_WAIT = 8.0
+#: Mode "slow" (notes only, no fault): add_note takes this long, past deadline + the keyed
+#: server's 5 s duplicate wait + deadline. A deadline must not turn it into a failure.
+SLOW_SECONDS = 10.0
 
 
 def free_port():
@@ -111,7 +115,7 @@ class Procs:
             self.stop(name)
 
 
-def setup(server, base, t, arm, op):
+def setup(server, base, t, arm, op, slow=0.0):
     env = {**os.environ, "PYTHONPATH": str(CODE / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
     port = free_port()
     read = write = None
@@ -123,6 +127,8 @@ def setup(server, base, t, arm, op):
                        STATEGUARD_IDEMPOTENCY_SCOPE="notes", STATEGUARD_KEYED_TOOLS="add_note")
         if server == "notes":
             argv = [NOTES_SERVER, str(notes), str(port)]
+            if slow:
+                argv += ["--slow", str(slow)]
             if arm == "sg_resumable":
                 argv.append("--resumable")
             if arm in KEYED:
@@ -154,13 +160,16 @@ def run(server, cell, arm, t):
     base.mkdir(parents=True)
     procs = Procs(base)
     try:
-        port, server_cmd, server_env, read, write = setup(server, base, t, arm, op)
+        if mode == "slow" and server != "notes":
+            raise ValueError("mode slow needs the notes server (--slow)")
+        slow = SLOW_SECONDS if mode == "slow" else 0.0
+        port, server_cmd, server_env, read, write = setup(server, base, t, arm, op, slow)
         name, args = (read[0], read[1]) if op == "read" else write
         procs.start("server", server_cmd, server_env)
         if not wait_port(port):
             raise RuntimeError("server did not listen")
         proxy_port = free_port()
-        proxy_mode = mode if mode not in ("none", "session_loss") else "none"
+        proxy_mode = mode if mode not in ("none", "session_loss", "slow") else "none"
         procs.start("faults", [PY, FAULTS, "--listen", f"127.0.0.1:{proxy_port}", "--upstream",
                                f"127.0.0.1:{port}", "--mode", proxy_mode, "--tool", name,
                                "--fault-file", str(base / "fault_flag"), "--log",
@@ -180,7 +189,7 @@ def run(server, cell, arm, t):
             if not wait_port(relay_port):
                 raise RuntimeError("relay did not listen")
             url = f"http://127.0.0.1:{relay_port}/mcp"
-        client = [PY, CLIENT, url, name, json.dumps(args), "--wait", str(CLIENT_WAIT)]
+        client = [PY, CLIENT, url, name, json.dumps(args), "--wait", str(CLIENT_WAIT + slow)]
         if arm == "naive":
             client.append("--naive")
         if mode == "session_loss":
@@ -244,7 +253,8 @@ def run(server, cell, arm, t):
                    if e.get("method") == "tools/call"]
     row = {
         "server": server, "op": op, "tool": name, "mode": mode,
-        "family": "session" if mode == "session_loss" else "transport", "arm": arm, "trial": t,
+        "family": {"session_loss": "session", "slow": "slow"}.get(mode, "transport"),
+        "arm": arm, "trial": t,
         "run": base.name, "success": success, "kinds": kinds, "latency_s": round(latency, 3),
         "count": count, "told_ok": told_ok, "server_outcome": server_outcome,
         "first_status": seen["first"]["status"], "client_retried": seen["retried"],
