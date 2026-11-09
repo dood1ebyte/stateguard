@@ -101,23 +101,29 @@ Done in Session 1 (2026-11-06); details are in `PHASE1_ENGINEERING_RECORD.md`:
 - P2, event-stream answers (`5721c12`): one upstream connection per call confirmed; the
   network cost was not measurable with the delay proxy (record, "P2").
 
-Next, in order (Session 2, Mon 2026-11-09, is metrics and measurement):
-1. **Incidence records for requests still open when a relay stops.** B1 and B2 show `sg`
-   `hang_after` rows with no `invocation` record: a relay writes one when a request finishes.
-   On shutdown (and, for HTTP, when the client disconnects), write a record for each open
-   request as unresolved, so the incidence denominator is complete. Test it; check
-   records == rows on the hang cells.
-2. **One Phase 1 residual-failure table from the evidence** (B2 and S4): RFR =
-   (failed + unresolved) / eligible per server, family and arm, Wilson 95%, with unsafe and
-   induced counts. A script under `benchmarks/runtime/`, so the Completion Report cites
-   generated numbers.
-3. **Per-call overhead of a running stdio relay**: many calls in one session, so the relay's
-   start is separated from the per-call cost (P1 could not).
-4. **P2b: the event-stream connection cost with a kernel delay** (iproute2 netem in a network
-   namespace; this container has neither `tc` nor `ip`), then decide whether to read event
+Done in Session 2 (2026-11-09):
+- metrics and taxonomy final: `PHASE1_METRICS.md`, `benchmarks/runtime/phase1_table.py`
+  (`7b3c4d2`);
+- D1, schema drift, category A (`504f109`): every relay arm 0/60, raw 60/60;
+- D9, incidence records for requests a relay never finished (`a00a269`), confirmed by I1:
+  96/96 relay rows recorded;
+- P3, per-call overhead of a running stdio relay (harness `0cee55c`; results in the record).
+
+Next, in order (Session 3, Wed 2026-11-11, is recovery engineering):
+1. **Keyed race waits on "still running".** In the HTTP relay's `_race`, a keyed resend
+   answered `-32011` makes the relay wait one more deadline for the original, then deliver the
+   unresolved answer. So a keyed call slower than about two deadlines ends unresolved (record,
+   "What still fails"). Wait on the original instead while the server reports "still running";
+   test it with a slow keyed tool. Check the stdio relay for the same path.
+2. **Then evaluate a default deadline for recoverable requests** (declared reads, keyed calls).
+   Measure induced failures on slow successes and recovery on `hang_after` (B2 cells plus a
+   slow-tool cell). A changed default is the founder's decision: bring the evidence, do not
+   flip it.
+3. **P2b: the event-stream connection cost with a kernel delay** (iproute2 netem in a network
+   namespace; this container has neither `tc` nor `ip`). Then decide whether to read event
    streams to their end so the connection can be reused. Session 3 or 5.
-5. **Real capture for incidence** (owner-dependent; see the old queue item 3).
-6. Phase Completion Report (Session 6).
+4. **Real capture for incidence** (owner-dependent; see the old queue item 3).
+5. Phase Completion Report (Session 6).
 
 ## Session log
 

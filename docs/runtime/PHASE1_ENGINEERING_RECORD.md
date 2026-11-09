@@ -334,3 +334,35 @@ trials per arm on notes and tsnotes.
 - pairing works across logs and in any order;
 - a relay SIGKILLed during a hung call reads `unfinished`, and the call did run;
 - a stdio call in flight reads `unfinished`, then `answered` with the same token.
+
+### I1: every relayed request is counted (`benchmarks/evidence/realhttp/I1`, code `a00a269`)
+
+**Setup:** notes and tsnotes; `hang_after` and fault-free cells; arms raw, sg and sg_keyed; 12
+trials.
+
+- **Records:** 96 of 96 relay rows per server have a record. Before D9, B1 and B2 missed 15 and
+  18.
+- **The hang rows** the relay never finished read `unfinished`: sg 14 + 14, sg_keyed 22 + 20.
+  The rest read `unknown`.
+- **0 record mismatches.** The failure rates equal B2's cells: the change touches records
+  only, never traffic.
+
+### What still fails, by configuration (B2, S4, `phase1_table.py --by-category`)
+
+- **Unkeyed relay (`sg`).** The residual is writes left `unknown` after a fault that may have
+  let them run: `kill_before`, `http_503_before`, `lost_response`, `http_502_after`,
+  `cut_stream`, and stdio `lost_exit`, `hang` and `transient`. Hangs also fail without a
+  deadline. Resending an unkeyed write is unsafe, so this is the floor without keys.
+- **Keyed relay (`sg_keyed`):**
+  - HTTP: `hang_after` only, 24/24 per server. With `--call-deadline` it is 0 (B2
+    `sg_keyed_deadline`).
+  - stdio: the two crash windows only, a floor without server cooperation.
+- **The deadline is opt-in** because it once turned slow successes into failures (M5, 8 Z).
+  - For a keyed call, the cause sits in `_race`. When the resend is answered "still running"
+    (`-32011`), the relay waits one more deadline for the original, then delivers that
+    unresolved answer.
+  - So a keyed call slower than about two deadlines ends unresolved. Waiting on the original
+    while the server reports "still running" would remove that path.
+  - That would make a default deadline for recoverable requests (declared reads, keyed calls)
+    worth evaluating. It is queued, not started: it is recovery engineering (Session 3), and a
+    default is a product decision.
