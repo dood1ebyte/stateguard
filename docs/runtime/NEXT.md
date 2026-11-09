@@ -76,8 +76,8 @@ allowed. Early completion or idle capacity never advances the schedule.
 - **Results and reasoning:** `docs/runtime/PHASE1_ENGINEERING_RECORD.md` (Sessions 1 and 2).
   Metrics: `docs/runtime/PHASE1_METRICS.md`. Evidence: `benchmarks/evidence/{realhttp,realstdio}/`.
 - **Rule learned:** never edit `benchmarks/runtime/` while a batch runs (record, D1 note).
-- **Exact next action (Wed 2026-11-11, 09:00 IST):** check the environment, then queue item 1
-  below (stdio: a keyed call still running past its deadlines).
+- **Exact next action (Wed 2026-11-11, 09:00 IST):** check the environment, then queue item 2
+  below. Item 1 waits on the founder.
 
 ## Phase 1 queue (first not done or blocked; mark done here with its commit)
 
@@ -111,15 +111,16 @@ Done in Session 2 (2026-11-09):
   E1 (`18395e8`): the deadline arm failed 12/12 slow keyed calls before the fix, 0/12 after.
 
 Next, in order (Session 3, Wed 2026-11-11, is recovery engineering):
-1. **Keyed race waits on "still running": stdio.** Done for HTTP (D10, record). The stdio
-   relay's `_answer_in_doubt` still delivers "unknown" one deadline after a keyed resend is
-   answered `-32011`. Waiting without bound is unsafe there: a request has no upstream timeout.
-   Design a bounded re-check (a keyed resend per deadline, within the retry budget) and test it
-   with a keyed tool slower than deadline + 5 s + deadline.
+1. **Founder decision needed: the relays' deadlines differ.**
+   - HTTP `--call-deadline` is when to resend (the first answer wins).
+   - stdio `--call-deadline` is a promised answer time: "unknown" after about two deadlines
+     for a recoverable call, by its documented contract.
+   - So the stdio half of D10 is by design, not a bug (record, D10). Do not change stdio's
+     contract without that decision.
 2. **Then evaluate a default deadline for recoverable requests** (declared reads, keyed calls).
    E1 shows HTTP keyed calls are safe after D10. Still to measure: a slow declared read (its
    second request doubles server load), slow calls through the TypeScript preload (tsnotes
-   has no `--slow` yet), and stdio after item 1. A changed default is the founder's decision:
+   has no `--slow` yet). stdio waits on item 1. A changed default is the founder's decision:
    bring the evidence, do not flip it.
 3. **P2b: the event-stream connection cost with a kernel delay** (iproute2 netem in a network
    namespace; this container has neither `tc` nor `ip`). Then decide whether to read event

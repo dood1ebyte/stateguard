@@ -409,11 +409,27 @@ summary.
 - The test passes, with the note written once. The HTTP relay and idempotency tests pass
   (77).
 
-**Not fixed: the stdio relay** (`_answer_in_doubt`) has the same one-deadline rule.
-- There, a request has no upstream timeout. Waiting without bound could leave a client
-  unanswered if the server died after "still running".
-- The stdio fix needs a bounded re-check: a keyed resend each deadline, which meets the retry
-  budget. Queued.
+**The stdio relay is different by contract (checked in Session 2, after the founder allowed
+work to continue inside the window).**
+- The stdio relay's `--call-deadline` is documented as "Answer 'outcome unknown' to a request
+  unanswered after SECONDS". It is off by default because "a long-running tool is not a
+  failure".
+- So there the deadline is a promised answer time: a recoverable call is resent once, and if
+  neither attempt answers by the second deadline, the client is told "unknown".
+- A stdio test showed this with a keyed call of 0.45 s and a 0.1 s deadline. The scripted
+  server handles one request at a time, the resend hit its own deadline, and the retry budget
+  (2 attempts) was spent. The client was told "unknown", and the original's success arrived
+  and was dropped as late.
+- That is the documented contract, not a bug. With the real keyed server's 5 s duplicate hold,
+  the resend also meets its own deadline first, so stdio's "still running" path needs a
+  deadline over 5 s.
+- A change was tried and discarded uncommitted: waiting up to 300 s on "still running" would
+  have silently broken the stated bound.
+- **Finding: the two relays' deadlines mean different things.**
+  - HTTP: when to resend; the first answer wins.
+  - stdio: the latest time an answer is given.
+  - Whether to unify them is a product decision for the founder. The trade is a latency bound
+    against induced failures on slow calls.
 
 ### E1: D10 before and after (`benchmarks/evidence/realhttp/E1`)
 
