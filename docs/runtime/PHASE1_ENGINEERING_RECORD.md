@@ -414,3 +414,32 @@ summary.
   unanswered if the server died after "still running".
 - The stdio fix needs a bounded re-check: a keyed resend each deadline, which meets the retry
   budget. Queued.
+
+### E1: D10 before and after (`benchmarks/evidence/realhttp/E1`)
+
+**Setup.**
+- Notes server; `write/slow` (no fault: `add_note` takes 10 s; deadline 2 s; the client waits
+  18 s); 12 trials.
+- Part `old` runs code `1852365`; part `new` runs `68b5594` (D10).
+- The `write/hang_after` check ran as its own part, `new_hang`, rather than inside `new` as
+  the plan said, so `old` and `new` hold the same cells.
+
+| Part (code) | raw | sg_keyed | sg_keyed_deadline |
+|---|---|---|---|
+| old (`1852365`) | 0/12 | 0/12 | **12/12 failed, all `-32011`; 12 induced** |
+| new (`68b5594`) | 0/12 | 0/12 | **0/12** |
+| new_hang (`68b5594`), `write/hang_after` | — | — | 0/12 |
+
+- **Before D10, a deadline turned every 10 s keyed success into an unresolved answer.** After
+  D10, none.
+- In the old part, ground truth reads "not executed" only because each run ended when the
+  client got its answer (9.9 s), before the 10 s write finished. The call would have run.
+- Recovery from a hang is unchanged. Every relay record agrees with ground truth.
+- **What it means for a default deadline (queue item 2).**
+  - On the HTTP relay, the known way a deadline turns a slow keyed success into a failure is
+    gone.
+  - Declared reads are re-requested, never cut short. Unkeyed writes are never cut short (an
+    existing test).
+  - Still unmeasured: a slow read's double load on the server, slow calls through the
+    TypeScript preload, and the stdio relay, which still has the one-deadline rule.
+  - A default remains the founder's decision.
