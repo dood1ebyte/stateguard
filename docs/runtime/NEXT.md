@@ -132,6 +132,7 @@ Next, in order (Session 3, Wed 2026-11-11, is recovery engineering):
 One line per session, newest first:
 `YYYY-MM-DD · task · result (tests: N passed / failures) · next`.
 
+- 2026-11-09 · Session 2 (09:00–09:50 IST) · metrics and taxonomy final (PHASE1_METRICS.md, phase1_table.py); D1 drift 0/60 per relay arm; D9 incidence records for unfinished requests (I1: 96/96 recorded); P3 per-call stdio overhead <1 ms (keyed write 6–7 ms); D10 HTTP keyed call still running is waited for (E1: 12/12 → 0/12 induced) · pushed, level with origin (tests: Python 3.13, 6575 passed / 0 failed / 0 skipped; ruff, format, mypy clean) · Session 3: queue item 1, the stdio half of D10
 - 2026-11-06 · Session 1 (09:00–12:30 IST) · B1, S1–S4, B2, P1, P2; D1–D8 fixed (stale pool, `-32603` retry where safe in both relays, executor-scope order, CI pin, harness); head pushed and level with origin (tests: Python 3.13, 6567 passed / 0 failed / 0 skipped; ruff, format, mypy clean) · Session 2: queue item 1, incidence records for requests open when a relay stops
 - 2026-11-05 · (before the schedule; stopped by the founder) harness, CI pin, B1 plan · pushed 237a332, 4017672; B1 killed at 70/960 rows (tests: 6337 passed / 1 known sandbox failure, 16 skipped before the pin) · B1, then stale pool
 
