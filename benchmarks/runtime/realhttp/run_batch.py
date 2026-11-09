@@ -69,7 +69,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--driver",
         default="driver.py",
-        help="driver.py, stale_pool.py, or ../realstdio/driver.py (relative to this directory)",
+        help="driver.py, stale_pool.py, ../realstdio/driver.py or ../realstdio/per_call.py "
+        "(relative to this directory)",
     )
     parser.add_argument(
         "--suite", default="realhttp", help="evidence directory: realhttp, realstdio"
@@ -157,7 +158,10 @@ def main(argv: list[str]) -> int:
         with tarfile.open(out / f"failing{suffix}.tar.gz", "w:gz") as tar:
             tar.add(failing, arcname=f"failing{suffix}")
     shutil.rmtree(runs, ignore_errors=True)
-    scorer = "stale_pool_summary.py" if args.driver == "stale_pool.py" else "summarize.py"
+    scorer = {
+        "stale_pool.py": "stale_pool_summary.py",
+        "../realstdio/per_call.py": "../realstdio/per_call_summary.py",
+    }.get(args.driver, "summarize.py")
     with (out / f"summary{suffix}.txt").open("w") as summary:
         subprocess.run(
             [
