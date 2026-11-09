@@ -4,11 +4,12 @@ it knows nothing of StateGuard. ``add_note`` appends one line to a notes file
 (one fsync'd write); ``list_notes`` reads it.
 
     python tests/examples/http_notes_server.py NOTES PORT [--resumable] [--json] [--slow S]
+        [--slow-read S]
 
 ``--resumable`` keeps the server's events in memory (an ``EventStore``), so a
 client can resume a cut response stream with ``Last-Event-ID``. ``--slow S`` makes
 ``add_note`` wait S seconds before it writes (TEST-ONLY), so a call can be in flight when
-the server is killed.
+the server is killed; ``--slow-read S`` makes ``list_notes`` wait S seconds (a slow read).
 """
 
 from __future__ import annotations
@@ -52,6 +53,9 @@ class MemoryEvents(EventStore):
 def main() -> None:
     notes, port = sys.argv[1], int(sys.argv[2])
     slow = float(sys.argv[sys.argv.index("--slow") + 1]) if "--slow" in sys.argv else 0.0
+    slow_read = (
+        float(sys.argv[sys.argv.index("--slow-read") + 1]) if "--slow-read" in sys.argv else 0.0
+    )
     app = MCPServer("notes")
 
     @app.tool()
@@ -65,8 +69,10 @@ def main() -> None:
         return f"added {text}"
 
     @app.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    def list_notes() -> str:
-        return open(notes).read() if os.path.exists(notes) else ""
+    async def list_notes() -> str:
+        if slow_read:
+            await anyio.sleep(slow_read)
+        return open(notes).read() if os.path.exists(notes) else ""  # noqa: ASYNC230
 
     app.run(
         transport="streamable-http",

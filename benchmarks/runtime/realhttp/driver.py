@@ -75,8 +75,9 @@ ARMS = {"notes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
 KEYED = ("sg_keyed", "sg_keyed_deadline")
 DEADLINE = "2"
 CLIENT_WAIT = 8.0
-#: Mode "slow" (notes and tsnotes, no fault): add_note takes this long, past deadline + the keyed
-#: server's 5 s duplicate wait + deadline. A deadline must not turn it into a failure.
+#: Mode "slow" (no fault): the op's tool takes this long (read/slow: notes only), past
+#: deadline + the keyed server's 5 s duplicate wait + deadline. A deadline must not turn it
+#: into a failure.
 SLOW_SECONDS = 10.0
 
 
@@ -127,8 +128,8 @@ def setup(server, base, t, arm, op, slow=0.0):
                        STATEGUARD_IDEMPOTENCY_SCOPE="notes", STATEGUARD_KEYED_TOOLS="add_note")
         if server == "notes":
             argv = [NOTES_SERVER, str(notes), str(port)]
-            if slow:
-                argv += ["--slow", str(slow)]
+            if slow:  # the op's own tool is the slow one
+                argv += ["--slow-read" if op == "read" else "--slow", str(slow)]
             if arm == "sg_resumable":
                 argv.append("--resumable")
             if arm in KEYED:
@@ -140,6 +141,8 @@ def setup(server, base, t, arm, op, slow=0.0):
                 cmd += ["--import", TS_PRELOAD]
             cmd += [TS_SERVER, str(notes), str(port)]
             if slow:
+                if op == "read":
+                    raise ValueError("read/slow needs the notes server (--slow-read)")
                 cmd += ["--slow", str(slow)]
         read = ("list_notes", {}, f"seed-{t}")
         write = ("add_note", {"Text" if op == "drift" else "text": f"w-{t}"})
