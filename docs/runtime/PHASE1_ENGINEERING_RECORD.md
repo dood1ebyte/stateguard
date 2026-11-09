@@ -273,3 +273,64 @@ attribute it to this call either: another actor, or a state that already held, l
 
 Neither is available for an unmodified third-party server, so the residual stays reported in
 doubt, never re-run, and never counted as success.
+
+## Session 2 (Mon 2026-11-09, 09:00–14:00 IST)
+
+### Metrics and taxonomy, final (`7b3c4d2`)
+
+`docs/runtime/PHASE1_METRICS.md` is the definition the Completion Report uses. It covers:
+- the unit, and the three row outcomes: success, unresolved, failed and resolved;
+- the RFR, and the counts reported beside it: unsafe, induced, recovered, overhead and record
+  agreement;
+- the reporting rules (never pooled);
+- which `TASKMAP.md` categories the matrix covers: D, E, F and I, and A after D1;
+- the traffic-weighted rate that the sub-1% target needs.
+
+`benchmarks/runtime/phase1_table.py` is its implementation, and on B2 and S4 it reproduces
+every figure above.
+
+Two definitions changed; neither moves a number in B2 or S4, since neither has such a row:
+- "not sent" is a resolved failure;
+- a keyed server's `-32010`/`-32011` is unresolved.
+
+### D1: schema drift, category A (`benchmarks/evidence/realhttp/D1`, code `7b3c4d2`)
+
+**Setup:** `add_note` with its field named `Text`, not `text`, and no transport fault. 60
+trials per arm on notes and tsnotes.
+
+| Arm | notes | tsnotes |
+|---|---|---|
+| raw | 60/60 | 60/60 |
+| naive | 60/60 | 60/60 |
+| sg, sg_keyed, sg_keyed_deadline | **0/60 each (≤ 6.0%)** | **0/60 each (≤ 6.0%)** |
+
+- The server rejects the misnamed field. A blind resend repeats the rejection. The relay
+  repairs the field, and the note exists once.
+- 0 unsafe outcomes and 0 induced failures; all 360 relay records agree with ground truth.
+- This is a single drift (a case-only rename), so it covers category A for that case only.
+- **Harness note:** `driver.py` was edited (`a00a269`) at 03:38:35 UTC, while the tsnotes part
+  was running (started 03:37:02 UTC). The part's driver process had already loaded the
+  committed code, and `harness_dirty` is taken at the start, so the part ran the clean harness.
+  From now on, `benchmarks/runtime/` is not edited while a batch runs.
+
+### D9: incidence records missed requests a relay never finished (`a00a269`)
+
+**The gap (B1, B2):**
+- A relay wrote an `invocation` record when a request finished.
+- A relay stopped or killed while a request was open left that request out of the incidence
+  denominator.
+- A shutdown hook would not close the gap: the benchmark driver kills relays with SIGKILL,
+  and a production relay can die the same way.
+
+**The change:**
+- Each request writes an `invocation_open` line as it arrives (no arguments), in both relays.
+- Its record carries the same random `inv` token.
+- `incidence.read_records` turns an open line with no record into an `unfinished` record,
+  which is unresolved.
+- The drivers read records the same way, so the record check sees these requests.
+- A log read while its relay runs shows requests still in flight as `unfinished`.
+
+**Tests:**
+- pairing works across logs and in any order;
+- a relay SIGKILLed during a hung call reads `unfinished`, and the call did run;
+- a stdio call in flight reads `unfinished`, then `answered` with the same token.
