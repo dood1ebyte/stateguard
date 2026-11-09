@@ -800,8 +800,12 @@ class Relay:
         A recoverable request under ``--call-deadline``. If it has no answer in
         time, it is sent once more -- the first attempt stays open -- and the
         first answer that settles it wins; the other is abandoned. A keyed
-        resend answered "in progress" or "in doubt" waits one more deadline
-        for the original's late answer before that answer is delivered.
+        resend answered "in doubt" waits one more deadline for the original's
+        late answer before that answer is delivered. One answered "still
+        running" (-32011) waits for the original however long it takes (each
+        attempt is bounded by ``--upstream-timeout``): the server says the call
+        is executing, so its answer is coming, and delivering "still running"
+        would turn a slow success into an unresolved call.
         """
         assert self.deadline is not None
         client_id = message.get("id")
@@ -841,8 +845,10 @@ class Relay:
                         tg.start_soon(racer)
                         pending = 2
                     while pending:
-                        # Unbounded while both run; one more deadline once one has answered.
-                        wait = self.deadline if fallback is not None else math.inf
+                        # Unbounded while both run, and while the server says the call is
+                        # still running; otherwise one more deadline once one has answered.
+                        settling = fallback is not None and not _still_running(fallback)
+                        wait = self.deadline if settling else math.inf
                         answer = None
                         with anyio.move_on_after(wait):
                             answer = await receive.receive()
@@ -1413,6 +1419,14 @@ def _json_object(body: bytes) -> dict[str, Any] | None:
     except ValueError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _still_running(answer: dict[str, Any] | Response) -> bool:
+    """A keyed server's "still running" (-32011): the call is executing, its answer is coming."""
+    if isinstance(answer, Response):
+        return False
+    error = answer.get("error")
+    return isinstance(error, dict) and error.get("code") == IN_PROGRESS_CODE
 
 
 def build_app(relay: Relay, path: str) -> Starlette:

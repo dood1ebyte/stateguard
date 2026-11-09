@@ -110,11 +110,11 @@ Done in Session 2 (2026-11-09):
 - P3, per-call overhead of a running stdio relay (harness `0cee55c`; results in the record).
 
 Next, in order (Session 3, Wed 2026-11-11, is recovery engineering):
-1. **Keyed race waits on "still running".** In the HTTP relay's `_race`, a keyed resend
-   answered `-32011` makes the relay wait one more deadline for the original, then deliver the
-   unresolved answer. So a keyed call slower than about two deadlines ends unresolved (record,
-   "What still fails"). Wait on the original instead while the server reports "still running";
-   test it with a slow keyed tool. Check the stdio relay for the same path.
+1. **Keyed race waits on "still running": stdio.** Done for HTTP (D10, record). The stdio
+   relay's `_answer_in_doubt` still delivers "unknown" one deadline after a keyed resend is
+   answered `-32011`. Waiting without bound is unsafe there: a request has no upstream timeout.
+   Design a bounded re-check (a keyed resend per deadline, within the retry budget) and test it
+   with a keyed tool slower than deadline + 5 s + deadline.
 2. **Then evaluate a default deadline for recoverable requests** (declared reads, keyed calls).
    Measure induced failures on slow successes and recovery on `hang_after` (B2 cells plus a
    slow-tool cell). A changed default is the founder's decision: bring the evidence, do not

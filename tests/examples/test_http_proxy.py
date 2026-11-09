@@ -450,6 +450,21 @@ def test_a_keyed_write_without_an_answer_in_time_is_raced_and_runs_once(
     assert rig.notes() == ["a"]
 
 
+def test_a_keyed_call_still_running_past_its_deadlines_is_waited_for(rig: Rig) -> None:
+    """
+    A slow keyed write: past the deadline it is sent again. The server holds that duplicate up
+    to 5 s (``wait_seconds``) for the original, then answers "still running" (-32011). That is
+    no answer to deliver: the relay waits for the call, and the effect happens once.
+    """
+    rig.server(keyed=True, slow=7.0)  # longer than deadline + the server's 5 s + deadline
+    rig.faults("none")
+    rig.relay("--retry", "auto", "--call-deadline", "0.5")
+    answer = _session(rig.relay_url, _add_note())
+    assert _ok(answer), answer
+    assert answer.content[0].text == "added a"
+    assert rig.notes() == ["a"]
+
+
 def test_a_declared_read_without_an_answer_in_time_is_requested_again(rig: Rig) -> None:
     effects = rig.tmp / "effects.json"
     effects.write_text(json.dumps({"tools": [{"name": "list_notes", "effect": "read_only"}]}))

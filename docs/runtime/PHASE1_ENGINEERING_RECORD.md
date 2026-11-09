@@ -388,3 +388,29 @@ summary.
   effect. A keyed read is not keyed and costs the relay's share only.
 - These are synthetic, single-machine measurements with sub-10 ms tools. They are not
   production latencies, and a slower tool hides the same absolute cost.
+
+### D10: a slow keyed call under a deadline ended unresolved (HTTP relay)
+
+**Reproduced** (`test_a_keyed_call_still_running_past_its_deadlines_is_waited_for`):
+- a keyed `add_note` that takes 7 s, with `--call-deadline 0.5`;
+- the relay resends it at 0.5 s;
+- the keyed server holds that duplicate for up to 5 s (`wait_seconds`), then answers "still
+  running" (`-32011`);
+- the relay waited one more deadline and delivered `-32011` to the client, while the original
+  went on to succeed.
+- This is a StateGuard-induced failure. It hits any keyed call slower than about deadline +
+  5 s + deadline.
+
+**The fix (HTTP relay, `_race`):**
+- After a "still running" answer, the relay waits for the original, however many deadlines
+  that takes. Each attempt is still bounded by `--upstream-timeout`.
+- The server says the call is executing, so its answer is coming.
+- A resend answered "in doubt" still waits one deadline only.
+- The test passes, with the note written once. The HTTP relay and idempotency tests pass
+  (77).
+
+**Not fixed: the stdio relay** (`_answer_in_doubt`) has the same one-deadline rule.
+- There, a request has no upstream timeout. Waiting without bound could leave a client
+  unanswered if the server died after "still running".
+- The stdio fix needs a bounded re-check: a keyed resend each deadline, which meets the retry
+  budget. Queued.
