@@ -5,6 +5,9 @@ no number from it is a production failure rate.
 
 ## Measurement specification
 
+The final Phase 1 definitions, the failure taxonomy and the generated table are in
+`docs/runtime/PHASE1_METRICS.md` (`benchmarks/runtime/phase1_table.py`).
+
 **Eligible logical invocation.** One client session (`initialize`, `tools/list`) followed by
 one `tools/call` that the workload issues, with at most one injected fault.
 - Every row is one invocation. Resends by the client (`naive`) or by StateGuard never add a row.
@@ -23,7 +26,7 @@ one `tools/call` that the workload issues, with at most one injected fault.
 |---|---|
 | success | read: the client was answered with the right content. Write: the client was told success **and** the note exists exactly once |
 | failed | anything else: the residual failure rate counts failed (including unresolved) / eligible |
-| unresolved | the client was told "outcome unknown" (`surfaced_unknown`), got no answer (`no_answer_timeout`, `no_answer_crash`), or was told "not sent" (`surfaced_not_sent`, which is resolved but failed) |
+| unresolved | the client cannot tell whether it ran: told "outcome unknown" (`surfaced_unknown`), a keyed server's `-32010`/`-32011`, or no answer (`no_answer_timeout`, `no_answer_crash`). "Not sent" (`surfaced_not_sent`) is a resolved failure |
 | recovered | a row that succeeds in an arm while the same (op, mode, trial) fails in `raw`. Detection is never recovery: "unknown" is a failure |
 | duplicate effect | the note exists more than once |
 | false success | the client was told success, and the note does not exist |
