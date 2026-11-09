@@ -13,6 +13,7 @@ The relay's execution-state ledger, end to end.
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -209,6 +210,28 @@ def test_a_refused_call_is_recorded_refused() -> None:
         rig.call("search", {"query": "x", "limit": 99})
         (record,) = _records(rig)
         assert record["resolution"] == "refused"
+    finally:
+        rig.close()
+
+
+def test_a_call_in_flight_reads_as_unfinished_until_its_record_finishes_it(
+    tmp_path: Path,
+) -> None:
+    from stateguard.adapters.mcp.incidence import read_records
+
+    def calls() -> list[dict[str, Any]]:
+        audit = tmp_path / "audit.jsonl"
+        audit.write_text("".join(json.dumps(e) + "\n" for e in rig.audit))
+        return [r for r in read_records([audit]) if r["method"] == "tools/call"]
+
+    rig = _rig(ServerAction.DELAYED_RESPONSE)  # no deadline: the relay waits for the answer
+    try:
+        assert rig.call("search", {"query": "x"}, timeout=0.05) is None  # still in flight
+        (open_call,) = calls()
+        assert open_call["resolution"] == "unfinished"  # as if the relay were killed now
+        time.sleep(DELAY_SECONDS + 0.2)
+        (call,) = calls()
+        assert call["resolution"] == "answered" and call["inv"] == open_call["inv"]
     finally:
         rig.close()
 

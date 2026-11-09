@@ -337,7 +337,12 @@ from stateguard.adapters.mcp.idempotency import (
     tool_supports_keys,
     with_key,
 )
-from stateguard.adapters.mcp.incidence import INVOCATION_EVENT, resolution, with_faults
+from stateguard.adapters.mcp.incidence import (
+    INVOCATION_EVENT,
+    INVOCATION_OPEN_EVENT,
+    resolution,
+    with_faults,
+)
 from stateguard.adapters.mcp.jsonrpc import (
     JSONRPC_VERSION,
     PROTOCOL_VERSION_META_KEY,
@@ -491,6 +496,7 @@ class StdioRelay:
         # client id -> (payload, tool, server generation it was decided against)
         self._calls: dict[Any, tuple[bytes, str | None, int]] = {}
         self._attempts: dict[Any, int] = {}  # client id -> attempts sent
+        self._inv: dict[Any, str] = {}  # client id -> the token pairing its open and record
         #: client id -> attempts, once forgotten and until its invocation record is written.
         self._spent_attempts: OrderedDict[Any, int] = OrderedDict()
         self._client_of: dict[Any, Any] = {}  # retry id -> client id
@@ -665,6 +671,7 @@ class StdioRelay:
             # would only mask these fields.
             self._audit_only(
                 INVOCATION_EVENT,
+                inv=self._inv.pop(identifier, None),
                 id=identifier,
                 method=invocation.method,
                 tool=invocation.tool if invocation.method == "tools/call" else None,
@@ -912,6 +919,20 @@ class StdioRelay:
         except Exception as exc:  # noqa: BLE001 -- fail open
             self._internal_error("ledger", exc)
             return None
+        if _hashable(identifier):
+            # An open line, so a request the relay never finishes (it is killed first) is
+            # still counted, as ``unfinished`` (``stateguard.adapters.mcp.incidence``).
+            try:
+                inv = self._inv[identifier] = secrets.token_hex(8)
+                self._audit_only(
+                    INVOCATION_OPEN_EVENT,
+                    inv=inv,
+                    id=identifier,
+                    method=str(message["method"]),
+                    tool=tool if message["method"] == "tools/call" else None,
+                )
+            except Exception as exc:  # noqa: BLE001 -- fail open: a record never breaks a call
+                self._internal_error("invocation record", exc)
         return identifier
 
     def _send_tracked(self, identifier: Any, line: bytes) -> None:

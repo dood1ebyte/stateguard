@@ -44,6 +44,8 @@ import time
 import uuid
 from pathlib import Path
 
+from stateguard.adapters.mcp.incidence import read_records
+
 HERE = Path(__file__).resolve().parent
 CODE = Path(os.environ.get("STATEGUARD_CODE", str(HERE.parents[2]))).resolve()
 PY = os.environ.get("STATEGUARD_PYTHON", sys.executable)
@@ -237,7 +239,9 @@ def run(server, cell, arm, t):
     if (base / "audit.jsonl").exists():
         audit = [json.loads(line) for line in (base / "audit.jsonl").read_text().splitlines() if line.strip()]
     proxy_log = (base / "proxy.log").read_text().splitlines() if (base / "proxy.log").exists() else []
-    invocations = [e for e in audit if e.get("event") == "invocation" and e.get("method") == "tools/call"]
+    # Finished records, and an ``unfinished`` one for each request the relay never finished.
+    invocations = [e for e in (read_records([base / "audit.jsonl"]) if audit else [])
+                   if e.get("method") == "tools/call"]
     row = {
         "server": server, "op": op, "tool": name, "mode": mode,
         "family": "session" if mode == "session_loss" else "transport", "arm": arm, "trial": t,

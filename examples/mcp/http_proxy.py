@@ -152,7 +152,12 @@ from stateguard.adapters.mcp.idempotency import (
     tool_supports_keys,
     with_key,
 )
-from stateguard.adapters.mcp.incidence import INVOCATION_EVENT, resolution, with_faults
+from stateguard.adapters.mcp.incidence import (
+    INVOCATION_EVENT,
+    INVOCATION_OPEN_EVENT,
+    resolution,
+    with_faults,
+)
 from stateguard.adapters.mcp.jsonrpc import intervenes, proposal
 from stateguard.core.models.config import GuardConfig, RepairMode
 
@@ -351,15 +356,35 @@ class Relay:
         """
         One client request's attempt counters, its token among live requests, the faults it
         met (for its ``invocation`` record), when it started, and the answer it was sent.
+        ``inv`` pairs its ``invocation_open`` line with that record.
         """
         return {
             "attempts": 0,
             "reopened": 0,
             "token": next(self._tokens),
+            "inv": secrets.token_hex(8),
             "faults": [],
             "t0": time.monotonic(),
             "final": None,
         }
+
+    def _open(
+        self, session: Session | None, message: dict[str, Any], state: dict[str, Any]
+    ) -> None:
+        """
+        An ``invocation_open`` line as a request arrives: no arguments. A request the relay
+        never finishes (it is stopped or killed first) is still counted, as ``unfinished``.
+        """
+        params = message.get("params")
+        tool = params.get("name") if isinstance(params, dict) else None
+        self.log(
+            INVOCATION_OPEN_EVENT,
+            inv=state["inv"],
+            id=message.get("id"),
+            session=session.client_id if session is not None else None,
+            method=message.get("method"),
+            tool=tool if message.get("method") == "tools/call" else None,
+        )
 
     def _record(
         self,
@@ -386,6 +411,7 @@ class Relay:
         tool = params.get("name") if isinstance(params, dict) else None
         self.log(
             INVOCATION_EVENT,
+            inv=state.get("inv"),
             id=message.get("id"),
             session=session.client_id if session is not None else None,
             method=message.get("method"),
@@ -704,6 +730,7 @@ class Relay:
         if method == "tools/list":
             self._lists.observe_request(message)
         state = self._new_state()
+        self._open(session, message, state)
         if method == "tools/call" and not self.passthrough:
             checked = await self._check_call(request, message, session)
             if isinstance(checked, Response):

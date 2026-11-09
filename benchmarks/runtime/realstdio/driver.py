@@ -40,6 +40,8 @@ import time
 import uuid
 from pathlib import Path
 
+from stateguard.adapters.mcp.incidence import read_records
+
 HERE = Path(__file__).resolve().parent
 CODE = Path(os.environ.get("STATEGUARD_CODE", str(HERE.parents[2]))).resolve()
 PY = os.environ.get("STATEGUARD_PYTHON", sys.executable)
@@ -180,7 +182,9 @@ def run(server: str, cell: str, arm: str, t: int) -> dict:
     if (base / "audit.jsonl").exists():
         audit = [json.loads(x) for x in (base / "audit.jsonl").read_text().splitlines() if x.strip()]
     shim_log = (base / "shim.log").read_text().splitlines() if (base / "shim.log").exists() else []
-    records = [e for e in audit if e.get("event") == "invocation" and e.get("method") == "tools/call"]
+    # Finished records, and an ``unfinished`` one for each request the relay never finished.
+    records = [e for e in (read_records([base / "audit.jsonl"]) if audit else [])
+               if e.get("method") == "tools/call"]
     row = {
         "server": server, "op": op, "tool": name, "mode": mode,
         "family": "crash" if mode in CRASH else "transport", "arm": arm, "trial": t,

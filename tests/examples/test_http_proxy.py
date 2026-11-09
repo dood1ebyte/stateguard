@@ -999,6 +999,41 @@ def test_a_raced_read_is_recorded_with_its_deadline(rig: Rig) -> None:
     assert record["attempts"] == 2
 
 
+def test_each_request_opens_with_the_token_its_record_carries(rig: Rig) -> None:
+    rig.server()
+    rig.faults("none")
+    rig.relay("--retry", "auto")
+    _session(rig.relay_url, _add_note())
+    opens = {e["inv"]: e for e in rig.audit() if e["event"] == "invocation_open"}
+    records = [e for e in rig.audit() if e["event"] == "invocation"]
+    assert records and {r["inv"] for r in records} == set(opens)
+    (call,) = _invocations(rig)
+    assert opens[call["inv"]]["tool"] == "add_note" and opens[call["inv"]]["id"] == call["id"]
+    assert '"a"' not in json.dumps(list(opens.values()))  # no arguments
+
+
+def test_a_call_open_when_the_relay_is_killed_is_counted_unfinished(rig: Rig) -> None:
+    from stateguard.adapters.mcp.incidence import read_records, summarize
+
+    rig.server()
+    rig.faults("hang_after")
+    rig.relay("--retry", "auto")  # no deadline: the relay waits on the hung answer
+
+    async def body(session: Any) -> Any:
+        with anyio.move_on_after(3):
+            await _add_note()(session)
+        relay = rig.procs.pop("relay")
+        relay.kill()  # SIGKILL: no shutdown code runs
+        relay.wait(timeout=10)
+
+    _session(rig.relay_url, body, survive=True)  # the client's teardown fails: the relay is gone
+    assert rig.notes() == ["a"]  # it ran; the client was never told
+    records = read_records([rig.tmp / "audit.jsonl"])
+    (call,) = [r for r in records if r["method"] == "tools/call"]
+    assert call["resolution"] == "unfinished"
+    assert summarize(records)["tools/call"]["unresolved"]["k"] == 1
+
+
 def test_the_incidence_report_reads_a_relays_audit_log(rig: Rig) -> None:
     from stateguard.adapters.mcp.incidence import read_records, summarize
 

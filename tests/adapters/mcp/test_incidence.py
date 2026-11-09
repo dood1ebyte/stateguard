@@ -14,6 +14,7 @@ import pytest
 
 from stateguard.adapters.mcp.incidence import (
     INVOCATION_EVENT,
+    INVOCATION_OPEN_EVENT,
     failed,
     read_records,
     render,
@@ -77,6 +78,7 @@ def test_an_answer_after_a_fault_is_a_recovery_and_nothing_else_is() -> None:
         ("in_doubt", True, True),
         ("in_progress", True, True),
         ("client_gone", True, True),
+        ("unfinished", True, True),  # the relay stopped before it answered
         ("http_503", True, True),
         ("not_sent", False, True),  # it did not run: resolved, but failed
         ("refused", False, True),
@@ -172,3 +174,53 @@ def test_the_cli_refuses_an_unreadable_log(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as done:
         main(["incidence", str(tmp_path / "missing.jsonl")])
     assert done.value.code != 0
+
+
+# -- a request a relay never finished is still counted --------------------------------------------
+
+
+def _open(inv: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "event": INVOCATION_OPEN_EVENT,
+        "inv": inv,
+        "method": "tools/call",
+        "tool": "add_note",
+        "id": 1,
+        **extra,
+    }
+
+
+def _write(path: Path, entries: list[dict[str, Any]]) -> Path:
+    path.write_text("".join(json.dumps(e) + "\n" for e in entries))
+    return path
+
+
+def test_an_open_request_with_no_record_is_unfinished_and_unresolved(tmp_path: Path) -> None:
+    audit = _write(
+        tmp_path / "audit.jsonl",
+        [
+            _open("a"),
+            _record("answered", [], inv="a"),
+            _open("b", session="s"),  # the relay was killed before it answered
+        ],
+    )
+    records = read_records([audit])
+    assert [r["resolution"] for r in records] == ["answered", "unfinished"]
+    (unfinished,) = [r for r in records if r["resolution"] == "unfinished"]
+    assert unfinished["inv"] == "b" and unfinished["session"] == "s"
+    assert unfinished["tool"] == "add_note" and unfinished["faults"] == []
+    calls = summarize(records)["tools/call"]
+    assert calls["invocations"] == 2
+    assert calls["unresolved"]["k"] == 1 and calls["failed"]["k"] == 1
+
+
+def test_an_open_line_and_its_record_pair_across_logs_in_any_order(tmp_path: Path) -> None:
+    first = _write(tmp_path / "1.jsonl", [_record("unknown", ["transport_lost"], inv="a")])
+    second = _write(tmp_path / "2.jsonl", [_open("a")])
+    records = read_records([first, second])
+    assert [r["resolution"] for r in records] == ["unknown"]
+
+
+def test_records_without_open_lines_are_read_as_before(tmp_path: Path) -> None:
+    audit = _write(tmp_path / "audit.jsonl", [_record("answered", []), _record("unknown", [])])
+    assert [r["resolution"] for r in read_records([audit])] == ["answered", "unknown"]

@@ -37,13 +37,19 @@ What a record can and cannot see
   ``in_progress``      the server's keyed answer "still running" (-32011);
   ``refused``          refused by the relay's schema check, never sent;
   ``client_gone``      the client went away before its answer;
+  ``unfinished``       open when the log was read: the relay stopped (or was killed) before it
+                       answered, or the request is still running. A relay writes an
+                       ``invocation_open`` line when a request arrives, and its ``invocation``
+                       record carries the same ``inv`` token; an open line with no record is
+                       this. Read a log after its relay has stopped;
   ``http_<status>``    an HTTP status passed through from the server, or the relay's own.
 
-  ``unknown``, ``in_doubt``, ``in_progress``, ``client_gone`` and ``http_5xx`` are *unresolved*:
-  the client cannot tell whether the call ran. *Failed* is every invocation the server did not
-  answer: the unresolved ones and also ``not_sent``, ``refused`` and any other ``http_<status>``.
-  A tool's own error (``answered_error``) is an answer, not a failure of the invocation. Rates
-  are per invocation, with Wilson 95% intervals, and nothing is dropped from the denominator.
+  ``unknown``, ``in_doubt``, ``in_progress``, ``client_gone``, ``unfinished`` and ``http_5xx``
+  are *unresolved*: the client cannot tell whether the call ran. *Failed* is every invocation
+  the server did not answer: the unresolved ones and also ``not_sent``, ``refused`` and any
+  other ``http_<status>``. A tool's own error (``answered_error``) is an answer, not a failure
+  of the invocation. Rates are per invocation, with Wilson 95% intervals, and nothing is dropped
+  from the denominator.
 
 Usage: ``stateguard incidence AUDIT.jsonl [...] [--json]``.
 """
@@ -59,6 +65,12 @@ from typing import Any
 
 #: The audit event name of one finished client request.
 INVOCATION_EVENT = "invocation"
+#: The audit event name of a client request as it arrives. Its ``invocation`` record carries the
+#: same ``inv`` token, so a request a relay never finished (it was stopped or killed) is still
+#: counted.
+INVOCATION_OPEN_EVENT = "invocation_open"
+#: The fields an ``invocation_open`` line carries into an ``unfinished`` record.
+_OPEN_FIELDS = ("ts", "inv", "id", "session", "method", "tool")
 #: Where a keyed server says what it did (replayed, executed, ...).
 IDEMPOTENCY_OUTCOME = "io.stateguard/idempotencyOutcome"
 #: Where a relay's own answer says what it knows about execution.
@@ -78,7 +90,7 @@ FAULTS = (
     "stream_cut",  # an event stream ended before its answer
     "deadline",  # no answer within --call-deadline
 )
-UNRESOLVED = frozenset({"unknown", "in_doubt", "in_progress", "client_gone"})
+UNRESOLVED = frozenset({"unknown", "in_doubt", "in_progress", "client_gone", "unfinished"})
 ANSWERED = frozenset({"answered", "answered_error", "recovered", "recovered_error"})
 
 
@@ -144,15 +156,38 @@ def _rate(k: int, n: int) -> dict[str, Any]:
 
 
 def read_records(paths: Iterable[str | Path]) -> list[dict[str, Any]]:
-    """Every ``invocation`` record in the audit logs at *paths* (other events are skipped)."""
+    """
+    Every ``invocation`` record in the audit logs at *paths*, and one ``unfinished`` record for
+    each ``invocation_open`` line that no record finished (other events are skipped).
+    """
     records: list[dict[str, Any]] = []
+    opened: list[dict[str, Any]] = []
     for path in paths:
         for line in Path(path).read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             entry = json.loads(line)
-            if isinstance(entry, dict) and entry.get("event") == INVOCATION_EVENT:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("event") == INVOCATION_EVENT:
                 records.append(entry)
+            elif entry.get("event") == INVOCATION_OPEN_EVENT and entry.get("inv"):
+                opened.append(entry)
+    finished = {r.get("inv") for r in records if r.get("inv")}
+    for entry in opened:
+        if entry["inv"] not in finished:
+            records.append(
+                {
+                    **{name: entry.get(name) for name in _OPEN_FIELDS},
+                    "event": INVOCATION_EVENT,
+                    "keyed": None,
+                    "attempts": None,
+                    "faults": [],
+                    "resolution": "unfinished",
+                    "server_outcome": None,
+                    "ms": None,
+                }
+            )
     return records
 
 
