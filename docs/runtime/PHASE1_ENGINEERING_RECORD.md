@@ -459,3 +459,29 @@ work to continue inside the window).**
   - Still unmeasured: a slow read's double load on the server, slow calls through the
     TypeScript preload, and the stdio relay, which still has the one-deadline rule.
   - A default remains the founder's decision.
+
+### E2 and E3: more evidence for a default deadline (HTTP relay, after D10)
+
+Work continued inside the Session 2 window, with the founder's go-ahead.
+
+| Batch (code) | Cell | raw | sg | sg_keyed | sg_deadline / sg_keyed_deadline |
+|---|---|---|---|---|---|
+| E2 (`ece85e7`), tsnotes, keyed by the TypeScript preload | `write/slow` (10 s) | 0/12 | — | 0/12 | **0/12** |
+| E3 (`72fc67b`), notes | `read/slow` (10 s) | 0/12 | 0/12 | — | **0/12** |
+
+- **E2:** with the TypeScript keyed server too, a deadline turns no slow keyed success into a
+  failure. The note is written once.
+- **E3:** a slow declared read is re-requested at the deadline and never cut short.
+  - **Cost:** 2 reads reach the server per call, against 1 without a deadline.
+  - **Incidence caveat:** its record reads `recovered` with fault `deadline`, though nothing
+    failed. Under a deadline, a call slower than the deadline counts as a fault in the
+    incidence rates.
+- **Where a default deadline stands (HTTP), now measured:**
+  - keyed writes (Python and TypeScript keyed servers) and declared reads are never cut short
+    by it;
+  - it recovers `hang_after` (B2, E1);
+  - unkeyed writes are never cut short (an existing test).
+- **Its costs:** a second request to the server for each call slower than the deadline, and
+  incidence records that count slow calls as deadline faults.
+- **Still open:** the stdio relay, whose deadline means something else (D10), and the choice of
+  value. The default remains the founder's decision.
