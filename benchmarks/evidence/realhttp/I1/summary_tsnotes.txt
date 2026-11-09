@@ -1,0 +1,29 @@
+rows 144  driver_errors 0
+
+===== tsnotes
+
+raw
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     24/24 (100.0%, ci 86.2%-100.0%)   transport 24/24 (100.0%, ci 86.2%-100.0%)   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 24, 'no_answer_crash': 0}  induced_vs_raw -  recovered_vs_raw -
+  latency fault-free {'n': 24, 'mean': 0.861, 'median': 0.865, 'p95': 0.948}
+
+sg
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     24/24 (100.0%, ci 86.2%-100.0%)   transport 24/24 (100.0%, ci 86.2%-100.0%)   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 24, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 48, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 0.91, 'median': 0.911, 'p95': 1.039}
+
+sg_keyed
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     24/24 (100.0%, ci 86.2%-100.0%)   transport 24/24 (100.0%, ci 86.2%-100.0%)   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 24, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 48, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 0.888, 'median': 0.861, 'p95': 1.0}
+
+op/mode                                 raw                 sg           sg_keyed
+read/hang_after                   12/12              12/12              12/12    
+read/none                          0/12               0/12               0/12    
+write/hang_after                  12/12              12/12              12/12    
+write/none                         0/12               0/12               0/12    
