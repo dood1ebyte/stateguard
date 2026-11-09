@@ -66,20 +66,18 @@ allowed. Early completion or idle capacity never advances the schedule.
   - Session 6, `trig_01JBfioVdCgAAaNB85oA8n9C`, 11-18.
 - **The 14:00 IST end** is enforced by each session's own clock checks, not by the platform.
 
-## Handoff (end of Session 1, Fri 2026-11-06)
+## Handoff (end of Session 2, Mon 2026-11-09)
 
-- **Pushed:** everything up to the commit that adds this section. `origin` and the local branch
-  are level. The 2026-11-05 state (STOPPED) was resolved in Session 1: `4017672` pushed, the
-  partial B1 rows set aside in `B1/aborted/`, B1 re-run in full.
-- **Uncommitted:** nothing. **Running:** nothing; every batch, relay and server process ended.
+- **Pushed:** everything up to the commit that adds this section; `origin` and the local branch
+  are level. **Uncommitted:** nothing. **Running:** nothing.
 - **Left in place (lost if the container is replaced):** the venvs `.venv` and `/tmp/mcp1`,
   TypeScript `node_modules`, `/opt/sg-servers/*`, Python 3.14 in `/opt/uvpython`, and the
-  `run_batch.py` worktrees `/tmp/sg-code-<sha12>` (detached, read-only use). Rebuild per
-  "Environment" if they are gone.
-- **Results and reasoning:** `docs/runtime/PHASE1_ENGINEERING_RECORD.md`; evidence in
-  `benchmarks/evidence/{realhttp,realstdio}/`.
-- **Exact next action (Mon 2026-11-09, 09:00 IST):** check the environment, then queue item 1
-  below (incidence records for requests open when a relay stops).
+  `run_batch.py` worktrees `/tmp/sg-code-<sha12>`. Rebuild per "Environment" if they are gone.
+- **Results and reasoning:** `docs/runtime/PHASE1_ENGINEERING_RECORD.md` (Sessions 1 and 2).
+  Metrics: `docs/runtime/PHASE1_METRICS.md`. Evidence: `benchmarks/evidence/{realhttp,realstdio}/`.
+- **Rule learned:** never edit `benchmarks/runtime/` while a batch runs (record, D1 note).
+- **Exact next action (Wed 2026-11-11, 09:00 IST):** check the environment, then queue item 1
+  below (stdio: a keyed call still running past its deadlines).
 
 ## Phase 1 queue (first not done or blocked; mark done here with its commit)
 
@@ -107,7 +105,10 @@ Done in Session 2 (2026-11-09):
 - D1, schema drift, category A (`504f109`): every relay arm 0/60, raw 60/60;
 - D9, incidence records for requests a relay never finished (`a00a269`), confirmed by I1:
   96/96 relay rows recorded;
-- P3, per-call overhead of a running stdio relay (harness `0cee55c`; results in the record).
+- P3, per-call overhead of a running stdio relay (`e0a090a`): under 1 ms per call; a keyed
+  write about 6–7 ms;
+- D10, HTTP relay: a keyed call still running past its deadlines is waited for (`68b5594`);
+  E1 (`18395e8`): the deadline arm failed 12/12 slow keyed calls before the fix, 0/12 after.
 
 Next, in order (Session 3, Wed 2026-11-11, is recovery engineering):
 1. **Keyed race waits on "still running": stdio.** Done for HTTP (D10, record). The stdio
@@ -116,9 +117,10 @@ Next, in order (Session 3, Wed 2026-11-11, is recovery engineering):
    Design a bounded re-check (a keyed resend per deadline, within the retry budget) and test it
    with a keyed tool slower than deadline + 5 s + deadline.
 2. **Then evaluate a default deadline for recoverable requests** (declared reads, keyed calls).
-   Measure induced failures on slow successes and recovery on `hang_after` (B2 cells plus a
-   slow-tool cell). A changed default is the founder's decision: bring the evidence, do not
-   flip it.
+   E1 shows HTTP keyed calls are safe after D10. Still to measure: a slow declared read (its
+   second request doubles server load), slow calls through the TypeScript preload (tsnotes
+   has no `--slow` yet), and stdio after item 1. A changed default is the founder's decision:
+   bring the evidence, do not flip it.
 3. **P2b: the event-stream connection cost with a kernel delay** (iproute2 netem in a network
    namespace; this container has neither `tc` nor `ip`). Then decide whether to read event
    streams to their end so the connection can be reused. Session 3 or 5.
