@@ -366,3 +366,25 @@ trials.
   - That would make a default deadline for recoverable requests (declared reads, keyed calls)
     worth evaluating. It is queued, not started: it is recovery engineering (Session 3), and a
     default is a product decision.
+
+### P3: per-call overhead of a running stdio relay (`benchmarks/evidence/realstdio/P3`, code `0cee55c`)
+
+**Setup:** one SDK session per arm and round, 20 rounds × 50 calls alternating read and write,
+no fault, on an idle machine. The difference is taken from raw on the same (round, call, op),
+with a normal 95% interval. Warm calls only; the first read and write of a session are in the
+summary.
+
+| Server | Op | raw mean | sg vs raw | sg_keyed vs raw |
+|---|---|---|---|---|
+| sqlite | read | 2.01 ms | +0.68 ms (0.64–0.72) | +0.75 ms (0.71–0.80) |
+| sqlite | write | 3.78 ms | +0.87 ms (0.75–0.98) | **+6.31 ms (6.15–6.47)** |
+| memory | read | 2.01 ms | +0.94 ms (0.90–0.99) | +1.22 ms (1.15–1.28) |
+| memory | write | 3.10 ms | +0.89 ms (0.66–1.11) | **+6.86 ms (6.57–7.15)** |
+
+- 6,000 calls: 0 failed, and 0 session errors.
+- **The relay costs under 1 ms per call.** P1's +0.20 to +0.37 s per session is almost all
+  the relay's process start, paid once per server process.
+- **A keyed write costs about 6–7 ms more:** the key store commits before and after the
+  effect. A keyed read is not keyed and costs the relay's share only.
+- These are synthetic, single-machine measurements with sub-10 ms tools. They are not
+  production latencies, and a slower tool hides the same absolute cost.

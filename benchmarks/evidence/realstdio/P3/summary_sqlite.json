@@ -1,0 +1,167 @@
+{
+ "calls": 3000,
+ "session_errors": 0,
+ "failed_calls": 0,
+ "cells": {
+  "sqlite/read/first/raw": {
+   "latency": {
+    "n": 20,
+    "mean_ms": 3.25,
+    "median_ms": 2.53,
+    "p95_ms": 7.42
+   }
+  },
+  "sqlite/read/first/sg": {
+   "latency": {
+    "n": 20,
+    "mean_ms": 4.19,
+    "median_ms": 3.76,
+    "p95_ms": 7.01
+   },
+   "vs_raw": {
+    "pairs": 20,
+    "mean_ms": 0.94,
+    "ci95_ms": [
+     -0.21,
+     2.1
+    ]
+   }
+  },
+  "sqlite/read/first/sg_keyed": {
+   "latency": {
+    "n": 20,
+    "mean_ms": 4.26,
+    "median_ms": 3.49,
+    "p95_ms": 8.12
+   },
+   "vs_raw": {
+    "pairs": 20,
+    "mean_ms": 1.01,
+    "ci95_ms": [
+     -0.4,
+     2.42
+    ]
+   }
+  },
+  "sqlite/read/warm/raw": {
+   "latency": {
+    "n": 480,
+    "mean_ms": 2.01,
+    "median_ms": 1.97,
+    "p95_ms": 2.42
+   }
+  },
+  "sqlite/read/warm/sg": {
+   "latency": {
+    "n": 480,
+    "mean_ms": 2.69,
+    "median_ms": 2.64,
+    "p95_ms": 3.27
+   },
+   "vs_raw": {
+    "pairs": 480,
+    "mean_ms": 0.68,
+    "ci95_ms": [
+     0.64,
+     0.72
+    ]
+   }
+  },
+  "sqlite/read/warm/sg_keyed": {
+   "latency": {
+    "n": 480,
+    "mean_ms": 2.77,
+    "median_ms": 2.71,
+    "p95_ms": 3.28
+   },
+   "vs_raw": {
+    "pairs": 480,
+    "mean_ms": 0.75,
+    "ci95_ms": [
+     0.71,
+     0.8
+    ]
+   }
+  },
+  "sqlite/write/first/raw": {
+   "latency": {
+    "n": 20,
+    "mean_ms": 5.29,
+    "median_ms": 4.48,
+    "p95_ms": 7.91
+   }
+  },
+  "sqlite/write/first/sg": {
+   "latency": {
+    "n": 20,
+    "mean_ms": 5.45,
+    "median_ms": 5.42,
+    "p95_ms": 6.47
+   },
+   "vs_raw": {
+    "pairs": 20,
+    "mean_ms": 0.16,
+    "ci95_ms": [
+     -1.41,
+     1.73
+    ]
+   }
+  },
+  "sqlite/write/first/sg_keyed": {
+   "latency": {
+    "n": 20,
+    "mean_ms": 11.9,
+    "median_ms": 11.35,
+    "p95_ms": 12.41
+   },
+   "vs_raw": {
+    "pairs": 20,
+    "mean_ms": 6.62,
+    "ci95_ms": [
+     6.06,
+     7.17
+    ]
+   }
+  },
+  "sqlite/write/warm/raw": {
+   "latency": {
+    "n": 480,
+    "mean_ms": 3.78,
+    "median_ms": 3.77,
+    "p95_ms": 4.54
+   }
+  },
+  "sqlite/write/warm/sg": {
+   "latency": {
+    "n": 480,
+    "mean_ms": 4.64,
+    "median_ms": 4.48,
+    "p95_ms": 5.84
+   },
+   "vs_raw": {
+    "pairs": 480,
+    "mean_ms": 0.87,
+    "ci95_ms": [
+     0.75,
+     0.98
+    ]
+   }
+  },
+  "sqlite/write/warm/sg_keyed": {
+   "latency": {
+    "n": 480,
+    "mean_ms": 10.08,
+    "median_ms": 9.93,
+    "p95_ms": 12.12
+   },
+   "vs_raw": {
+    "pairs": 480,
+    "mean_ms": 6.31,
+    "ci95_ms": [
+     6.15,
+     6.47
+    ]
+   }
+  }
+ }
+}
