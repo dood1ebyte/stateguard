@@ -6,10 +6,11 @@
  * code: keys come only from the preload (`src/preload.ts`), as for an
  * unmodified third-party server.
  *
- *     node test/fixtures/http_notes_server.ts NOTES_FILE PORT
+ *     node test/fixtures/http_notes_server.ts NOTES_FILE PORT [--slow SECONDS]
  *
  * Tools:
- *   add_note(text)  appends `text` and a newline to NOTES_FILE, fsync'd (the ground truth)
+ *   add_note(text)  appends `text` and a newline to NOTES_FILE, fsync'd (the ground truth);
+ *                   with --slow, after waiting SECONDS (a slow but healthy tool)
  *   list_notes()    the file's contents (annotated readOnlyHint)
  */
 
@@ -23,7 +24,10 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-const [notes, port] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const [notes, port] = args;
+const slowAt = args.indexOf("--slow");
+const slowSeconds = slowAt >= 0 ? Number(args[slowAt + 1]) : 0;
 if (notes === undefined || port === undefined) throw new Error("usage: http_notes_server.ts NOTES_FILE PORT");
 const notesFile: string = notes;
 
@@ -33,6 +37,7 @@ function build(): McpServer {
     "add_note",
     { description: "Append a note.", inputSchema: { text: z.string() } },
     async ({ text }) => {
+      if (slowSeconds > 0) await new Promise((resolve) => setTimeout(resolve, slowSeconds * 1000));
       const fd = openSync(notesFile, "a");
       try {
         writeSync(fd, `${text}\n`);

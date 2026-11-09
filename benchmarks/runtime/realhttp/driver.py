@@ -26,7 +26,7 @@ Arms:
 
 Faults (TEST-ONLY): benchmarks/runtime/http_fault_proxy.py modes, plus session_loss (the server
 process killed and restarted between the client's handshake and its call), and slow (notes
-only, no fault: add_note takes SLOW_SECONDS). Ops: read, write,
+and tsnotes, no fault: add_note takes SLOW_SECONDS). Ops: read, write,
 drift (add_note with its field misnamed "Text").
 
 usage: driver.py SERVER N [cells] [arms] [workers] -> JSONL rows on stdout
@@ -75,7 +75,7 @@ ARMS = {"notes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
 KEYED = ("sg_keyed", "sg_keyed_deadline")
 DEADLINE = "2"
 CLIENT_WAIT = 8.0
-#: Mode "slow" (notes only, no fault): add_note takes this long, past deadline + the keyed
+#: Mode "slow" (notes and tsnotes, no fault): add_note takes this long, past deadline + the keyed
 #: server's 5 s duplicate wait + deadline. A deadline must not turn it into a failure.
 SLOW_SECONDS = 10.0
 
@@ -139,6 +139,8 @@ def setup(server, base, t, arm, op, slow=0.0):
             if arm in KEYED:
                 cmd += ["--import", TS_PRELOAD]
             cmd += [TS_SERVER, str(notes), str(port)]
+            if slow:
+                cmd += ["--slow", str(slow)]
         read = ("list_notes", {}, f"seed-{t}")
         write = ("add_note", {"Text" if op == "drift" else "text": f"w-{t}"})
     else:
@@ -160,8 +162,8 @@ def run(server, cell, arm, t):
     base.mkdir(parents=True)
     procs = Procs(base)
     try:
-        if mode == "slow" and server != "notes":
-            raise ValueError("mode slow needs the notes server (--slow)")
+        if mode == "slow" and server not in ("notes", "tsnotes"):
+            raise ValueError("mode slow needs a notes server (--slow)")
         slow = SLOW_SECONDS if mode == "slow" else 0.0
         port, server_cmd, server_env, read, write = setup(server, base, t, arm, op, slow)
         name, args = (read[0], read[1]) if op == "read" else write
