@@ -27,3 +27,18 @@ had one with that kind (checked).
   `after_effect` in doubt (`-32010`), the floor without a key-bound check (the notes tool is
   not idempotent);
 - 0 unsafe outcomes in StateGuard arms; 0 record mismatches.
+
+## Addendum (before the `*_d12` parts' rows): the same cells on D12
+
+The first parts (code `9692d4d`) replayed only 9/12 and 10/12 keyed `after_record` rows. The
+immediate keyed resend reached the dying server and was reset, spending the last attempt. D12
+(`51f6fdf`) waits `--resend-backoff` (0.2 s) before a resend after a transport loss.
+
+Parts `notes_d12` and `tsnotes_d12` repeat the same cells, arms and trials (TRIAL_OFFSET=11000)
+on `51f6fdf`.
+
+**Expectations:**
+- keyed `after_record` 0/12 per server;
+- keyed `after_begin` and `after_effect` still in doubt (the floor);
+- unkeyed arms unchanged;
+- 0 unsafe outcomes, 0 record mismatches.
