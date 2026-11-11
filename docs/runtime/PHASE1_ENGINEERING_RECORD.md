@@ -536,3 +536,37 @@ trials.
   matrix is 0/84.** That holds for this synthetic matrix and this tool only.
 - sqlite's `INSERT` is not idempotent, so its crash windows stay in doubt (S4: 24/132 per
   server). A non-idempotent tool still needs a key-bound check or a transactional effect.
+
+### C1: server crashes under the HTTP relay (`benchmarks/evidence/realhttp/C1`)
+
+**New harness cells** (`9692d4d`): `write/after_begin`, `after_effect` and `after_record` on
+notes and tsnotes.
+- The server SIGKILLs itself at the point inside `add_note`: keyed arms through the key's two
+  phases, unkeyed arms around the unmodified handler. A supervisor restarts it on the same
+  port.
+- The cells bypass the fault proxy. A dry run showed that a proxy in front of a dead server
+  turns "refused" into "lost", which distorted the relay's recovery.
+- The HTTP driver now scores a keyed server's `-32010`/`-32011` as unresolved, not as a false
+  failure, as the stdio driver already did. No recorded HTTP row is affected.
+
+| Arm, per server (12 trials per cell) | after_begin | after_effect | after_record, before D12 (`9692d4d`) | after_record, D12 (`51f6fdf`) |
+|---|---|---|---|---|
+| raw, naive | 12/12 | 12/12 | 12/12 | 12/12 |
+| sg (unkeyed) | 12/12 unknown | 12/12 unknown | 12/12 unknown | 12/12 unknown |
+| sg_keyed, sg_keyed_deadline | 12/12 in doubt | 12/12 in doubt (1–4 unknown) | **3/12 (notes), 2/12 (tsnotes)** | **0/12 both** |
+
+- **No StateGuard arm ever duplicated a note or misreported one:** 0 unsafe outcomes across
+  360 StateGuard rows. Every relay record agrees with ground truth.
+- **The floor:** `after_begin` and `after_effect` stay unresolved for this non-idempotent tool,
+  as on stdio. D11 does not apply to it.
+
+### D12: back off before a resend after a broken connection (`51f6fdf`)
+
+- **The failure (C1, `after_record`):** the relay resent the keyed call at once, and the
+  connection reached the server that was still going down. It was accepted and reset, which
+  spent the second and last keyed attempt before the restarted server could replay.
+- **The change:** the relay waits `--resend-backoff` (default 0.2 s) before a resend after a
+  transport loss. Only the timing changes: what may be resent is decided as before.
+- **Result:** keyed `after_record` went from 5 of 24 failing to 0 of 24 (C1 `*_d12`). The HTTP
+  relay, idempotency and TypeScript adapter tests pass (98).
+- **Cost:** a recovery after a dropped connection takes 0.2 s longer.
