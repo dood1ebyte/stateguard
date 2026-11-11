@@ -20,6 +20,9 @@ Arms:
   sg         client -> stdio relay (--retry auto, --restart 2 after-unknown, the write declared
              non_idempotent and the read read_only, --call-deadline 2) -> shim -> server
   sg_keyed   sg, and the server keyed (injector / preload)
+  sg_keyed_idempotent  sg_keyed, the write also declared idempotent to the keyed server, with an
+             exclusive store (STATEGUARD_IDEMPOTENT_TOOLS): memory only -- add_observations
+             drops an observation it already has; sqlite's INSERT is not idempotent
 
 Faults (TEST-ONLY): transport faults from ``shim.py`` (kill_before, lost_exit, hang, transient)
 and crash points inside the server (STATEGUARD_FAULT: after_begin, after_effect, after_record;
@@ -76,10 +79,14 @@ CLIENT_WAIT = 8.0
 def setup(server: str, base: Path, t: int, arm: str, op: str, mode: str) -> tuple:
     env = {**os.environ, "PYTHONPATH": str(CODE / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
     marker = f"w-{t}-{uuid.uuid4().hex[:6]}"
-    keyed = arm == "sg_keyed"
+    keyed = arm in ("sg_keyed", "sg_keyed_idempotent")
     if keyed:
         env.update(STATEGUARD_IDEMPOTENCY_DB=str(base / "keys.db"),
                    STATEGUARD_IDEMPOTENCY_SCOPE=server, STATEGUARD_KEYED_TOOLS=WRITE_TOOL[server])
+    if arm == "sg_keyed_idempotent":
+        if server != "memory":
+            raise ValueError("sg_keyed_idempotent: only memory's write is idempotent")
+        env.update(STATEGUARD_IDEMPOTENCY_EXCLUSIVE="1", STATEGUARD_IDEMPOTENT_TOOLS=WRITE_TOOL[server])
     if mode in CRASH:
         env.update(STATEGUARD_FAULT=mode, STATEGUARD_FAULT_FILE=str(base / "crash.fired"),
                    STATEGUARD_FAULT_TOOLS=WRITE_TOOL[server])
