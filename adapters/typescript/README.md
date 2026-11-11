@@ -34,7 +34,10 @@ STATEGUARD_KEYED_TOOLS=move_file \
 ```
 
 - **How it attaches.** The preload patches the server's own copy of the SDK (`Server.prototype.setRequestHandler`); the server's files are not touched. The result is an adopting *deployment*, not an unmodified server.
-- **No recovery.** Keyed tools are two-phase with no recovery check, because their effects carry no key. A crash between the effect and its record leaves the key **in doubt**, and it is never re-run.
+- **No recovery, unless the tool is declared idempotent.** Keyed tools are two-phase with no recovery check, because their effects carry no key. A crash between the effect and its record leaves the key **in doubt**, and it is never re-run.
+- **Declared idempotent tools.** `STATEGUARD_IDEMPOTENT_TOOLS=<list>` (keyed tools, with `STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1`; refused otherwise) is the operator's declaration that running a tool twice leaves the state running it once would. An abandoned attempt of such a tool is run again by the next process, instead of staying in doubt.
+  - This is not exactly-once: the attempt may have taken effect, and the tool then runs a second time.
+  - The state is right only if the declaration is true. Declare only a tool whose repeat is harmless; the pinned memory server's `add_observations` is one example.
 
 ## What it guarantees, and what it does not
 
@@ -45,7 +48,7 @@ STATEGUARD_KEYED_TOOLS=move_file \
   - Recorded results and recorded tool errors replay.
   - A store failure executes nothing.
   - "Input required" (`UrlElicitationRequired`) is never recorded as a completion.
-- **Exactly-once** holds only for `transactional` effects in the store's database, and for two-phase effects with a sound recovery check: an exclusive store, plus a key-carrying or natively keyed effect.
+- **Exactly-once** holds only for `transactional` effects in the store's database, and for two-phase effects with a sound recovery check: an exclusive store, plus a key-carrying or natively keyed effect. A declared idempotent tool's recovery runs it again; it is not exactly-once.
 - **Not guaranteed:**
   - Effects that carry no key (a rename, a rewritten file, an e-mail) are *at most once*. After a crash they are reported unknown.
   - The exclusive lock is an SQLite `EXCLUSIVE` lock on one host. It is not distributed coordination.
