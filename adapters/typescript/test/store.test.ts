@@ -363,6 +363,7 @@ describe("the store contract", () => {
   for (const [name, verdict, outcome, runs, state] of [
     ["found", () => Recovery.found({ receipt: 9 }), Outcome.RECOVERED, 0, "done"],
     ["absent", () => Recovery.absent(), Outcome.EXECUTED, 1, "done"],
+    ["rerun (declared idempotent)", () => Recovery.rerun(), Outcome.EXECUTED, 1, "done"],
     ["unknown", () => Recovery.unknown("cannot tell"), Outcome.IN_DOUBT, 0, "in_doubt"],
     ["a failing check", () => { throw new Error("boom"); }, Outcome.IN_DOUBT, 0, "in_doubt"],
     ["not a Recovery", () => "yes" as unknown as Recovery, Outcome.IN_DOUBT, 0, "in_doubt"],
