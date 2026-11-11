@@ -485,3 +485,54 @@ Work continued inside the Session 2 window, with the founder's go-ahead.
   incidence records that count slow calls as deadline faults.
 - **Still open:** the stdio relay, whose deadline means something else (D10), and the choice of
   value. The default remains the founder's decision.
+
+## Session 3 (Wed 2026-11-11, 09:00–14:00 IST): recovery engineering
+
+### D11: the crash window of an operator-declared idempotent tool (`c4de122`)
+
+**The residual:**
+- S4's keyed residual was only the two crash windows: the server died between claiming the key
+  and recording it (`after_begin`, `after_effect`).
+- An unmodified server's effect carries no key, so no recovery check can find it, and the key
+  stays in doubt.
+- Queue item 3 (Session 1) concluded that this is a floor without server cooperation.
+
+**The change:**
+- **Some tools need no check:** a tool whose repeat is harmless (adding an item to a set).
+  For those, the next server process can run the abandoned attempt again.
+- **`Recovery.rerun()` (Python and TypeScript):** cannot tell, and need not; the operator
+  declared the tool idempotent. The executor runs it, once more at most.
+- **`STATEGUARD_IDEMPOTENT_TOOLS`** gives declared keyed tools that recovery, in the Python
+  injector and the TypeScript preload.
+- **It needs `STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1`**, because only an exclusive store makes a
+  dead process's key abandoned rather than in doubt. It is refused without it, and for an
+  unkeyed tool.
+- **It is not exactly-once:** the attempt may have taken effect, and the tool then runs twice.
+  The state is right only if the declaration is true. The declaration is the evidence, as with
+  any effect declaration.
+
+**Tests:**
+- the pinned memory server through the stdio relay, crashed `after_begin` and `after_effect`:
+  declared, the call is `executed` and the observation exists once; undeclared, `unknown`;
+- the mcp 2.x injector with a set-like tool: run again, then replayed;
+- an undeclared tool under the same store stays in doubt;
+- both refusals;
+- the library's recovery verdicts.
+
+### S5: crash windows of a declared idempotent tool (`benchmarks/evidence/realstdio/S5`, code `bc03223`)
+
+**Setup:** memory server, every write cell (fault-free, 4 transport faults, 3 crash points), 12
+trials.
+
+| Arm | transport | crash | faulted, all |
+|---|---|---|---|
+| sg_keyed | 0/48 | **24/36** (`after_begin`, `after_effect`: unknown) | 24/84 (28.6%) |
+| **sg_keyed_idempotent** | 0/48 | **0/36** | **0/84 (≤ 4.4%)** |
+
+- **Both crash windows now succeed:** 24 rows answered `executed`, with the marker in the
+  memory file exactly once. `after_record` still replays.
+- Fault-free 0; 0 unsafe outcomes, 0 duplicates; all 192 relay records agree with ground truth.
+- **On the memory server, with the tool declared idempotent, the keyed relay's residual on this
+  matrix is 0/84.** That holds for this synthetic matrix and this tool only.
+- sqlite's `INSERT` is not idempotent, so its crash windows stay in doubt (S4: 24/132 per
+  server). A non-idempotent tool still needs a key-bound check or a transactional effect.
