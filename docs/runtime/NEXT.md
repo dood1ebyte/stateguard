@@ -66,18 +66,19 @@ allowed. Early completion or idle capacity never advances the schedule.
   - Session 6, `trig_01JBfioVdCgAAaNB85oA8n9C`, 11-18.
 - **The 14:00 IST end** is enforced by each session's own clock checks, not by the platform.
 
-## Handoff (end of Session 2, Mon 2026-11-09)
+## Handoff (end of Session 3, Wed 2026-11-11)
 
 - **Pushed:** everything up to the commit that adds this section; `origin` and the local branch
   are level. **Uncommitted:** nothing. **Running:** nothing.
 - **Left in place (lost if the container is replaced):** the venvs `.venv` and `/tmp/mcp1`,
   TypeScript `node_modules`, `/opt/sg-servers/*`, Python 3.14 in `/opt/uvpython`, and the
   `run_batch.py` worktrees `/tmp/sg-code-<sha12>`. Rebuild per "Environment" if they are gone.
-- **Results and reasoning:** `docs/runtime/PHASE1_ENGINEERING_RECORD.md` (Sessions 1 and 2).
+- **Results and reasoning:** `docs/runtime/PHASE1_ENGINEERING_RECORD.md` (Sessions 1–3).
   Metrics: `docs/runtime/PHASE1_METRICS.md`. Evidence: `benchmarks/evidence/{realhttp,realstdio}/`.
-- **Rule learned:** never edit `benchmarks/runtime/` while a batch runs (record, D1 note).
-- **Exact next action (Wed 2026-11-11, 09:00 IST):** check the environment. Items 1 and 2 wait
-  on the founder's decisions; if none has come, take item 3 (P2b).
+- **Rules learned:** never edit `benchmarks/runtime/` while a batch runs. Crash cells bypass the
+  fault proxy (record, C1).
+- **Exact next action (Fri 2026-11-13, 09:00 IST):** check the environment and any founder
+  decision on items 1–2, then queue item 3.
 
 ## Phase 1 queue (first not done or blocked; mark done here with its commit)
 
@@ -113,25 +114,39 @@ Done in Session 2 (2026-11-09):
   to be stdio's documented deadline contract (record); E2 (TypeScript keyed server) and E3
   (slow declared read) both 0/12 with the deadline.
 
-Next, in order (Session 3, Wed 2026-11-11, is recovery engineering):
+Done in Session 3 (2026-11-11, recovery engineering):
+- D11, the crash window of an operator-declared idempotent tool (`c4de122`):
+  `Recovery.rerun`, and `STATEGUARD_IDEMPOTENT_TOOLS` with an exclusive store, in the injector
+  and the preload. S5 (`bc03223`): memory keyed residual 24/84 -> 0/84. Not exactly-once:
+  correct only if the declaration is true.
+- HTTP server-crash cells in the harness, and in doubt is no longer a false failure there
+  (`9692d4d`). C1: no StateGuard arm duplicated or misreported; crash windows unresolved (the
+  floor for a non-idempotent tool).
+- D12, a backoff before a resend after a broken connection (`51f6fdf`). C1 on D12: keyed
+  `after_record` 5/24 -> 0/24.
+- B3, the HTTP matrix on `51f6fdf` (results in the record).
+
+Next, in order (Session 4, Fri 2026-11-13, is hardening and compatibility):
 1. **Founder decision needed: the relays' deadlines differ.**
    - HTTP `--call-deadline` is when to resend (the first answer wins).
    - stdio `--call-deadline` is a promised answer time: "unknown" after about two deadlines
      for a recoverable call, by its documented contract.
-   - So the stdio half of D10 is by design, not a bug (record, D10). Do not change stdio's
-     contract without that decision.
-2. **A default deadline for recoverable requests (HTTP): evidence gathered, decision open.**
-   - E1, E2 and E3 (record) show the HTTP relay's deadline, after D10, never cuts short a slow
-     keyed write (Python and TypeScript keyed servers) or a slow declared read. It recovers
-     `hang_after`.
-   - Costs: a second request for each call slower than the deadline, and slow calls counted as
-     deadline faults in incidence.
-   - Bring this to the founder with item 1. Do not change the default without a decision.
-3. **P2b: the event-stream connection cost with a kernel delay** (iproute2 netem in a network
-   namespace; this container has neither `tc` nor `ip`). Then decide whether to read event
-   streams to their end so the connection can be reused. Session 3 or 5.
-4. **Real capture for incidence** (owner-dependent; see the old queue item 3).
-5. Phase Completion Report (Session 6).
+   - Do not change stdio's contract without that decision (record, D10).
+2. **Founder decision needed: a default deadline for recoverable requests (HTTP).** E1–E3
+   (record) show the HTTP relay's deadline never cuts short a slow keyed write or a slow
+   declared read after D10, and it recovers `hang_after`. Costs: a second request per call
+   slower than the deadline, and slow calls counted as deadline faults in incidence.
+3. **Hardening and compatibility (Session 4):**
+   - the multi-Python regression (3.11, 3.12, 3.14) on the Session 2–3 code;
+   - the declaration's refusal paths under a real misconfiguration;
+   - the TypeScript adapter tests for `Recovery.rerun` (only covered end to end so far).
+4. **P2b: the event-stream connection cost with a kernel delay** (iproute2 netem in a network
+   namespace; this container has neither `tc` nor `ip`). Session 5 (overhead).
+5. **The crash window of a non-idempotent tool** stays unresolved without a key-bound check or
+   a transactional effect. An operator-supplied check for the injector and preload is possible
+   but tool-specific; decide whether it is in Phase 1 scope.
+6. **Real capture for incidence** (owner-dependent; see the old queue item 3).
+7. Phase Completion Report (Session 6).
 
 ## Session log
 
