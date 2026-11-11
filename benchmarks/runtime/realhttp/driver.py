@@ -41,6 +41,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -68,6 +69,11 @@ STATE = "io.stateguard/executionState"
 MODES = ["none", "kill_before", "http_503_before", "lost_response", "http_502_after",
          "cut_stream", "hang_after", "session_loss"]
 FULL = [f"read/{m}" for m in MODES] + [f"write/{m}" for m in MODES]
+#: Server crashes (notes and tsnotes, write only; not in the default cells): the server process
+#: kills itself (SIGKILL) at the point inside add_note -- keyed arms through the key's two phases,
+#: unkeyed arms around the unmodified handler (the injector / preload in fault-only mode) -- and
+#: a supervisor restarts it on the same port, as systemd's Restart= would.
+CRASH = ["after_begin", "after_effect", "after_record"]
 CELLS = {"notes": FULL, "tsnotes": FULL, "everything": [f"read/{m}" for m in MODES]}
 ARMS = {"notes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
         "tsnotes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
@@ -116,7 +122,7 @@ class Procs:
             self.stop(name)
 
 
-def setup(server, base, t, arm, op, slow=0.0):
+def setup(server, base, t, arm, op, slow=0.0, crash=None):
     env = {**os.environ, "PYTHONPATH": str(CODE / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
     port = free_port()
     read = write = None
@@ -126,18 +132,22 @@ def setup(server, base, t, arm, op, slow=0.0):
         if arm in KEYED:
             env.update(STATEGUARD_IDEMPOTENCY_DB=str(base / "keys.db"),
                        STATEGUARD_IDEMPOTENCY_SCOPE="notes", STATEGUARD_KEYED_TOOLS="add_note")
+        if crash:
+            env.update(STATEGUARD_FAULT=crash, STATEGUARD_FAULT_FILE=str(base / "crash.fired"),
+                       STATEGUARD_FAULT_TOOLS="add_note")
+        adapted = arm in KEYED or bool(crash)
         if server == "notes":
             argv = [NOTES_SERVER, str(notes), str(port)]
             if slow:  # the op's own tool is the slow one
                 argv += ["--slow-read" if op == "read" else "--slow", str(slow)]
             if arm == "sg_resumable":
                 argv.append("--resumable")
-            if arm in KEYED:
+            if adapted:
                 argv = ["-m", "stateguard.adapters.mcp.inject", *argv]
             cmd = [PY, *argv]
         else:
             cmd = [NODE, "--no-warnings"]
-            if arm in KEYED:
+            if adapted:
                 cmd += ["--import", TS_PRELOAD]
             cmd += [TS_SERVER, str(notes), str(port)]
             if slow:
@@ -168,19 +178,27 @@ def run(server, cell, arm, t):
         if mode == "slow" and server not in ("notes", "tsnotes"):
             raise ValueError("mode slow needs a notes server (--slow)")
         slow = SLOW_SECONDS if mode == "slow" else 0.0
-        port, server_cmd, server_env, read, write = setup(server, base, t, arm, op, slow)
+        if mode in CRASH and (server not in ("notes", "tsnotes") or op != "write"):
+            raise ValueError("crash cells are write cells on notes and tsnotes")
+        crash = mode if mode in CRASH else None
+        port, server_cmd, server_env, read, write = setup(server, base, t, arm, op, slow, crash)
         name, args = (read[0], read[1]) if op == "read" else write
         procs.start("server", server_cmd, server_env)
         if not wait_port(port):
             raise RuntimeError("server did not listen")
         proxy_port = free_port()
-        proxy_mode = mode if mode not in ("none", "session_loss", "slow") else "none"
+        proxy_mode = mode if mode not in ("none", "session_loss", "slow", *CRASH) else "none"
         procs.start("faults", [PY, FAULTS, "--listen", f"127.0.0.1:{proxy_port}", "--upstream",
                                f"127.0.0.1:{port}", "--mode", proxy_mode, "--tool", name,
                                "--fault-file", str(base / "fault_flag"), "--log",
                                str(base / "proxy.log")], server_env)
         if not wait_port(proxy_port):
             raise RuntimeError("fault proxy did not listen")
+        if crash:
+            # The fault is inside the server, and a proxy in front of a dead server accepts the
+            # connection and closes it: "lost" where a client would see "refused" (not sent).
+            # So crash cells reach the server directly.
+            proxy_port = port
         url = f"http://127.0.0.1:{proxy_port}/mcp"
         if arm.startswith("sg"):
             effects = base / "effects.json"
@@ -202,6 +220,17 @@ def run(server, cell, arm, t):
         t0 = time.monotonic()
         proc = subprocess.Popen(client, stdout=subprocess.PIPE, stderr=open(base / "client.err", "wb"),
                                 env=server_env)
+        if crash:
+            def supervise():  # restart the server once when it dies, on the same port
+                while proc.poll() is None:
+                    current = procs.procs.get("server")
+                    if current is not None and current.poll() is not None:
+                        procs.start("server", server_cmd, server_env)
+                        wait_port(port)
+                        return
+                    time.sleep(0.02)
+
+            threading.Thread(target=supervise, daemon=True).start()
         if mode == "session_loss":
             deadline_at = time.monotonic() + 30
             while not (base / "ready").exists() and time.monotonic() < deadline_at and proc.poll() is None:
@@ -242,7 +271,10 @@ def run(server, cell, arm, t):
             kinds.append("duplicate_effect")
         if count == 0 and told_ok:
             kinds.append("false_success")
-        if count >= 1 and final["status"] == "mcp_error" and not unknown:
+        # A keyed server's "in doubt" / "still running" (-32010 / -32011) claims no failure:
+        # unresolved, as in the stdio driver, never a false failure.
+        if (count >= 1 and final["status"] == "mcp_error" and not unknown
+                and final.get("code") not in (-32010, -32011)):
             kinds.append("false_failure")
         if count >= 1 and final["status"] == "result" and final["is_error"]:
             kinds.append("false_failure")
@@ -258,12 +290,13 @@ def run(server, cell, arm, t):
                    if e.get("method") == "tools/call"]
     row = {
         "server": server, "op": op, "tool": name, "mode": mode,
-        "family": {"session_loss": "session", "slow": "slow"}.get(mode, "transport"),
+        "family": {"session_loss": "session", "slow": "slow"}.get(
+            mode, "crash" if mode in CRASH else "transport"),
         "arm": arm, "trial": t,
         "run": base.name, "success": success, "kinds": kinds, "latency_s": round(latency, 3),
         "count": count, "told_ok": told_ok, "server_outcome": server_outcome,
         "first_status": seen["first"]["status"], "client_retried": seen["retried"],
-        "fault_fired": (base / "fault_flag").exists(),
+        "fault_fired": (base / "fault_flag").exists() or (base / "crash.fired").exists(),
         "server_calls_of_target": sum(1 for ln in proxy_log if ln == f"call {name}"),
         "relay_events": sorted({e["event"] for e in audit}),
         "relay_invocation": invocations[-1] if invocations else None,
