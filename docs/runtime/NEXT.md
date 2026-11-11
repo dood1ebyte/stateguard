@@ -139,7 +139,7 @@ Next, in order (Session 4, Fri 2026-11-13, is hardening and compatibility):
 3. **Hardening and compatibility (Session 4):**
    - the multi-Python regression (3.11, 3.12, 3.14) on the Session 2–3 code;
    - the declaration's refusal paths under a real misconfiguration;
-   - the TypeScript adapter tests for `Recovery.rerun` (only covered end to end so far).
+   - (done in Session 3: the TypeScript store tests cover `Recovery.rerun`).
 4. **P2b: the event-stream connection cost with a kernel delay** (iproute2 netem in a network
    namespace; this container has neither `tc` nor `ip`). Session 5 (overhead).
 5. **The crash window of a non-idempotent tool** stays unresolved without a key-bound check or
