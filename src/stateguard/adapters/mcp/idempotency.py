@@ -873,12 +873,14 @@ class Execution:
 class Recovery:
     """
     What a server's recovery check found for an abandoned attempt of a key
-    (see "Recovery of abandoned attempts"): ``found(result)``, ``absent()``
-    or ``unknown(note)``.
+    (see "Recovery of abandoned attempts"): ``found(result)``, ``absent()``,
+    ``rerun(note)`` or ``unknown(note)``.
     """
 
-    #: True: this key's own effect is present. False: absent, and no partial
-    #: effect remains. None: cannot tell.
+    #: True: this key's own effect is present. False: run it now -- the effect
+    #: is absent and no partial effect remains, or (``rerun``) the operator
+    #: declared the tool idempotent, so running it again leaves the same state
+    #: whether or not the attempt took effect. None: cannot tell.
     applied: bool | None
     #: For ``found``: the result to record and answer (JSON).
     result: Any = None
@@ -891,6 +893,16 @@ class Recovery:
     @classmethod
     def absent(cls) -> Recovery:
         return cls(False)
+
+    @classmethod
+    def rerun(cls, note: str = "declared idempotent: run again") -> Recovery:
+        """
+        Cannot tell whether the attempt took effect, and need not: the operator
+        declared the tool idempotent (running it twice leaves the state running
+        it once would). Its declaration, not a check, is the evidence -- like an
+        effect declaration, it is the operator's promise.
+        """
+        return cls(False, note=note)
 
     @classmethod
     def unknown(cls, note: str = "") -> Recovery:

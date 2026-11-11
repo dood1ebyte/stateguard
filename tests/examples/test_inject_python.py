@@ -334,11 +334,25 @@ def add_note(text: str) -> str:
         os.fsync(out.fileno())
     return f"added {text}"
 
+@app.tool()
+def tag(text: str) -> str:
+    # Idempotent: a set of tags, one per line, never twice.
+    path = notes + ".tags"
+    tags = open(path).read().split() if os.path.exists(path) else []
+    if text not in tags:
+        with open(path, "a") as out:
+            out.write(text + "\\n")
+            out.flush()
+            os.fsync(out.fileno())
+    return f"tagged {text}"
+
 app.run()
 """
 
 
-def _mcp2_server(tmp: Path, fault: str | None = None) -> Server:
+def _mcp2_server(
+    tmp: Path, fault: str | None = None, extra: dict[str, str] | None = None
+) -> Server:
     pytest.importorskip("mcp.server.mcpserver")
     script = tmp / "plain_server.py"
     script.write_text(PLAIN_SERVER)
@@ -351,6 +365,7 @@ def _mcp2_server(tmp: Path, fault: str | None = None) -> Server:
     }
     if fault is not None:
         env.update(STATEGUARD_FAULT=fault, STATEGUARD_FAULT_FILE=str(tmp / "fault.fired"))
+    env.update(extra or {})
     argv = [sys.executable, "-m", "stateguard.adapters.mcp.inject", str(script), str(tmp / "n.txt")]
     server = Server(argv, env)
     server.initialize()
@@ -390,3 +405,77 @@ def test_an_mcp2_crash_after_the_effect_is_in_doubt_never_rerun(tmp_path: Path) 
     finally:
         for server in servers:
             server.close()
+
+
+# -- an operator-declared idempotent tool: an abandoned attempt runs again --------------------------
+
+IDEMPOTENT = {
+    "STATEGUARD_KEYED_TOOLS": "add_note,tag",
+    "STATEGUARD_IDEMPOTENT_TOOLS": "tag",
+    "STATEGUARD_IDEMPOTENCY_EXCLUSIVE": "1",
+    "STATEGUARD_FAULT_TOOLS": "add_note,tag",
+}
+
+
+def _tags(tmp: Path) -> list[str]:
+    path = tmp / "n.txt.tags"
+    return path.read_text().split() if path.exists() else []
+
+
+@pytest.mark.parametrize("point", ["after_begin", "after_effect"])
+def test_an_abandoned_call_to_a_declared_idempotent_tool_runs_again(
+    tmp_path: Path, point: str
+) -> None:
+    """The crashed process's key is abandoned (exclusive store); the next process runs the call
+    again instead of answering in doubt, and the tag exists once."""
+    servers = [_mcp2_server(tmp_path, fault=point, extra=IDEMPOTENT)]
+    try:
+        assert servers[0].call("tools/call", _tool_call("tag", {"text": "x"}, "k1")) is None
+        servers[0].close()  # its process is dead: the kernel drops its store lock
+        servers.append(_mcp2_server(tmp_path, extra=IDEMPOTENT))
+        answer = servers[1].call("tools/call", _tool_call("tag", {"text": "x"}, "k1"))
+        assert _outcome(answer) == "executed", answer
+        again = servers[1].call("tools/call", _tool_call("tag", {"text": "x"}, "k1"))
+        assert _outcome(again) == "replayed"
+        assert _tags(tmp_path) == ["x"]
+    finally:
+        for server in servers:
+            server.close()
+
+
+def test_an_undeclared_tool_stays_in_doubt_under_the_same_store(tmp_path: Path) -> None:
+    servers = [_mcp2_server(tmp_path, fault="after_effect", extra=IDEMPOTENT)]
+    try:
+        assert servers[0].call("tools/call", _tool_call("add_note", {"text": "a"}, "k1")) is None
+        servers[0].close()
+        servers.append(_mcp2_server(tmp_path, extra=IDEMPOTENT))
+        answer = servers[1].call("tools/call", _tool_call("add_note", {"text": "a"}, "k1"))
+        assert _outcome(answer) == "in_doubt"
+        assert _notes(tmp_path) == ["a"]  # never re-run
+    finally:
+        for server in servers:
+            server.close()
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ({"STATEGUARD_IDEMPOTENT_TOOLS": "add_note"}, "needs STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1"),
+        (
+            {"STATEGUARD_IDEMPOTENT_TOOLS": "other", "STATEGUARD_IDEMPOTENCY_EXCLUSIVE": "1"},
+            "must be keyed tools: other",
+        ),
+    ],
+)
+def test_an_idempotent_declaration_that_could_not_act_is_refused(
+    extra: dict[str, str], message: str, tmp_path: Path
+) -> None:
+    from stateguard.adapters.mcp.inject import _attacher
+
+    env = {
+        "STATEGUARD_IDEMPOTENCY_DB": str(tmp_path / "keys.db"),
+        "STATEGUARD_KEYED_TOOLS": "add_note",
+        **extra,
+    }
+    with pytest.raises(SystemExit, match=message):
+        _attacher(env)

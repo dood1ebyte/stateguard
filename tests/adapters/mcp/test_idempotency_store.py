@@ -283,6 +283,7 @@ def test_adopt_has_one_taker_and_never_takes_a_live_attempt(tmp_path: Path) -> N
     [
         (lambda: Recovery.found({"receipt": 9}), Outcome.RECOVERED, 0, "done"),
         (Recovery.absent, Outcome.EXECUTED, 1, "done"),
+        (Recovery.rerun, Outcome.EXECUTED, 1, "done"),  # declared idempotent: run again
         (lambda: Recovery.unknown("cannot tell"), Outcome.IN_DOUBT, 0, "in_doubt"),
         (lambda: 1 / 0, Outcome.IN_DOUBT, 0, "in_doubt"),
         (lambda: "yes", Outcome.IN_DOUBT, 0, "in_doubt"),  # not a Recovery: fail closed

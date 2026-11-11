@@ -22,6 +22,14 @@
  * The store need not be exclusive (exclusivity only serves recovery), but
  * `STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1` makes it so.
  *
+ * `STATEGUARD_IDEMPOTENT_TOOLS=<list>` (keyed tools only, and only with
+ * `STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1`) is the operator's declaration that a
+ * tool is idempotent: running it twice leaves the state running it once would.
+ * An abandoned attempt of such a tool -- its process died between claiming the
+ * key and recording it -- is run again by the next process (`Recovery.rerun`),
+ * instead of staying in doubt. The declaration is the evidence: declare only a
+ * tool whose repeat is harmless.
+ *
  * TEST-ONLY fault injection (labelled faults, never in production):
  *   STATEGUARD_FAULT=before_begin|after_begin|after_effect|after_record|hang_after_record
  *   STATEGUARD_FAULT_FILE=<path>   the fault fires once per file (whatever the process generation)
@@ -37,7 +45,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { IdempotencyStore } from "./store.ts";
-import { KeyedTools, methodOf } from "./sdk.ts";
+import { KeyedTools, Recovery, methodOf } from "./sdk.ts";
 import type { KeyedPoint, RequestHandler } from "./sdk.ts";
 
 const FAULTS = ["before_begin", "after_begin", "after_effect", "after_record", "hang_after_record"] as const;
@@ -80,6 +88,7 @@ if (fault !== undefined && !FAULTS.includes(fault)) throw new Error(`stateguard 
 const faultFile = process.env["STATEGUARD_FAULT_FILE"];
 const db = process.env["STATEGUARD_IDEMPOTENCY_DB"];
 const keyedTools = list(process.env["STATEGUARD_KEYED_TOOLS"]);
+const idempotentTools = list(process.env["STATEGUARD_IDEMPOTENT_TOOLS"]);
 const faultTools = new Set(list(process.env["STATEGUARD_FAULT_TOOLS"]).length ? list(process.env["STATEGUARD_FAULT_TOOLS"]) : keyedTools);
 
 function fires(point: Fault, tool: string): boolean {
@@ -104,18 +113,30 @@ if (db !== undefined || fault !== undefined) {
   let wrap: (schema: unknown, handler: RequestHandler) => RequestHandler;
   if (db !== undefined) {
     if (keyedTools.length === 0) throw new Error("stateguard preload: STATEGUARD_KEYED_TOOLS is empty");
+    const exclusive = process.env["STATEGUARD_IDEMPOTENCY_EXCLUSIVE"] === "1";
+    // Without an exclusive store a dead process's key is never abandoned, so the declaration
+    // would do nothing: refuse rather than let it look as if it did.
+    if (idempotentTools.length > 0 && !exclusive)
+      throw new Error("stateguard preload: STATEGUARD_IDEMPOTENT_TOOLS needs STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1");
+    const notKeyed = idempotentTools.filter((name) => !keyedTools.includes(name));
+    if (notKeyed.length > 0)
+      throw new Error(`stateguard preload: STATEGUARD_IDEMPOTENT_TOOLS must be keyed tools: ${notKeyed.join(",")}`);
     const store = new IdempotencyStore(db, {
       scope: process.env["STATEGUARD_IDEMPOTENCY_SCOPE"] ?? "default",
-      exclusive: process.env["STATEGUARD_IDEMPOTENCY_EXCLUSIVE"] === "1",
+      exclusive,
     });
     const keyed = new KeyedTools(store, {
       onPoint: async (point: KeyedPoint, tool: string) => {
         await atPoint(point, tool);
         if (point === "after_record") await atPoint("hang_after_record", tool);
       },
-    }).twoPhase(keyedTools);
+    });
+    const plain = keyedTools.filter((name) => !idempotentTools.includes(name));
+    if (plain.length > 0) keyed.twoPhase(plain);
+    if (idempotentTools.length > 0) keyed.twoPhase(idempotentTools, { recover: () => Recovery.rerun() });
     wrap = (schema, handler) => keyed.wrapFor(schema, handler);
-    process.stderr.write(`stateguard preload: keyed ${keyedTools.join(",")} (store ${db}, scope ${store.scope})\n`);
+    const declared = idempotentTools.length > 0 ? `, declared idempotent ${idempotentTools.join(",")}` : "";
+    process.stderr.write(`stateguard preload: keyed ${keyedTools.join(",")} (store ${db}, scope ${store.scope}${declared})\n`);
   } else {
     // Fault-only: the same crash points around the unmodified handler, no keys.
     wrap = (schema, handler) =>

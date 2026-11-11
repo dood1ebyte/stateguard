@@ -30,14 +30,18 @@ export class NotExecuted extends Error {
 
 /**
  * What a server's recovery check found for an abandoned attempt of a key:
- * `found(result)`, `absent()` or `unknown(note)`. The check is sound only
+ * `found(result)`, `absent()`, `rerun(note)` or `unknown(note)`. The check is sound only
  * under the contract's two conditions -- the attempt is over (an exclusive
  * store), and the check looks for *this key's own* effect (the effect carries
  * the key, or a downstream that honours the key answers for it), never a
  * postcondition another request could have produced.
  */
 export class Recovery {
-  /** true: this key's effect is present; false: absent, nothing partial; null: cannot tell. */
+  /**
+   * true: this key's effect is present. false: run it now -- absent with nothing partial, or
+   * (`rerun`) the operator declared the tool idempotent, so running it again leaves the same
+   * state whether or not the attempt took effect. null: cannot tell.
+   */
   readonly applied: boolean | null;
   /** For `found`: the result to record and answer (JSON). */
   readonly result: unknown;
@@ -55,6 +59,14 @@ export class Recovery {
 
   static absent(): Recovery {
     return new Recovery(false, undefined, "");
+  }
+
+  /**
+   * Cannot tell whether the attempt took effect, and need not: the operator declared the tool
+   * idempotent. The declaration, not a check, is the evidence -- the operator's promise.
+   */
+  static rerun(note = "declared idempotent: run again"): Recovery {
+    return new Recovery(false, undefined, note);
   }
 
   static unknown(note = ""): Recovery {

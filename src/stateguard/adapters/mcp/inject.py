@@ -36,6 +36,15 @@ its record leaves the key **in doubt**. It is reported as unknown and never
 re-run. The store need not be exclusive (exclusivity only serves recovery),
 but ``STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1`` makes it so.
 
+``STATEGUARD_IDEMPOTENT_TOOLS=<list>`` (keyed tools only, and only with
+``STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1``) is the operator's declaration that a
+tool is idempotent: running it twice leaves the state running it once would
+(for example, adding an item to a set). An abandoned attempt of such a tool --
+its process died between claiming the key and recording it -- is run again by
+the next process (``Recovery.rerun``), instead of staying in doubt. The
+declaration is the evidence, as with any effect declaration: declare only a
+tool whose repeat is harmless.
+
 TEST-ONLY fault injection (labelled faults, never in production):
 
     STATEGUARD_FAULT=before_begin|after_begin|after_effect|after_record|hang_after_record
@@ -64,7 +73,7 @@ from typing import Any
 
 import anyio
 
-from stateguard.adapters.mcp.idempotency import IdempotencyStore
+from stateguard.adapters.mcp.idempotency import IdempotencyStore, Recovery
 
 FAULTS = ("before_begin", "after_begin", "after_effect", "after_record", "hang_after_record")
 
@@ -120,6 +129,7 @@ def _attacher(environ: dict[str, str]) -> Callable[[Any], None] | None:
     """What to do to each low-level ``Server`` when it starts, or None (nothing to inject)."""
     db = environ.get("STATEGUARD_IDEMPOTENCY_DB")
     keyed = _list(environ.get("STATEGUARD_KEYED_TOOLS"))
+    idempotent = _list(environ.get("STATEGUARD_IDEMPOTENT_TOOLS"))
     faults = Faults(environ, keyed)
     if db is None and faults.fault is None:
         return None
@@ -127,14 +137,29 @@ def _attacher(environ: dict[str, str]) -> Callable[[Any], None] | None:
     if db is not None:
         if not keyed:
             raise SystemExit("stateguard inject: STATEGUARD_KEYED_TOOLS is empty")
+        exclusive = environ.get("STATEGUARD_IDEMPOTENCY_EXCLUSIVE") == "1"
+        if idempotent and not exclusive:
+            # Without an exclusive store a dead process's key is never abandoned, so the
+            # declaration would do nothing: refuse rather than let it look as if it did.
+            raise SystemExit(
+                "stateguard inject: STATEGUARD_IDEMPOTENT_TOOLS needs "
+                "STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1"
+            )
+        if set(idempotent) - set(keyed):
+            raise SystemExit(
+                "stateguard inject: STATEGUARD_IDEMPOTENT_TOOLS must be keyed tools: "
+                + ",".join(sorted(set(idempotent) - set(keyed)))
+            )
         store = IdempotencyStore(
             db,
             scope=environ.get("STATEGUARD_IDEMPOTENCY_SCOPE", "default"),
-            exclusive=environ.get("STATEGUARD_IDEMPOTENCY_EXCLUSIVE") == "1",
+            exclusive=exclusive,
         )
         print(
             f"stateguard inject: keyed {','.join(keyed)} on mcp {major}.x "
-            f"(store {db}, scope {store.scope})",
+            f"(store {db}, scope {store.scope}"
+            + (f", declared idempotent {','.join(idempotent)}" if idempotent else "")
+            + ")",
             file=sys.stderr,
             flush=True,
         )
@@ -142,16 +167,25 @@ def _attacher(environ: dict[str, str]) -> Callable[[Any], None] | None:
             from stateguard.adapters.mcp import idempotency_sdk1
 
             tools1 = idempotency_sdk1.KeyedTools(store, on_point=faults.on_point)
-            tools1.two_phase(*keyed)
+            _two_phase(tools1, keyed, idempotent)
             return tools1.install
         from stateguard.adapters.mcp import idempotency_sdk
 
         tools2 = idempotency_sdk.KeyedTools(store, on_point=faults.on_point)
-        tools2.two_phase(*keyed)
+        _two_phase(tools2, keyed, idempotent)
         middleware = tools2.middleware()
         return lambda server: server.middleware.append(middleware)
     # Fault-only: the same crash points around the unmodified handler, no keys.
     return _fault_only_v1(faults) if major == 1 else _fault_only_v2(faults)
+
+
+def _two_phase(tools: Any, keyed: list[str], idempotent: list[str]) -> None:
+    """Every keyed tool two-phase; a declared idempotent one runs again when abandoned."""
+    plain = [name for name in keyed if name not in idempotent]
+    if plain:
+        tools.two_phase(*plain)
+    if idempotent:
+        tools.two_phase(*idempotent, recover=lambda _key, _arguments: Recovery.rerun())
 
 
 async def _around(faults: Faults, tool: str, run: Callable[[], Awaitable[Any]]) -> Any:

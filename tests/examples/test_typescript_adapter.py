@@ -537,6 +537,74 @@ def test_the_adapter_keys_the_unmodified_memory_server(tmp_path: Path) -> None:
     assert _tree_hash(package) == before
 
 
+@pytest.mark.skipif(not MEM_SERVER.exists(), reason="pinned server-memory not installed")
+@pytest.mark.parametrize(
+    ("point", "declared", "expected"),
+    [
+        ("after_begin", True, "executed"),  # abandoned before the effect: run once, now
+        ("after_effect", True, "executed"),  # abandoned after it: run again, harmlessly
+        ("after_effect", False, None),  # not declared: in doubt, as before -> unknown
+    ],
+)
+def test_an_abandoned_call_to_a_declared_idempotent_tool_runs_again(
+    tmp_path: Path, point: str, declared: bool, expected: str | None
+) -> None:
+    """
+    The memory server's add_observations drops an observation it already has: the operator can
+    declare it idempotent. A crash between claiming the key and recording it then no longer
+    leaves the call in doubt: the restarted server, holding the exclusive store, runs it again,
+    and the observation exists once. Undeclared, the same crash stays in doubt.
+    """
+    store = tmp_path / "mem.jsonl"
+    store.write_text(
+        json.dumps({"type": "entity", "name": "alice", "entityType": "person", "observations": []})
+        + "\n"
+    )
+    env = {
+        "MEMORY_FILE_PATH": str(store),
+        "STATEGUARD_IDEMPOTENCY_DB": str(tmp_path / "keys.db"),
+        "STATEGUARD_IDEMPOTENCY_SCOPE": "memory",
+        "STATEGUARD_KEYED_TOOLS": "add_observations",
+        "STATEGUARD_IDEMPOTENCY_EXCLUSIVE": "1",
+        "STATEGUARD_FAULT": point,
+        "STATEGUARD_FAULT_FILE": str(tmp_path / "fault.fired"),
+    }
+    if declared:
+        env["STATEGUARD_IDEMPOTENT_TOOLS"] = "add_observations"
+    argv, full_env = _preloaded(MEM_SERVER, env=env)
+    client = _relay(tmp_path, argv, env=full_env)
+    try:
+        answer = client.call(
+            1, "add_observations", {"observations": [{"entityName": "alice", "contents": ["o1"]}]}
+        )
+    finally:
+        client.close()
+    assert (tmp_path / "fault.fired").exists()
+    if expected is None:
+        assert _unknown(answer), answer
+    else:
+        assert answer is not None and "result" in answer, answer
+        assert _outcome(answer) == expected
+    observations = json.loads(store.read_text().splitlines()[0])["observations"]
+    assert observations == (["o1"] if expected or point == "after_effect" else [])
+
+
+@pytest.mark.skipif(not MEM_SERVER.exists(), reason="pinned server-memory not installed")
+def test_an_idempotent_declaration_without_an_exclusive_store_is_refused(tmp_path: Path) -> None:
+    argv, env = _preloaded(
+        MEM_SERVER,
+        env={
+            "MEMORY_FILE_PATH": str(tmp_path / "mem.jsonl"),
+            "STATEGUARD_IDEMPOTENCY_DB": str(tmp_path / "keys.db"),
+            "STATEGUARD_KEYED_TOOLS": "add_observations",
+            "STATEGUARD_IDEMPOTENT_TOOLS": "add_observations",
+        },
+    )
+    done = subprocess.run(argv, env=env, input=b"", capture_output=True, timeout=30, check=False)
+    assert done.returncode != 0
+    assert b"STATEGUARD_IDEMPOTENT_TOOLS needs STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1" in done.stderr
+
+
 @pytest.mark.skipif(not FS_SERVER.exists(), reason="pinned server-filesystem not installed")
 def test_the_fault_only_preload_keys_nothing(tmp_path: Path) -> None:
     root = tmp_path / "root"
