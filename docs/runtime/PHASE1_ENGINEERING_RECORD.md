@@ -553,7 +553,7 @@ notes and tsnotes.
 |---|---|---|---|---|
 | raw, naive | 12/12 | 12/12 | 12/12 | 12/12 |
 | sg (unkeyed) | 12/12 unknown | 12/12 unknown | 12/12 unknown | 12/12 unknown |
-| sg_keyed, sg_keyed_deadline | 12/12 in doubt | 12/12 in doubt (1–4 unknown) | **3/12 (notes), 2/12 (tsnotes)** | **0/12 both** |
+| sg_keyed, sg_keyed_deadline | 12/12 unresolved (in doubt, a few unknown) | 12/12 unresolved (in doubt, a few unknown) | **3/12 (notes), 2/12 (tsnotes)** | **0/12 both** |
 
 - **No StateGuard arm ever duplicated a note or misreported one:** 0 unsafe outcomes across
   360 StateGuard rows. Every relay record agrees with ground truth.
