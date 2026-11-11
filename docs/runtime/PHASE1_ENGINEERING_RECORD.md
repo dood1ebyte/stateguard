@@ -584,6 +584,6 @@ workers.
   - everything: raw 72/84, naive 0/84, sg 12/84, sg_deadline 0/84;
   - fault-free 0.
 - **Every relay row has a record** (D9 at full scale): 192/192 per arm on notes and tsnotes,
-  where B2 had 172–177. All 1,608 records agree with ground truth.
+  where B2 had 172–177. All 2,184 records agree with ground truth.
 - **None of the three changes moved a cell of this matrix.** D10 and D12 act on cells it does
   not have: a slow tool, a server crash. E1–E3 and C1 are their evidence.
