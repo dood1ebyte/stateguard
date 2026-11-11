@@ -570,3 +570,20 @@ notes and tsnotes.
 - **Result:** keyed `after_record` went from 5 of 24 failing to 0 of 24 (C1 `*_d12`). The HTTP
   relay, idempotency and TypeScript adapter tests pass (98).
 - **Cost:** a recovery after a dropped connection takes 0.2 s longer.
+
+### B3: the HTTP matrix on the Session 2–3 code (`benchmarks/evidence/realhttp/B3`, code `51f6fdf`)
+
+**Setup:** B2 repeated after D9 (open lines, `unfinished` records), D10 (waiting on "still
+running") and D12 (resend backoff). Same servers, arms, 12 trials, 60-trial controls and 4
+workers.
+
+- **Every failure, unsafe, unresolved and induced count matches B2 cell for cell**, on all six
+  parts:
+  - notes and tsnotes: raw 168/168, naive 48/168 (48 duplicates), sg 84/168, sg_keyed 24/168,
+    sg_keyed_deadline 0/168;
+  - everything: raw 72/84, naive 0/84, sg 12/84, sg_deadline 0/84;
+  - fault-free 0.
+- **Every relay row has a record** (D9 at full scale): 192/192 per arm on notes and tsnotes,
+  where B2 had 172–177. All 1,608 records agree with ground truth.
+- **None of the three changes moved a cell of this matrix.** D10 and D12 act on cells it does
+  not have: a slow tool, a server crash. E1–E3 and C1 are their evidence.
