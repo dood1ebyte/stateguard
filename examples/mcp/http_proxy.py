@@ -318,6 +318,9 @@ class Relay:
         self.effects = EffectPolicy.from_file(args.effects) if args.effects else EffectPolicy()
         self.trust_read_only_hints: bool = args.trust_read_only_hints
         self.connect_retry: float = args.connect_retry
+        #: Seconds before a resend after the connection broke: a server that just crashed may
+        #: still accept a connection for a moment and reset it, which would spend an attempt.
+        self.resend_backoff: float = args.resend_backoff
         self.deadline: float | None = args.call_deadline
         self.sessions: dict[str, Session] = {}
         mode = RepairMode.SHADOW if args.shadow else RepairMode.AUTO
@@ -1231,6 +1234,10 @@ class Relay:
                 )
                 if not retry:
                     return Attempt("final", reason=attempt.reason or "transport_closed")
+                if observed is Observed.UNKNOWN_TRANSPORT and self.resend_backoff > 0:
+                    # Not at once into a server that may be going down (C1): a connection to a
+                    # dying process can be accepted and reset, and that would spend the attempt.
+                    await anyio.sleep(self.resend_backoff)
                 attempt = await self._attempt(request, sent, session, state)
                 if attempt.kind in ("answer", "passthrough"):
                     return attempt
@@ -1465,6 +1472,13 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=10.0,
         help="seconds to keep re-sending a request that could not be sent",
+    )
+    parser.add_argument(
+        "--resend-backoff",
+        type=float,
+        default=0.2,
+        help="seconds to wait before resending a request whose connection broke (the resend "
+        "itself is decided as before: only what is safe to send twice)",
     )
     parser.add_argument(
         "--call-deadline",
