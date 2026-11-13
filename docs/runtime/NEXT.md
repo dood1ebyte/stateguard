@@ -64,6 +64,9 @@ allowed. Early completion or idle capacity never advances the schedule.
   - Session 4, `trig_01EPT7D9dKwSkNjJozgNQnQ1`, 11-13;
   - Session 5, `trig_01JK1QRZxsKzfao7RfLfLDVA`, 11-16;
   - Session 6, `trig_01JBfioVdCgAAaNB85oA8n9C`, 11-18.
+  - **Extra session** (the founder, 2026-11-13: "schedule an extra session today. use it at
+    maximum capacity"): `trig_01HJUHp5EKmRt2h2Q2dPuHRW`, Fri 11-13, 17:15–22:15 IST. It
+    advances the queue; Sessions 5 and 6 continue with what remains.
 - **The 14:00 IST end** is enforced by each session's own clock checks, not by the platform.
 
 ## Handoff (end of Session 4, Fri 2026-11-13)
