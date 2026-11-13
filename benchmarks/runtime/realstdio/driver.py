@@ -20,11 +20,14 @@ Arms:
   sg         client -> stdio relay (--retry auto, --restart 2 after-unknown, the write declared
              non_idempotent and the read read_only, --call-deadline 2) -> shim -> server
   sg_keyed   sg, and the server keyed (injector / preload)
+  *_bound    the arm with --deadline-scope all (the hard bound, the default before Session 4);
+             without it, the relay's default: the deadline is when to try again
   sg_keyed_idempotent  sg_keyed, the write also declared idempotent to the keyed server, with an
              exclusive store (STATEGUARD_IDEMPOTENT_TOOLS): memory only -- add_observations
              drops an observation it already has; sqlite's INSERT is not idempotent
 
-Faults (TEST-ONLY): transport faults from ``shim.py`` (kill_before, lost_exit, hang, transient)
+Faults (TEST-ONLY): transport faults from ``shim.py`` (kill_before, lost_exit, hang, transient;
+slow: the answer 5 s late, not a fault -- not in the default cells)
 and crash points inside the server (STATEGUARD_FAULT: after_begin, after_effect, after_record;
 without keys the same points wrap the unmodified handler).
 
@@ -79,7 +82,7 @@ CLIENT_WAIT = 8.0
 def setup(server: str, base: Path, t: int, arm: str, op: str, mode: str) -> tuple:
     env = {**os.environ, "PYTHONPATH": str(CODE / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
     marker = f"w-{t}-{uuid.uuid4().hex[:6]}"
-    keyed = arm in ("sg_keyed", "sg_keyed_idempotent")
+    keyed = arm in ("sg_keyed", "sg_keyed_idempotent", "sg_keyed_bound")
     if keyed:
         env.update(STATEGUARD_IDEMPOTENCY_DB=str(base / "keys.db"),
                    STATEGUARD_IDEMPOTENCY_SCOPE=server, STATEGUARD_KEYED_TOOLS=WRITE_TOOL[server])
@@ -131,7 +134,7 @@ def run(server: str, cell: str, arm: str, t: int) -> dict:
     base.mkdir(parents=True)
     cmd, env, read, write, marker = setup(server, base, t, arm, op, mode)
     name, args = (read[0], read[1]) if op == "read" else write
-    shim_mode = mode if mode in TRANSPORT else "none"
+    shim_mode = mode if mode in TRANSPORT or mode == "slow" else "none"
     command = [PY, SHIM, "--mode", shim_mode, "--tool", name, "--fault-file",
                str(base / "fault_flag"), "--log", str(base / "shim.log"), "--", *cmd]
     if arm.startswith("sg"):
@@ -142,9 +145,11 @@ def run(server: str, cell: str, arm: str, t: int) -> dict:
             {"name": WRITE_TOOL[server], "effect": "non_idempotent"},
             {"name": READ_TOOL[server], "effect": "read_only"},
         ]}))
+        bound = ["--deadline-scope", "all"] if arm.endswith("_bound") else []
         command = [PY, RELAY, "--retry", "auto", "--restart", "2", "--restart-policy",
                    "after-unknown", "--effects", str(effects), "--trust-read-only-hints",
-                   "--call-deadline", "2", "--audit", str(base / "audit.jsonl"), "--", *command]
+                   "--call-deadline", "2", *bound, "--audit", str(base / "audit.jsonl"), "--",
+                   *command]
     client = [PY, CLIENT, json.dumps(command), name, json.dumps(args), "--wait", str(CLIENT_WAIT)]
     if arm == "naive":
         client.append("--naive")
@@ -194,8 +199,8 @@ def run(server: str, cell: str, arm: str, t: int) -> dict:
                if e.get("method") == "tools/call"]
     row = {
         "server": server, "op": op, "tool": name, "mode": mode,
-        "family": "crash" if mode in CRASH else "transport", "arm": arm, "trial": t,
-        "run": base.name, "success": success, "kinds": kinds, "latency_s": round(latency, 3),
+        "family": "crash" if mode in CRASH else ("slow" if mode == "slow" else "transport"),
+        "arm": arm, "trial": t, "run": base.name, "success": success, "kinds": kinds, "latency_s": round(latency, 3),
         "count": count, "told_ok": told_ok,
         "server_outcome": (final.get("meta") or {}).get(OUTCOME) if final["status"] == "result" else None,
         "first_status": seen["first"]["status"], "client_retried": seen["retried"],

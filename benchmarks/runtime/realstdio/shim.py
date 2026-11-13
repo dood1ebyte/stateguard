@@ -10,6 +10,7 @@ newline-delimited JSON-RPC both ways; on the first ``tools/call`` of ``--tool`` 
   hang        the call runs; its answer is dropped and the shim stays silent (executed, no
               answer)
   transient   the shim answers a JSON-RPC error itself; the call is never forwarded
+  slow        the call runs; its answer reaches the client --slow seconds late (a slow answer)
 
 ``--log`` gets ``call <tool>`` for each call that reached the server, and ``fault <mode>``.
 
@@ -41,6 +42,7 @@ def main() -> int:
     parser.add_argument("--tool", default="")
     parser.add_argument("--fault-file")
     parser.add_argument("--log")
+    parser.add_argument("--slow", type=float, default=5.0)
     args = parser.parse_args(sys.argv[1:split])
     server_argv = sys.argv[split + 1 :]
     log = Path(args.log) if args.log else None
@@ -85,6 +87,8 @@ def main() -> int:
                 watched.discard(key)
                 if args.mode == "lost_exit":
                     die()
+                if args.mode == "slow":
+                    threading.Timer(args.slow, write, (sys.stdout.buffer, line)).start()
                 continue  # hang: the answer is dropped, and nothing more is said about it
             write(sys.stdout.buffer, line)
         os._exit(child.wait())
