@@ -1,0 +1,84 @@
+{
+ "n_rows": 12,
+ "driver_errors": 0,
+ "servers": {
+  "notes": {
+   "sg_keyed_default": {
+    "fault_free": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 0,
+     "n": 12,
+     "rifr": 0.0,
+     "ci95": [
+      0.0,
+      0.2425
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 0,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {},
+    "server_outcomes": {
+     "executed": 12
+    },
+    "invocation_records": 12,
+    "invocation_record_mismatch": 0,
+    "invocation_record_mismatch_runs": [],
+    "latency_fault_free": null,
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 0,
+    "cells": {
+     "write/slow": [
+      0,
+      12
+     ]
+    }
+   }
+  }
+ }
+}
