@@ -54,6 +54,11 @@ the call arrived, and decides again on that. A call that passes unchanged
 needs no refresh -- the server decides it either way. If no fresh listing
 arrives in time, the call is forwarded unchanged. ``--no-listing-refresh``
 turns this off (one fewer round trip per intervention, at the risk above).
+That risk is measured (Phase 1 A1): with a listing the server had since
+changed, the relay "repaired" correct calls into the stale schema -- 12/12
+failed on two servers, and on one (mcp-server-sqlite) all 12 were answered
+success without writing. Keep the refresh on unless the server's tools never
+change during a session.
 
 Execution state
 ---------------
@@ -2930,7 +2935,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-listing-refresh",
         action="store_true",
-        help="Do not re-list tools before repairing or blocking a call (see the module docs).",
+        help="Do not re-list tools before repairing or blocking a call. Risky: on a stale "
+        "listing the relay can 'repair' a correct call into a wrong one (see the module docs).",
     )
     parser.add_argument(
         "--call-deadline",

@@ -1490,7 +1490,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-listing-refresh",
         action="store_true",
-        help="act on the last listing seen, without listing again first",
+        help="act on the last listing seen, without listing again first. Risky: on a stale "
+        "listing a correct call can be 'repaired' into a wrong one (stdio relay docs, A1)",
     )
     parser.add_argument("--retry", choices=["off", "auto"], default="off")
     parser.add_argument("--no-idempotency-keys", action="store_true")
