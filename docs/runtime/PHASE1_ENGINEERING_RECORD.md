@@ -764,3 +764,15 @@ the arms that exercise it, on every default cell, 12 trials.
 - **The reuse optimisation** (reading a stream to its end so the connection can be reused) is
   deferred to Phase 2. It saves at most one handshake per call (more with TLS), mainly for
   remote servers. It is unmeasured here and is a stated limitation.
+
+### A1 on D13 (`benchmarks/evidence/realstdio/A1`, parts `adv_*_d13`, code `87f43d4`)
+
+| C nonconformant, per server | raw | sg | sg_keyed |
+|---|---|---|---|
+| before D13 (`c255b44`) | 24/24 | 24/24 | 24/24 |
+| **D13 (`87f43d4`)** | 24/24 | **12/24** (only unkeyed writes, passed through) | **0/24** |
+
+- Reads are re-read and keyed writes replayed. An unkeyed write is passed through as it came,
+  and recorded `nonconformant`.
+- J, H and B: unchanged.
+- **All 432 relay records agree with ground truth;** before D13, 96 disagreed.
