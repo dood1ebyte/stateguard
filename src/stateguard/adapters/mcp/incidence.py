@@ -86,6 +86,7 @@ FAULTS = (
     "transport_lost",  # the connection broke after the request was sent
     "server_error",  # an HTTP 5xx
     "internal_error",  # a JSON-RPC internal error (-32603), sent again because that was safe
+    "nonconformant",  # an answer that is not conformant JSON-RPC 2.0, sent again because safe
     "session_lost",  # the server no longer knew the session (404, or a 400 naming it)
     "stream_cut",  # an event stream ended before its answer
     "deadline",  # no answer within --call-deadline

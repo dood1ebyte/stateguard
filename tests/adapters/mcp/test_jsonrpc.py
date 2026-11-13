@@ -16,6 +16,7 @@ import pytest
 from stateguard import ContractGuard, GuardConfig
 from stateguard.adapters.mcp import MalformedMessageError, MCPAction, ToolRegistry
 from stateguard.adapters.mcp.jsonrpc import (
+    is_conformant_response,
     INVALID_PARAMS,
     TOOLS_LIST_CHANGED,
     ToolCallRequest,
@@ -306,3 +307,24 @@ class TestProtocolShapedResults:
                 "resultType": "complete",
             },
         }
+
+
+@pytest.mark.parametrize(
+    ("message", "conformant"),
+    [
+        ({"jsonrpc": "2.0", "id": 1, "result": {}}, True),
+        ({"jsonrpc": "2.0", "id": "a", "error": {"code": -32603, "message": "x"}}, True),
+        ({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse"}}, True),
+        ({"jsonrpc": "1.0", "id": 1, "result": {}}, False),  # another version
+        ({"id": 1, "result": {}}, False),  # no version
+        ({"jsonrpc": "2.0", "id": 1, "result": {}, "error": {"code": 1, "message": "x"}}, False),
+        ({"jsonrpc": "2.0", "id": 1, "error": {"message": "no code"}}, False),
+        ({"jsonrpc": "2.0", "id": 1, "error": {"code": True, "message": "x"}}, False),
+        ({"jsonrpc": "2.0", "id": 1, "error": "flat"}, False),
+        ({"jsonrpc": "2.0", "id": True, "result": {}}, False),  # not an id
+        ({"jsonrpc": "2.0", "method": "x", "id": 1}, False),  # a request
+        ("not a message", False),
+    ],
+)
+def test_a_conformant_response(message: object, conformant: bool) -> None:
+    assert is_conformant_response(message) is conformant

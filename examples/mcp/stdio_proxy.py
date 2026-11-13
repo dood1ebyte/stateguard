@@ -357,6 +357,7 @@ from stateguard.adapters.mcp.jsonrpc import (
     TOOLS_CALL,
     TOOLS_LIST,
     TOOLS_LIST_CHANGED,
+    is_conformant_response,
     is_notification,
     is_request,
     is_response,
@@ -2540,6 +2541,13 @@ class StdioRelay:
                     self._finish_epoch(self._epoch_of.get(identifier, self._chain_epoch), ok=False)
                     self._listing_ready.set()  # never hold calls on a listing that failed
                 continue  # the client never asked for this one
+            if (
+                is_response(message)
+                and _hashable(identifier)
+                and not is_conformant_response(message)
+                and self._recover_nonconformant(identifier)
+            ):
+                continue  # resent: the client gets the resend's answer
             if is_response(message) and identifier is not None and not self._deliverable(message):
                 continue
             try:
@@ -2555,6 +2563,36 @@ class StdioRelay:
                 self._internal_error("server message", exc)
                 self._listing_ready.set()
             self._send(self._client_out, self._to_client, line, message)  # untouched
+
+    def _recover_nonconformant(self, identifier: Any) -> bool:
+        """
+        A server answer that is not a conformant JSON-RPC 2.0 response (category C):
+        the client cannot use it, and nothing in it says what happened. A call the
+        relay could resend -- a declared read, an honoured key -- is resent, its
+        outcome unknown; True. Anything else is passed through as it came (never
+        rewritten), and logged; False.
+        """
+        invocation = self.ledger.get(identifier)
+        recoverable = (
+            not self._shadow
+            and invocation is not None
+            and self.ledger.in_flight(identifier)
+            and self._resendable(invocation)
+        )
+        client_id = self._client_of.get(identifier, identifier)
+        self._log(
+            "nonconformant_answer",
+            category="C",
+            id=client_id,
+            action="resent" if recoverable else "passed_through",
+        )
+        if not recoverable:
+            return False
+        unknown = self.ledger.unknown(identifier, "nonconformant")
+        if unknown is None:
+            return False
+        self._resolve_unknown([unknown], Observed.UNKNOWN_TRANSPORT)
+        return True
 
     def _note_failure(self, client_id: Any, failure: FailureClassification | None) -> None:
         """Log an auth failure as category K: never retried, the operator's to resolve."""

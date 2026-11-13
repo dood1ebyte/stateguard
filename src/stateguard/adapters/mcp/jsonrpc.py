@@ -59,6 +59,7 @@ from stateguard.core.explain import FieldDecisionKind, root_normalisation
 from stateguard.core.paths import MAX_PAYLOAD_DEPTH, nests_deeper_than
 
 __all__ = [
+    "is_conformant_response",
     "INVALID_PARAMS",
     "JSONRPC_VERSION",
     "PROTOCOL_VERSION_META_KEY",
@@ -137,6 +138,29 @@ def is_response(message: Any) -> bool:
         and "method" not in message
         and "id" in message
         and ("result" in message or "error" in message)
+    )
+
+
+def is_conformant_response(message: Any) -> bool:
+    """
+    A response a JSON-RPC 2.0 client accepts: ``"jsonrpc": "2.0"``, a valid ``id``, and exactly
+    one of a ``result`` or an ``error`` with an integer ``code`` and a string ``message``.
+    A response that fails this (protocol category C) cannot be used by the client as it stands.
+    """
+    if not is_response(message) or message.get("jsonrpc") != JSONRPC_VERSION:
+        return False
+    if not (_valid_id(message.get("id")) or message.get("id") is None):
+        return False
+    if ("result" in message) == ("error" in message):
+        return False
+    if "result" in message:
+        return True
+    error = message.get("error")
+    return (
+        isinstance(error, Mapping)
+        and isinstance(error.get("code"), int)
+        and not isinstance(error.get("code"), bool)
+        and isinstance(error.get("message"), str)
     )
 
 

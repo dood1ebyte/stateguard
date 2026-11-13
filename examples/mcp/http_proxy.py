@@ -163,7 +163,7 @@ from stateguard.adapters.mcp.incidence import (
     resolution,
     with_faults,
 )
-from stateguard.adapters.mcp.jsonrpc import intervenes, proposal
+from stateguard.adapters.mcp.jsonrpc import intervenes, is_conformant_response, proposal
 from stateguard.core.models.config import GuardConfig, RepairMode
 
 SESSION_HEADER = "mcp-session-id"
@@ -1171,34 +1171,48 @@ class Relay:
         tool: str | None,
     ) -> Attempt | None:
         """
-        The server answered a JSON-RPC internal error (-32603): one more attempt if the request
-        is safe to repeat (a keyed call, a declared read or idempotent tool, a request that
-        changes nothing), as the stdio relay decides it. Otherwise ``None``: the answer stands.
+        An answer the client cannot use as it stands: a JSON-RPC internal error (-32603), or a
+        response that is not conformant JSON-RPC 2.0 (category C; nothing in it says what
+        happened, so the outcome is unknown). One more attempt if the request is safe to repeat
+        (a keyed call, a declared read or idempotent tool, a request that changes nothing), as
+        the stdio relay decides it. Otherwise ``None``: the answer stands, passed through as it
+        came (never rewritten).
         """
-        error = answer.get("error")
-        if (
-            self.passthrough
-            or self.retry != "auto"
-            or not isinstance(error, dict)
-            or error.get("code") != INTERNAL_ERROR_CODE
-            or classify_response(answer).observed is not Observed.SERVER_ERROR
-        ):
+        if self.passthrough or self.retry != "auto":
             return None
-        retry, why = self._decide(message, Observed.SERVER_ERROR, state["attempts"], keyed, tool)
+        error = answer.get("error")
+        if not is_conformant_response(answer):
+            observed, fault = Observed.UNKNOWN_TRANSPORT, "nonconformant"
+        elif (
+            isinstance(error, dict)
+            and error.get("code") == INTERNAL_ERROR_CODE
+            and classify_response(answer).observed is Observed.SERVER_ERROR
+        ):
+            observed, fault = Observed.SERVER_ERROR, "internal_error"
+        else:
+            return None
+        retry, why = self._decide(message, observed, state["attempts"], keyed, tool)
         self.log(
             "retry_decision",
             id=message.get("id"),
             method=message.get("method"),
             tool=tool,
             keyed=keyed,
-            observed=Observed.SERVER_ERROR.value,
+            observed=observed.value,
             attempts=state["attempts"],
             retry=retry,
             reason=why,
         )
+        if fault == "nonconformant":
+            self.log(
+                "nonconformant_answer",
+                category="C",
+                id=message.get("id"),
+                action="resent" if retry else "passed_through",
+            )
         if not retry:
             return None
-        state["faults"].append("internal_error")
+        state["faults"].append(fault)
         return await self._attempt(request, sent, session, state)
 
     async def _recover(
