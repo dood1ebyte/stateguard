@@ -23,6 +23,8 @@ Arms:
   sg_resumable        sg, and the notes server storing its event streams (--resumable)
   sg_deadline         sg with --call-deadline 2
   sg_keyed_deadline   sg_keyed with --call-deadline 2
+  sg_keyed_default    sg_keyed with no --call-deadline: the relay's default (30 s); the client
+                      waits 40 s
 
 Faults (TEST-ONLY): benchmarks/runtime/http_fault_proxy.py modes, plus session_loss (the server
 process killed and restarted between the client's handshake and its call), and slow (notes
@@ -78,7 +80,10 @@ CELLS = {"notes": FULL, "tsnotes": FULL, "everything": [f"read/{m}" for m in MOD
 ARMS = {"notes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
         "tsnotes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
         "everything": ["raw", "naive", "sg", "sg_deadline"]}
-KEYED = ("sg_keyed", "sg_keyed_deadline")
+KEYED = ("sg_keyed", "sg_keyed_deadline", "sg_keyed_default")
+#: Arms ending "_default" pass no --call-deadline: the relay's own default (30 s) applies, and
+#: the client waits this long so a recovery at the default can be seen.
+DEFAULT_ARM_WAIT = 40.0
 DEADLINE = "2"
 CLIENT_WAIT = 8.0
 #: Mode "slow" (no fault): the op's tool takes this long (read/slow: notes only), past
@@ -207,6 +212,8 @@ def run(server, cell, arm, t):
             # Explicit either way: the relay's default deadline (30 s since Session 4) must not
             # change what an arm without "_deadline" measures.
             deadline = ["--call-deadline", DEADLINE if arm.endswith("_deadline") else "0"]
+            if arm.endswith("_default"):
+                deadline = []
             procs.start("relay", [PY, RELAY, "--listen", f"127.0.0.1:{relay_port}", "--retry", "auto",
                                   "--trust-read-only-hints", "--effects", str(effects), *deadline,
                                   "--audit", str(base / "audit.jsonl"), "--",
@@ -214,7 +221,8 @@ def run(server, cell, arm, t):
             if not wait_port(relay_port):
                 raise RuntimeError("relay did not listen")
             url = f"http://127.0.0.1:{relay_port}/mcp"
-        client = [PY, CLIENT, url, name, json.dumps(args), "--wait", str(CLIENT_WAIT + slow)]
+        wait = DEFAULT_ARM_WAIT if arm.endswith("_default") else CLIENT_WAIT
+        client = [PY, CLIENT, url, name, json.dumps(args), "--wait", str(wait + slow)]
         if arm == "naive":
             client.append("--naive")
         if mode == "session_loss":
