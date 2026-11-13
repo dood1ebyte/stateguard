@@ -587,3 +587,36 @@ workers.
   where B2 had 172–177. All 2,184 records agree with ground truth.
 - **None of the three changes moved a cell of this matrix.** D10 and D12 act on cells it does
   not have: a slow tool, a server crash. E1–E3 and C1 are their evidence.
+
+## Session 4 (Fri 2026-11-13, 09:00–14:00 IST): hardening, and the two deadline decisions
+
+### Decisions (delegated by the founder on 2026-11-11, recorded in `NEXT.md`)
+
+1. **One meaning for `--call-deadline` in both relays: when to try again, never a point at
+   which a call still running is answered as failed.**
+   - An induced failure is the one outcome Phase 1 forbids.
+   - stdio's old default answered "unknown" on every slow success.
+2. **The HTTP relay gets a default `--call-deadline` of 30 s, for recoverable requests only.**
+
+Both are **behaviour changes** to the defaults.
+
+### Decision 2: the HTTP default deadline (`4c2256d`)
+
+- **The default:** with `--retry auto`, a keyed call, a declared read or a request that changes
+  nothing, still unanswered after 30 s, is sent once more. The first attempt stays open and the
+  first answer that settles it wins. `--call-deadline 0` turns it off.
+- **Records:** when the original answers first, the call was slow, not faulted. Its record says
+  `answered`, with `deadline_resends: 1`, not a `deadline` fault (this fixes the E3 incidence
+  caveat).
+- **Harness:** benchmark arms without `_deadline` pass `--call-deadline 0`, so B1–B3 stay
+  comparable.
+
+**E4** (`benchmarks/evidence/realhttp/E4`, code `570d262`; notes, 12 trials):
+
+| Cell | Arm | Result |
+|---|---|---|
+| `write/hang_after` | sg_keyed_default (no flag) | **0/12**, replayed at 30.8–31.0 s, written once |
+| `write/hang_after` | sg_keyed (`--call-deadline 0`) | 12/12 unresolved |
+| `write/slow` (10 s) | sg_keyed_default | 0/12, answered, no resend, no fault recorded |
+
+0 record mismatches.
