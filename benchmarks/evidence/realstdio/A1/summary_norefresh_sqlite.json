@@ -1,0 +1,98 @@
+{
+ "n_rows": 12,
+ "driver_errors": 0,
+ "servers": {
+  "sqlite": {
+   "sg_norefresh": {
+    "fault_free": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 12,
+     "n": 12,
+     "rifr": 1.0,
+     "ci95": [
+      0.7575,
+      1.0
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 12,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 0,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {
+     "false_success": 12,
+     "not_executed": 12
+    },
+    "server_outcomes": {},
+    "invocation_records": 12,
+    "invocation_record_mismatch": 12,
+    "invocation_record_mismatch_runs": [
+     "sqlite-write-stale_listing-sg_norefresh-16001-723ee04280",
+     "sqlite-write-stale_listing-sg_norefresh-16003-0249eb66b5",
+     "sqlite-write-stale_listing-sg_norefresh-16002-5d655104eb",
+     "sqlite-write-stale_listing-sg_norefresh-16000-3f981cc64c",
+     "sqlite-write-stale_listing-sg_norefresh-16004-9325998b14",
+     "sqlite-write-stale_listing-sg_norefresh-16005-d6568dcd32",
+     "sqlite-write-stale_listing-sg_norefresh-16006-610b8a081f",
+     "sqlite-write-stale_listing-sg_norefresh-16007-560b3f9605",
+     "sqlite-write-stale_listing-sg_norefresh-16008-b683332f79",
+     "sqlite-write-stale_listing-sg_norefresh-16009-c242d9fa1d",
+     "sqlite-write-stale_listing-sg_norefresh-16011-f648e971f8",
+     "sqlite-write-stale_listing-sg_norefresh-16010-a3e93a5e9d"
+    ],
+    "latency_fault_free": null,
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 0,
+    "cells": {
+     "write/stale_listing": [
+      12,
+      12
+     ]
+    }
+   }
+  }
+ }
+}

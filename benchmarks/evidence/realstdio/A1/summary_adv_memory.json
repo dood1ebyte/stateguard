@@ -1,0 +1,374 @@
+{
+ "n_rows": 324,
+ "driver_errors": 0,
+ "servers": {
+  "memory": {
+   "raw": {
+    "fault_free": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 72,
+     "n": 108,
+     "rifr": 0.6667,
+     "ci95": [
+      0.5734,
+      0.7485
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 72,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {
+     "no_answer_timeout": 72
+    },
+    "server_outcomes": {},
+    "invocation_records": 0,
+    "invocation_record_mismatch": 0,
+    "invocation_record_mismatch_runs": [],
+    "latency_fault_free": null,
+    "cells": {
+     "read/duplicate": [
+      0,
+      12
+     ],
+     "read/garbage": [
+      12,
+      12
+     ],
+     "read/nonconformant": [
+      12,
+      12
+     ],
+     "read/truncated": [
+      12,
+      12
+     ],
+     "write/duplicate": [
+      0,
+      12
+     ],
+     "write/garbage": [
+      12,
+      12
+     ],
+     "write/nonconformant": [
+      12,
+      12
+     ],
+     "write/stale_listing": [
+      0,
+      12
+     ],
+     "write/truncated": [
+      12,
+      12
+     ]
+    }
+   },
+   "sg": {
+    "fault_free": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 48,
+     "n": 108,
+     "rifr": 0.4444,
+     "ci95": [
+      0.3542,
+      0.5385
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 48,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {
+     "no_answer_timeout": 48
+    },
+    "server_outcomes": {},
+    "invocation_records": 108,
+    "invocation_record_mismatch": 24,
+    "invocation_record_mismatch_runs": [
+     "memory-read-nonconformant-sg-16000-128fb60737",
+     "memory-write-nonconformant-sg-16000-856f0b945b",
+     "memory-read-nonconformant-sg-16001-26dddac4e8",
+     "memory-write-nonconformant-sg-16001-46d3d3c589",
+     "memory-read-nonconformant-sg-16002-8463f0e765",
+     "memory-write-nonconformant-sg-16002-1e5aaa9851",
+     "memory-read-nonconformant-sg-16003-0999aed0f4",
+     "memory-write-nonconformant-sg-16003-8744e0e477",
+     "memory-read-nonconformant-sg-16004-3785a1f246",
+     "memory-write-nonconformant-sg-16004-ca979d9865",
+     "memory-read-nonconformant-sg-16005-dec0cd1bd9",
+     "memory-write-nonconformant-sg-16005-91d49b4134",
+     "memory-read-nonconformant-sg-16006-d8db577ce1",
+     "memory-write-nonconformant-sg-16006-2f63748945",
+     "memory-read-nonconformant-sg-16007-8d3ee94561",
+     "memory-write-nonconformant-sg-16007-0a61607696",
+     "memory-read-nonconformant-sg-16008-74714bb31b",
+     "memory-write-nonconformant-sg-16008-25a74b8715",
+     "memory-read-nonconformant-sg-16009-17f3aaf515",
+     "memory-write-nonconformant-sg-16009-ea099de7c2"
+    ],
+    "latency_fault_free": null,
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 24,
+    "cells": {
+     "read/duplicate": [
+      0,
+      12
+     ],
+     "read/garbage": [
+      0,
+      12
+     ],
+     "read/nonconformant": [
+      12,
+      12
+     ],
+     "read/truncated": [
+      0,
+      12
+     ],
+     "write/duplicate": [
+      0,
+      12
+     ],
+     "write/garbage": [
+      12,
+      12
+     ],
+     "write/nonconformant": [
+      12,
+      12
+     ],
+     "write/stale_listing": [
+      0,
+      12
+     ],
+     "write/truncated": [
+      12,
+      12
+     ]
+    }
+   },
+   "sg_keyed": {
+    "fault_free": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 24,
+     "n": 108,
+     "rifr": 0.2222,
+     "ci95": [
+      0.1541,
+      0.3094
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 24,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {
+     "no_answer_timeout": 24
+    },
+    "server_outcomes": {
+     "executed": 24,
+     "replayed": 24
+    },
+    "invocation_records": 108,
+    "invocation_record_mismatch": 24,
+    "invocation_record_mismatch_runs": [
+     "memory-read-nonconformant-sg_keyed-16000-b72bcef777",
+     "memory-write-nonconformant-sg_keyed-16000-de65b3b1ec",
+     "memory-read-nonconformant-sg_keyed-16001-ee447c0cfd",
+     "memory-write-nonconformant-sg_keyed-16001-c5820d2a7d",
+     "memory-read-nonconformant-sg_keyed-16002-edc4bd0f94",
+     "memory-write-nonconformant-sg_keyed-16002-b38803fb92",
+     "memory-read-nonconformant-sg_keyed-16003-194f20ef4e",
+     "memory-write-nonconformant-sg_keyed-16003-937217c0f5",
+     "memory-read-nonconformant-sg_keyed-16004-831698eeff",
+     "memory-write-nonconformant-sg_keyed-16004-e9551971f9",
+     "memory-read-nonconformant-sg_keyed-16005-6ab406e999",
+     "memory-write-nonconformant-sg_keyed-16005-aa2f54ec15",
+     "memory-read-nonconformant-sg_keyed-16006-75f268ced8",
+     "memory-write-nonconformant-sg_keyed-16006-0b165da1b0",
+     "memory-read-nonconformant-sg_keyed-16007-6e806cfeb3",
+     "memory-write-nonconformant-sg_keyed-16007-456c96e458",
+     "memory-read-nonconformant-sg_keyed-16008-8e721553e8",
+     "memory-write-nonconformant-sg_keyed-16008-cd5db7f7b0",
+     "memory-read-nonconformant-sg_keyed-16009-45a14a1af0",
+     "memory-write-nonconformant-sg_keyed-16009-ad13004862"
+    ],
+    "latency_fault_free": null,
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 48,
+    "cells": {
+     "read/duplicate": [
+      0,
+      12
+     ],
+     "read/garbage": [
+      0,
+      12
+     ],
+     "read/nonconformant": [
+      12,
+      12
+     ],
+     "read/truncated": [
+      0,
+      12
+     ],
+     "write/duplicate": [
+      0,
+      12
+     ],
+     "write/garbage": [
+      0,
+      12
+     ],
+     "write/nonconformant": [
+      12,
+      12
+     ],
+     "write/stale_listing": [
+      0,
+      12
+     ],
+     "write/truncated": [
+      0,
+      12
+     ]
+    }
+   }
+  }
+ }
+}

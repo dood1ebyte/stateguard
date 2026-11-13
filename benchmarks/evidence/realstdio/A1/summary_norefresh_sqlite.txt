@@ -1,0 +1,13 @@
+rows 12  driver_errors 0
+
+===== sqlite
+
+sg_norefresh
+  fault-free  -
+  faulted     12/12 (100.0%, ci 75.8%-100.0%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 12, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 12, mismatching ground truth 12
+  latency fault-free None
+
+op/mode                        sg_norefresh
+write/stale_listing               12/12    
