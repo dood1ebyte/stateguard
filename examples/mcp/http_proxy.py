@@ -63,14 +63,19 @@ the client's ``notifications/cancelled``) are mapped back. Requests the
 server sends inside a response stream, and the client's answers to them,
 pass through unchanged.
 
-``deadline`` (``--call-deadline SECONDS``) -- a request the relay could send
-    again without risk (a declared read, a request that changes nothing, a
-    keyed call) that has no answer in time is sent once more, the first
-    attempt left open; the first answer that settles it wins. A keyed resend
-    answered "in progress" or "in doubt" waits one more deadline for the
-    original's answer. No other request gets a deadline: cutting a slow
-    mutation short could only turn its success into a failure. Such raced
-    requests are answered as one JSON message (progress events are dropped).
+``deadline`` (``--call-deadline SECONDS``, default 30; 0 turns it off; with
+    ``--retry auto``) -- a request the relay could send again without risk (a
+    declared read, a request that changes nothing, a keyed call) that has no
+    answer in time is sent once more, the first attempt left open; the first
+    answer that settles it wins. The deadline is when to try again, never a
+    point at which a call still running is answered as failed: a keyed resend
+    answered "still running" waits for the original; one answered "in doubt"
+    waits one more deadline for it. No other request gets a deadline: cutting
+    a slow mutation short could only turn its success into a failure. Such
+    raced requests are answered as one JSON message (progress events are
+    dropped). When the original answers first, the call was slow, not
+    faulted: its ``invocation`` record says ``answered``, with
+    ``deadline_resends``.
 
 Calls are checked against the server's schemas
 --------------------------------------------
@@ -321,7 +326,8 @@ class Relay:
         #: Seconds before a resend after the connection broke: a server that just crashed may
         #: still accept a connection for a moment and reset it, which would spend an attempt.
         self.resend_backoff: float = args.resend_backoff
-        self.deadline: float | None = args.call_deadline
+        #: Off (None) at 0; the default is 30 s (see the module docstring).
+        self.deadline: float | None = args.call_deadline if args.call_deadline else None
         self.sessions: dict[str, Session] = {}
         mode = RepairMode.SHADOW if args.shadow else RepairMode.AUTO
         #: The server's tools, from complete tools/list answers: what calls are checked against.
@@ -426,6 +432,7 @@ class Relay:
             ),
             attempts=state["attempts"],
             faults=list(state["faults"]),
+            deadline_resends=state.get("deadline_resends", 0),
             resolution=kind,
             server_outcome=outcome,
             ms=round((time.monotonic() - state["t0"]) * 1000),
@@ -812,22 +819,25 @@ class Relay:
         """
         assert self.deadline is not None
         client_id = message.get("id")
-        send, receive = anyio.create_memory_object_stream[dict[str, Any] | Response](2)
+        # Each answer is tagged with its attempt: 0 the original, 1 the resend.
+        send, receive = anyio.create_memory_object_stream[tuple[int, dict[str, Any] | Response]](2)
 
-        async def racer() -> None:
+        async def racer(attempt_index: int) -> None:
             first = await self._attempt(request, sent, session, state)
-            await send.send(
-                await self._settle(request, message, sent, session, state, first, keyed, tool)
-            )
+            answer = await self._settle(request, message, sent, session, state, first, keyed, tool)
+            await send.send((attempt_index, answer))
 
         winner: dict[str, Any] | Response | None = None
         fallback: dict[str, Any] | Response | None = None
         try:
             async with anyio.create_task_group() as tg:
-                tg.start_soon(racer)
+                tg.start_soon(racer, 0)
+                got: tuple[int, dict[str, Any] | Response] | None = None
                 with anyio.move_on_after(self.deadline):
-                    winner = await receive.receive()
-                if winner is None:
+                    got = await receive.receive()
+                if got is not None:
+                    winner = got[1]
+                else:
                     state["faults"].append("deadline")
                     retry, why = self._decide(
                         message, Observed.UNKNOWN_DEADLINE, state["attempts"], keyed, tool
@@ -845,21 +855,26 @@ class Relay:
                     )
                     pending = 1
                     if retry:
-                        tg.start_soon(racer)
+                        tg.start_soon(racer, 1)
+                        state["deadline_resends"] = 1
                         pending = 2
                     while pending:
                         # Unbounded while both run, and while the server says the call is
                         # still running; otherwise one more deadline once one has answered.
                         settling = fallback is not None and not _still_running(fallback)
                         wait = self.deadline if settling else math.inf
-                        answer = None
+                        got = None
                         with anyio.move_on_after(wait):
-                            answer = await receive.receive()
-                        if answer is None:
+                            got = await receive.receive()
+                        if got is None:
                             break
+                        attempt_index, answer = got
                         pending -= 1
                         if self._definitive(answer, keyed):
                             winner = answer
+                            if attempt_index == 0 and "deadline" in state["faults"]:
+                                # The original answered: the call was slow, not faulted.
+                                state["faults"].remove("deadline")
                             break
                         fallback = answer
                         self.log("raced_answer_not_definitive", id=client_id)
@@ -1450,7 +1465,7 @@ def build_app(relay: Relay, path: str) -> Starlette:
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="StateGuard relay for MCP over Streamable HTTP.")
     parser.add_argument("--listen", default="127.0.0.1:8800", help="host:port to serve on")
     parser.add_argument("--path", default="/mcp", help="the MCP endpoint path to serve")
@@ -1483,9 +1498,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--call-deadline",
         type=float,
-        default=None,
+        default=30.0,
         help="seconds before a recoverable request (a declared read, a request that changes "
-        "nothing, a keyed call) is sent once more; the first answer wins (needs --retry auto)",
+        "nothing, a keyed call) is sent once more; the first answer wins, and a call still "
+        "running is never answered as failed (needs --retry auto; default 30; 0 turns it off)",
     )
     parser.add_argument(
         "--upstream-timeout",
@@ -1502,7 +1518,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--audit", help="append one JSON line per relay decision here")
     parser.add_argument("upstream", help="the MCP server's Streamable HTTP endpoint URL")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     host, _, port = args.listen.rpartition(":")
     relay = Relay(args)
     uvicorn.run(

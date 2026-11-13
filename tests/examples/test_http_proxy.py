@@ -463,6 +463,22 @@ def test_a_keyed_call_still_running_past_its_deadlines_is_waited_for(rig: Rig) -
     assert _ok(answer), answer
     assert answer.content[0].text == "added a"
     assert rig.notes() == ["a"]
+    # Slow, not faulted: the original answered, after one resend at the deadline.
+    (record,) = _invocations(rig)
+    assert record["resolution"] == "answered" and record["faults"] == []
+    assert record["deadline_resends"] == 1
+
+
+def test_the_deadline_defaults_to_30_seconds_and_0_turns_it_off() -> None:
+    sys.path.insert(0, str(RELAY.parent))
+    import http_proxy
+
+    parser = http_proxy.build_parser()
+    assert parser.parse_args(["http://127.0.0.1:1/mcp"]).call_deadline == 30.0
+    off = parser.parse_args(["--call-deadline", "0", "http://127.0.0.1:1/mcp"])
+    assert off.call_deadline == 0.0
+    assert http_proxy.Relay(off).deadline is None
+    assert http_proxy.Relay(parser.parse_args(["http://127.0.0.1:1/mcp"])).deadline == 30.0
 
 
 def test_a_declared_read_without_an_answer_in_time_is_requested_again(rig: Rig) -> None:

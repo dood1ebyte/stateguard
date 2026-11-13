@@ -204,7 +204,9 @@ def run(server, cell, arm, t):
             effects = base / "effects.json"
             effects.write_text(json.dumps({"tools": [{"name": "add_note", "effect": "non_idempotent"}]}))
             relay_port = free_port()
-            deadline = ["--call-deadline", DEADLINE] if arm.endswith("_deadline") else []
+            # Explicit either way: the relay's default deadline (30 s since Session 4) must not
+            # change what an arm without "_deadline" measures.
+            deadline = ["--call-deadline", DEADLINE if arm.endswith("_deadline") else "0"]
             procs.start("relay", [PY, RELAY, "--listen", f"127.0.0.1:{relay_port}", "--retry", "auto",
                                   "--trust-read-only-hints", "--effects", str(effects), *deadline,
                                   "--audit", str(base / "audit.jsonl"), "--",
