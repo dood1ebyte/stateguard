@@ -655,3 +655,14 @@ Both are **behaviour changes** to the defaults.
 - **The old default turned every slow unkeyed write into "unknown", although the write
   succeeded.** That is an induced failure, and the new default removes it.
 - 0 unsafe outcomes; all 816 relay records agree with ground truth.
+
+### Regression across CI's Python matrix, on the Session 4 code (local; `8469759`)
+
+| Python | Result |
+|---|---|
+| 3.11.18 | 6,589 passed, 0 failed, 0 skipped |
+| 3.12.3 (first Phase 1 run on 3.12) | 6,589 passed, 0 failed, 0 skipped |
+| 3.14.6 (installed world-readable, as CI's setup-python is) | 6,589 passed, 0 failed, 0 skipped |
+
+3.13 runs in the session's final suite. These runs are local, not CI's: CI has not run on this
+branch since `ec339ab`. macOS is not run.
