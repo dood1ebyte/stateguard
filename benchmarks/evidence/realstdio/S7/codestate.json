@@ -1,0 +1,28 @@
+{
+ "batch": "S7",
+ "part": null,
+ "started": "2026-11-13T04:39:36.283753+00:00",
+ "commit": "8469759e84f1475b42cdb2170c028b5ef8f7519a",
+ "harness_commit": "8469759e84f1475b42cdb2170c028b5ef8f7519a",
+ "harness_dirty": false,
+ "driver": "../realstdio/driver.py",
+ "driver_args": [
+  "filesystem",
+  "12",
+  "",
+  "",
+  "4"
+ ],
+ "trial_offset": "15000",
+ "python": "3.13.18",
+ "mcp": "2.3.0",
+ "node": "v22.23.4",
+ "typescript_sdk": "1.32.1",
+ "typescript_lockfile_sha256": "ffdaebb2f832db1ec9f116eec1b458c2d5b444f8a1f24b56a5173c2788c471cd",
+ "everything_tree_sha256": "823e40005f94f353567c7b9bce56146516c8038ff3a15d44cbeef53b60a99778",
+ "platform": "Linux-6.18.44-fc-v445-x86_64-with-glibc2.39",
+ "cpus": 4,
+ "driver_exit": 0,
+ "finished": "2026-11-13T04:45:43.156862+00:00",
+ "everything_tree_sha256_after": "823e40005f94f353567c7b9bce56146516c8038ff3a15d44cbeef53b60a99778"
+}

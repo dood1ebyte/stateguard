@@ -666,3 +666,26 @@ Both are **behaviour changes** to the defaults.
 
 3.13 runs in the session's final suite. These runs are local, not CI's: CI has not run on this
 branch since `ec339ab`. macOS is not run.
+
+### S7: the stdio matrix on a third pinned server, server-filesystem (`benchmarks/evidence/realstdio/S7`, code `8469759`)
+
+**Setup:** `@modelcontextprotocol/server-filesystem` 2026.8.31 (TypeScript, keyed by the
+preload); every default cell, 12 trials.
+- read: `read_text_file`, declared read_only;
+- write: `move_file`, declared non_idempotent;
+- ground truth: the destination exists.
+
+| Arm | transport | crash | faulted | unsafe |
+|---|---|---|---|---|
+| raw | 96/96 | 36/36 | 132/132 | 36 false failures |
+| naive (blind resend) | 24/96 | 24/36 | 48/132 | **48 false failures** |
+| sg | 48/96 | 36/36 | 84/132 (63.6%) | 0 |
+| **sg_keyed** | **0/96 (≤ 3.9%)** | 24/36 | **24/132 (18.2%)** | **0** |
+
+- **StateGuard's residual is the same as on sqlite and memory:** sg 84/132; sg_keyed 24/132,
+  only the two crash windows, unresolved.
+- **The blind resend fails differently:** a second `move_file` finds its source gone. Where
+  sqlite showed 48 duplicates, the filesystem shows 48 false failures: the client is told an
+  error for a move that happened. Both are unsafe outcomes; StateGuard arms had neither.
+- Fault-free 0; all 312 relay records agree with ground truth.
+- `move_file` is not idempotent, so D11 does not apply. Its crash windows stay in doubt.
