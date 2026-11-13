@@ -27,3 +27,24 @@ the code is this commit.
   "repairs" the call to the stale schema, and sqlite then answered success without writing: a
   **false success**. This is the risk of turning refresh off.
 - 0 unsafe outcomes in raw, sg and sg_keyed.
+
+## Addendum (before the `adv_*_d13` parts' rows): the same cells on D13
+
+**What A1 found** (code `c255b44`):
+- C (a non-conformant answer) failed in every arm, the relay included.
+- The relay recorded those calls `answered` (96 record mismatches).
+
+**D13** (`87f43d4`):
+- A non-conformant answer to a call the relay could resend is resent at once.
+- Anything else is passed through as it came, never rewritten.
+- A client sent a non-conformant answer is recorded `nonconformant` (unresolved).
+
+**Parts `adv_sqlite_d13` and `adv_memory_d13`:** the same cells and arms (raw, sg, sg_keyed),
+TRIAL_OFFSET=17000, on `87f43d4`.
+
+**Expectations:**
+- C: sg reads 0/12 (re-read); sg_keyed 0/24 (read re-read, write replayed); sg unkeyed writes
+  12/12 unresolved, passed through and now recorded `nonconformant`; raw unchanged (24/24).
+- J, H and B as before.
+- Record mismatches only where the relay cannot know: none in these arms (the stale-listing
+  `_norefresh` arm is not re-run).
