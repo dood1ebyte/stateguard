@@ -510,6 +510,7 @@ class Rig:
         trust_read_only_hints: bool = False,
         deadline_scope: str = "all",
         idempotency_keys: bool = False,
+        answer_timeout: float = 300.0,
     ) -> None:
         from stateguard import ContractGuard, GuardConfig
         from stateguard.core.models.config import RepairMode
@@ -570,6 +571,7 @@ class Rig:
             trust_read_only_hints=trust_read_only_hints,
             deadline_scope=deadline_scope,
             idempotency_keys=idempotency_keys,
+            answer_timeout=answer_timeout,
         )
         server_in, server_out = os.fdopen(r2s_r, "rb"), os.fdopen(s2r_w, "wb")
         first = threading.Thread(target=server.serve, args=(server_in, server_out), daemon=True)

@@ -67,10 +67,9 @@ coming. The relay uses it, in auto mode, for two things only:
 * **Never silence instead of an answer.** If the server's pipe closes, every
   request in flight gets an explicit JSON-RPC error saying the outcome is
   unknown -- it **may or may not have executed** -- instead of no answer at
-  all. With ``--call-deadline SECONDS`` the same happens to a request the
-  server has not answered in time (off by default: a long-running tool is
-  not a failure). The relay never retries and never claims a call failed or
-  succeeded when it does not know.
+  all. ``--call-deadline SECONDS`` (off by default: a long-running tool is
+  not a failure) is when to try again: see ``--deadline-scope``. The relay
+  never claims a call failed or succeeded when it does not know.
 
 Retry
 -----
@@ -124,13 +123,22 @@ Two opt-ins widen or narrow what that applies to, and neither is on by default:
   untrusted otherwise). A wrong hint would let a mutating call be re-sent, so
   this is the operator's statement of trust, recorded as ``source:
   server_hint`` in every retry decision. No other hint is ever trusted.
-* ``--deadline-scope recoverable``: ``--call-deadline`` applies only to calls
-  the relay could resend (declared reads; calls with an honoured idempotency
-  key). Any other call waits for its answer, as without a deadline, so a slow
-  but healthy mutation is never cut short into "outcome unknown" -- for such
-  a call a deadline can only turn success into a failure. A keyed call whose
-  resend is answered "in doubt" after a deadline waits one more deadline for
-  the original's late answer before the client is told "outcome unknown".
+* ``--deadline-scope recoverable`` (the default since Phase 1 Session 4; the
+  HTTP relay's deadline means the same): ``--call-deadline`` is when to try
+  again, never a point at which a call still running is answered as failed.
+  It applies only to calls the relay could resend (declared reads; calls with
+  an honoured idempotency key), which are resent once at the deadline; the
+  first answer of either attempt is the client's. Any other call waits for
+  its answer, as without a deadline, so a slow but healthy mutation is never
+  cut short into "outcome unknown" -- for such a call a deadline could only
+  turn success into a failure. A call past its deadline is answered "outcome
+  unknown" only once its server is replaced or gone for good, or after
+  ``--answer-timeout`` (default 300 s). A keyed resend answered "still
+  running" waits for the original; one answered "in doubt" waits one more
+  deadline for the original's late answer.
+* ``--deadline-scope all``: the deadline is a hard bound -- every request
+  unanswered by then is answered "outcome unknown" (after one resend, for a
+  call the relay could resend). The behaviour before Session 4.
 
 Auth failures
 -------------
@@ -461,8 +469,9 @@ class StdioRelay:
         executor: str | None = None,
         reread_unknown: bool = False,
         trust_read_only_hints: bool = False,
-        deadline_scope: str = "all",
+        deadline_scope: str = "recoverable",
         idempotency_keys: bool = False,
+        answer_timeout: float = 300.0,
     ) -> None:
         self.registry = ToolRegistry(guard)
         if (
@@ -507,10 +516,17 @@ class StdioRelay:
         self._trust_read_only_hints = trust_read_only_hints
         if deadline_scope not in ("all", "recoverable"):
             raise ValueError(f"deadline_scope must be all or recoverable, got {deadline_scope!r}")
-        # "recoverable": the call deadline applies only to calls the relay would
-        # resend (declared reads, honoured keys); others wait for their answer,
-        # as with no deadline at all.
+        # "recoverable" (the default): the call deadline is when to try again. It
+        # applies only to calls the relay would resend (declared reads, honoured
+        # keys); others wait for their answer, as with no deadline at all. A call
+        # resent at its deadline waits for the first answer of either attempt, and
+        # is answered "unknown" only if its server is replaced or gone, or after
+        # ``answer_timeout``. "all": the deadline is a hard bound on every call.
         self._deadline_scope = deadline_scope
+        self._answer_timeout = answer_timeout
+        #: client id -> (when its deadline passed, the server generation it ran on): calls
+        #: past their deadline still waiting for an answer ("recoverable" scope).
+        self._awaiting: dict[Any, tuple[float, int]] = {}
         # Idempotency keys (stateguard.adapters.mcp.idempotency): added to calls
         # to tools whose server says it honours them; such a call may be
         # resent once, with the same key, after an unknown outcome.
@@ -1162,15 +1178,66 @@ class StdioRelay:
         if self._call_deadline is None:
             return
         tick = min(0.05, self._call_deadline / 4)
-        select = self._resendable if self._deadline_scope == "recoverable" else None
+        recoverable = self._deadline_scope == "recoverable"
+        select = self._first_attempt_resendable if recoverable else None
         while not self._stopped.wait(tick):
             try:
                 self._resolve_unknown(
                     self.ledger.expire(self._call_deadline, select=select),
                     Observed.UNKNOWN_DEADLINE,
                 )
+                if recoverable:
+                    self._settle_awaiting()
             except Exception as exc:  # noqa: BLE001 -- never let the deadline thread die
                 self._internal_error("deadline", exc)
+
+    def _first_attempt_resendable(self, invocation: Any) -> bool:
+        """
+        "recoverable" scope: a client's own request the relay could resend. A resend
+        is never cut short by the deadline: the deadline is when to try again, and
+        the call has been tried again.
+        """
+        identifier = getattr(invocation, "request_id", None)
+        if isinstance(identifier, str) and identifier.startswith(RETRY_ID_PREFIX):
+            return False
+        return self._resendable(invocation)
+
+    def _await_answer(self, client_id: Any) -> None:
+        """A call past its deadline waits for the first answer of any of its attempts."""
+        with self._retry_lock:
+            self._awaiting.setdefault(client_id, (time.monotonic(), self.generation))
+
+    def _settle_awaiting(self) -> None:
+        """
+        Calls past their deadline: done once answered; answered "unknown" once their
+        server is replaced or gone for good (no attempt can answer then), or after
+        ``answer_timeout``.
+        """
+        now = time.monotonic()
+        with self._retry_lock:
+            waiting = list(self._awaiting.items())
+        for client_id, (since, generation) in waiting:
+            if not self._unanswered(client_id):
+                with self._retry_lock:
+                    self._awaiting.pop(client_id, None)
+                continue
+            lost = self.generation != generation or self._link == LINK_DOWN
+            if not lost and now - since < self._answer_timeout:
+                continue
+            with self._retry_lock:
+                self._awaiting.pop(client_id, None)
+                resends = [r for r, c in self._client_of.items() if c == client_id]
+            for retry_id in resends:
+                self.ledger.unknown(retry_id, "answer_timeout")
+            reason = "server_lost" if lost else "answer_timeout"
+            self._forget(client_id)
+            self._log("outcome_unknown", category="I", id=client_id, reason=reason, surfaced=True)
+            with contextlib.suppress(OSError, ValueError):
+                self._send_json(
+                    self._client_out,
+                    self._to_client,
+                    unknown_outcome_response(client_id, reason),
+                )
 
     # -- retry ---------------------------------------------------------------
 
@@ -1192,6 +1259,11 @@ class StdioRelay:
         were written to, and may be probed. *reread_channel*: a restarted
         server will replace it, and a resend may wait for that server.
         """
+        waits = (
+            observed is Observed.UNKNOWN_DEADLINE
+            and self._deadline_scope == "recoverable"
+            and not self._shadow
+        )
         for invocation in invocations:
             if invocation is None:
                 continue
@@ -1202,6 +1274,14 @@ class StdioRelay:
                 connection_available=connection_available,
                 reread_channel=reread_channel,
             ):
+                if waits:
+                    self._await_answer(client_id)
+                continue
+            if waits and self._unanswered(client_id):
+                # Past its deadline but still running: the deadline is when to try
+                # again, never a point at which a running call is answered as failed.
+                self._log("deadline_waiting", category="I", id=client_id)
+                self._await_answer(client_id)
                 continue
             begun = self._begin_reconciliation(client_id, invocation, observed, probe_channel)
             if begun is True:
@@ -1765,6 +1845,15 @@ class StdioRelay:
         may still be running: its late answer still wins for one more deadline.
         """
         original = self.ledger.get(client_id)
+        if (
+            outcome is Outcome.IN_PROGRESS
+            and self._deadline_scope == "recoverable"
+            and self._call_deadline is not None
+        ):
+            # The server says the original is running: its answer is coming. Waited
+            # for like any call past its deadline (``_settle_awaiting``).
+            self._await_answer(client_id)
+            return
         wait = (
             self._call_deadline
             if self._call_deadline is not None
@@ -2839,10 +2928,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--deadline-scope",
         choices=["all", "recoverable"],
-        default="all",
-        help="Which calls --call-deadline applies to: all (default), or only calls the "
-        "relay could resend (declared reads, honoured idempotency keys) -- others wait for "
-        "their answer, so a slow mutation is never cut short.",
+        default="recoverable",
+        help="recoverable (default): --call-deadline is when to try again -- only calls the "
+        "relay could resend (declared reads, honoured idempotency keys) are resent at it, "
+        "and a call still running is never answered as failed; others wait for their "
+        "answer. all: the deadline is a hard bound -- every call unanswered by then is "
+        "answered 'outcome unknown'.",
+    )
+    parser.add_argument(
+        "--answer-timeout",
+        type=float,
+        default=300.0,
+        metavar="SECONDS",
+        help="With --deadline-scope recoverable: the longest a call past its deadline waits "
+        "for an answer before 'outcome unknown' (default 300).",
     )
     parser.add_argument(
         "--restart",
@@ -3098,6 +3197,7 @@ def main(argv: list[str] | None = None) -> int:
         reread_unknown=args.retry == "auto" and not args.no_reread_unknown,
         trust_read_only_hints=args.trust_read_only_hints,
         deadline_scope=args.deadline_scope,
+        answer_timeout=args.answer_timeout,
         idempotency_keys=args.retry == "auto" and not args.no_idempotency_keys,
         restart=restart,
         max_restarts=args.restart,

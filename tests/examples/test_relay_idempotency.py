@@ -352,12 +352,20 @@ def test_a_slow_keyed_call_in_doubt_still_delivers_its_late_answer(tmp_path: Pat
         rig.close()
 
 
-def test_a_hung_keyed_call_in_doubt_is_unknown_after_one_more_deadline(tmp_path: Path) -> None:
+def test_a_hung_keyed_call_still_running_is_unknown_after_the_answer_timeout(
+    tmp_path: Path,
+) -> None:
+    """
+    The original hangs; its resend at the deadline is answered "still running". The deadline is
+    when to try again, so the call waits for an answer -- bounded by the answer timeout, after
+    which it is unknown (never executed here, never resent again).
+    """
     rig = _rig(
         tmp_path,
         Plan(ServerAction.HANG_BEFORE_EXECUTE),
         call_deadline=0.3,
         deadline_scope="recoverable",
+        answer_timeout=0.6,
     )
     try:
         started = time.monotonic()
@@ -365,8 +373,46 @@ def test_a_hung_keyed_call_in_doubt_is_unknown_after_one_more_deadline(tmp_path:
         answers = _answers(rig, identifier, settle=0.3)
         elapsed = time.monotonic() - started
         assert len(answers) == 1 and _unknown(answers[0])
-        assert elapsed >= 0.55  # deadline, then one more deadline waiting for a late answer
+        assert answers[0]["error"]["data"]["io.stateguard/reason"] == "answer_timeout"
+        assert elapsed >= 0.85  # the deadline, then the answer timeout
         assert _executed(rig, "pay") == 0
+    finally:
+        rig.close()
+
+
+@pytest.mark.parametrize(("scope", "answered"), [("recoverable", True), ("all", False)])
+def test_a_slow_keyed_call_past_its_deadline(tmp_path: Path, scope: str, answered: bool) -> None:
+    """
+    recoverable (the default): the deadline is when to try again -- a keyed call slower than two
+    deadlines gets its answer, executed once. all: the deadline is a hard bound -- unknown.
+    """
+    rig = _rig(
+        tmp_path,
+        Plan(ServerAction.DELAYED_RESPONSE),
+        call_deadline=0.1,
+        deadline_scope=scope,
+    )
+    try:
+        answers = _answers(rig, _send(rig, "pay"))
+        assert len(answers) == 1
+        assert _ok(answers[0]) if answered else _unknown(answers[0]), answers
+        assert _executed(rig, "pay") == 1
+    finally:
+        rig.close()
+
+
+def test_a_slow_call_that_cannot_be_resent_is_never_cut_short(tmp_path: Path) -> None:
+    rig = _rig(
+        tmp_path,
+        Plan(ServerAction.DELAYED_RESPONSE),
+        keys=False,  # pay is non-idempotent and unkeyed: the relay can never resend it
+        call_deadline=0.1,
+        deadline_scope="recoverable",
+    )
+    try:
+        answers = _answers(rig, _send(rig, "pay"))
+        assert len(answers) == 1 and _ok(answers[0]), answers
+        assert _executed(rig, "pay") == 1
     finally:
         rig.close()
 
