@@ -689,3 +689,18 @@ preload); every default cell, 12 trials.
   error for a move that happened. Both are unsafe outcomes; StateGuard arms had neither.
 - Fault-free 0; all 312 relay records agree with ground truth.
 - `move_file` is not idempotent, so D11 does not apply. Its crash windows stay in doubt.
+
+### B4: the deadline arms on the full HTTP matrix after decision 2 (`benchmarks/evidence/realhttp/B4`, code `f5af9a8`)
+
+**Setup:** decision 2 restructured the deadline race (answers tagged by attempt). B4 re-runs
+the arms that exercise it, on every default cell, 12 trials.
+
+- **B3's counts, cell for cell:**
+  - sg_keyed_deadline 0/168 on notes and on tsnotes (Wilson upper bound 2.2%);
+  - sg_deadline 0/84 on everything (≤ 4.4%);
+  - fault-free 0; 0 unsafe.
+- **Records** (480, 0 mismatches):
+  - the 60 `hang_after` rows read `recovered` with fault `deadline` and one deadline resend
+    (the resend won);
+  - the other faults read `recovered` with their own fault;
+  - fault-free rows read `answered`.
