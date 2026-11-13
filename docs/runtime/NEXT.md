@@ -66,18 +66,19 @@ allowed. Early completion or idle capacity never advances the schedule.
   - Session 6, `trig_01JBfioVdCgAAaNB85oA8n9C`, 11-18.
 - **The 14:00 IST end** is enforced by each session's own clock checks, not by the platform.
 
-## Handoff (end of Session 3, Wed 2026-11-11)
+## Handoff (end of Session 4, Fri 2026-11-13)
 
 - **Pushed:** everything up to the commit that adds this section; `origin` and the local branch
   are level. **Uncommitted:** nothing. **Running:** nothing.
-- **Left in place (lost if the container is replaced):** the venvs `.venv` and `/tmp/mcp1`,
-  TypeScript `node_modules`, `/opt/sg-servers/*`, Python 3.14 in `/opt/uvpython`, and the
-  `run_batch.py` worktrees `/tmp/sg-code-<sha12>`. Rebuild per "Environment" if they are gone.
-- **Results and reasoning:** `docs/runtime/PHASE1_ENGINEERING_RECORD.md` (Sessions 1–3).
-  Metrics: `docs/runtime/PHASE1_METRICS.md`. Evidence: `benchmarks/evidence/{realhttp,realstdio}/`.
-- **Rules learned:** never edit `benchmarks/runtime/` while a batch runs. Crash cells bypass the
-  fault proxy (record, C1).
-- **Exact next action (Fri 2026-11-13, 09:00 IST):** items 1–2 (decided), then item 3.
+- **Left in place (lost if the container is replaced):** the venvs `.venv`, `/tmp/mcp1`,
+  `/tmp/venv311`, `/tmp/venv312` and `/tmp/venv314b` (3.14 from `/opt/uvpython`); TypeScript
+  `node_modules`; `/opt/sg-servers/*`; and the `run_batch.py` worktrees
+  `/tmp/sg-code-<sha12>`. Rebuild per "Environment" if they are gone.
+- **Behaviour changes this session (defaults):**
+  - HTTP `--call-deadline` is 30 s;
+  - stdio `--deadline-scope` is `recoverable`, with `--answer-timeout` 300 s.
+- **Results and reasoning:** `docs/runtime/PHASE1_ENGINEERING_RECORD.md` (Sessions 1–4).
+- **Exact next action (Mon 2026-11-16, 09:00 IST):** check the environment, then queue item 1.
 
 ## Phase 1 queue (first not done or blocked; mark done here with its commit)
 
@@ -125,51 +126,35 @@ Done in Session 3 (2026-11-11, recovery engineering):
   `after_record` 5/24 -> 0/24.
 - B3, the HTTP matrix on `51f6fdf` (results in the record).
 
-Next, in order (Session 4, Fri 2026-11-13, is hardening and compatibility):
-1. **Decided (the founder delegated both, 2026-11-11 evening): one meaning for `--call-deadline`.**
-   - **The deadline is when to try again. It never turns a call that is still running into a
-     failure.**
-     - An induced failure is the one outcome Phase 1 forbids, and stdio's answer-bound reading
-       creates one on every slow success.
-     - One flag with two meanings is a configuration trap.
-   - **stdio, a recoverable call past the deadline:** resend once, as now, then wait for the
-     first definitive answer of either attempt.
-     - "Unknown" is answered only if the server is lost, or after `--answer-timeout` (new,
-       default 300 s, as HTTP's `--upstream-timeout`).
-   - **stdio, a call that cannot be resent:** never cut short by the deadline.
-     `--deadline-scope recoverable` becomes the default; `--deadline-scope all` stays as the
-     explicit hard bound.
-   - **Verify:**
-     - a slow keyed call succeeds (the test discarded on 2026-11-09);
-     - a slow unkeyed write is never cut;
-     - a hung server still ends "unknown";
-     - S6 (the stdio matrix) plus slow cells (the shim delays the answer).
-   - This is a behaviour change: say so in the record.
-2. **Decided: the HTTP relay gets a default `--call-deadline` of 30 s, for recoverable requests
-   only** (keyed calls, declared reads, requests that change nothing). `--call-deadline 0`
-   turns it off.
-   - **Why:**
-     - since D10 it never cuts short a slow call (E1–E3);
-     - it recovers a hung server's call (B2: 24/168 to 0/168);
-     - 30 s is below common client timeouts (the TypeScript SDK's 60 s) and above most tool
-       latencies.
-   - **With it:** a slow call whose original answer wins is recorded `answered` with a count of
-     deadline resends, not as a `deadline` fault.
-   - **Verify:**
-     - tests for the default and for `0`;
-     - the B matrix unchanged (its client gives up at 8 s); keep the arms explicit;
-     - a long-hang cell shows recovery at the default.
-3. **Hardening and compatibility (Session 4):**
-   - the multi-Python regression (3.11, 3.12, 3.14) on the Session 2–3 code;
-   - the declaration's refusal paths under a real misconfiguration;
-   - (done in Session 3: the TypeScript store tests cover `Recovery.rerun`).
-4. **P2b: the event-stream connection cost with a kernel delay** (iproute2 netem in a network
-   namespace; this container has neither `tc` nor `ip`). Session 5 (overhead).
-5. **The crash window of a non-idempotent tool** stays unresolved without a key-bound check or
-   a transactional effect. An operator-supplied check for the injector and preload is possible
-   but tool-specific; decide whether it is in Phase 1 scope.
-6. **Real capture for incidence** (owner-dependent; see the old queue item 3).
-7. Phase Completion Report (Session 6).
+Done in Session 4 (2026-11-13, hardening):
+- Decision 2, the HTTP default deadline of 30 s for recoverable requests, with slow successes
+  recorded `answered` (`4c2256d`). E4 (`570d262`): a hung keyed write recovered at about 30 s,
+  12/12; a 10 s write answered with no resend.
+- Decision 1, the stdio deadline is when to try again: `--deadline-scope recoverable` by
+  default, and `--answer-timeout` (`2d8a676`). S6 (`ba310ac`): the matrix unchanged; the old
+  hard bound cost 12/12 slow unkeyed writes per server, the new default 0.
+- The TypeScript store tests cover `Recovery.rerun`.
+- Python 3.11, 3.12 and 3.14 suites: 6,589 passed each (`8469759`).
+- S7, the stdio matrix on server-filesystem (`8469759`): StateGuard's residual as on sqlite
+  and memory; the blind resend's unsafe outcome there is 48 false failures.
+- B4, the deadline arms on the HTTP matrix after decision 2 (results in the record).
+- Decided (scope): a key-bound recovery check for non-idempotent tools is tool-specific
+  operator integration, outside Phase 1. Their crash windows stay a documented limitation.
+
+Next, in order (Session 5, Mon 2026-11-16, is adversarial validation and overhead):
+1. **Adversarial cells for the categories the matrix does not cover** (`PHASE1_METRICS.md`):
+   B (a listing that changes mid-session), H (a corrupted or contract-breaking result), J (a
+   duplicate response), C (a non-conformant message). Use fault proxy and shim modes, with a
+   plan before rows. Keep what is measured apart from what is only tested.
+2. **P2b: the event-stream connection cost with a kernel delay** (install iproute2; netem in a
+   network namespace). Then decide whether to read event streams to their end so the
+   connection can be reused.
+3. **Overhead on the final code:** paired, single worker (as P1 and P3), HTTP and stdio, with
+   the new defaults.
+4. **Real capture for incidence** (owner-dependent; see the old queue item 3).
+5. Phase Completion Report (Session 6), with the limitations: the non-idempotent crash
+   windows, B/C/G/H/K outside the measured RFR unless item 1 adds them, no traffic-weighted
+   RFR.
 
 ## Session log
 
