@@ -24,6 +24,7 @@ Arms:
   sg         client -> stdio relay (--retry auto, --restart 2 after-unknown, the write declared
              non_idempotent and the read read_only, --call-deadline 2) -> shim -> server
   sg_keyed   sg, and the server keyed (injector / preload)
+  *_norefresh  the arm with --no-listing-refresh (the relay acts on the last listing it saw)
   *_bound    the arm with --deadline-scope all (the hard bound, the default before Session 4);
              without it, the relay's default: the deadline is when to try again
   sg_keyed_idempotent  sg_keyed, the write also declared idempotent to the keyed server, with an
@@ -75,6 +76,8 @@ OUTCOME = "io.stateguard/idempotencyOutcome"
 STATE = "io.stateguard/executionState"
 TRANSPORT = ["kill_before", "lost_exit", "hang", "transient"]
 CRASH = ["after_begin", "after_effect", "after_record"]
+#: The taxonomy's J, H, C and B (shim modes; not in the default cells; the call always runs).
+ADVERSARIAL = ["duplicate", "garbage", "truncated", "nonconformant", "stale_listing"]
 CELLS = {
     s: ["read/none", "write/none"]
     + [f"{op}/{m}" for op in ("read", "write") for m in TRANSPORT]
@@ -156,7 +159,7 @@ def run(server: str, cell: str, arm: str, t: int) -> dict:
     base.mkdir(parents=True)
     cmd, env, read, write, marker = setup(server, base, t, arm, op, mode)
     name, args = (read[0], read[1]) if op == "read" else write
-    shim_mode = mode if mode in TRANSPORT or mode == "slow" else "none"
+    shim_mode = mode if mode in TRANSPORT or mode in ADVERSARIAL or mode == "slow" else "none"
     command = [PY, SHIM, "--mode", shim_mode, "--tool", name, "--fault-file",
                str(base / "fault_flag"), "--log", str(base / "shim.log"), "--", *cmd]
     if arm.startswith("sg"):
@@ -168,6 +171,8 @@ def run(server: str, cell: str, arm: str, t: int) -> dict:
             {"name": READ_TOOL[server], "effect": "read_only"},
         ]}))
         bound = ["--deadline-scope", "all"] if arm.endswith("_bound") else []
+        if arm.endswith("_norefresh"):  # act on the last listing seen (the stale one, for B)
+            bound.append("--no-listing-refresh")
         command = [PY, RELAY, "--retry", "auto", "--restart", "2", "--restart-policy",
                    "after-unknown", "--effects", str(effects), "--trust-read-only-hints",
                    "--call-deadline", "2", *bound, "--audit", str(base / "audit.jsonl"), "--",
@@ -221,7 +226,8 @@ def run(server: str, cell: str, arm: str, t: int) -> dict:
                if e.get("method") == "tools/call"]
     row = {
         "server": server, "op": op, "tool": name, "mode": mode,
-        "family": "crash" if mode in CRASH else ("slow" if mode == "slow" else "transport"),
+        "family": "crash" if mode in CRASH else (
+            "slow" if mode == "slow" else ("adversarial" if mode in ADVERSARIAL else "transport")),
         "arm": arm, "trial": t, "run": base.name, "success": success, "kinds": kinds, "latency_s": round(latency, 3),
         "count": count, "told_ok": told_ok,
         "server_outcome": (final.get("meta") or {}).get(OUTCOME) if final["status"] == "result" else None,

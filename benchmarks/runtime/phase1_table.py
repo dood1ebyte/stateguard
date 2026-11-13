@@ -33,7 +33,7 @@ UNRESOLVED_KINDS = frozenset({"surfaced_unknown", "no_answer_timeout", "no_answe
 UNRESOLVED_CODES = frozenset({-32010, -32011})
 UNSAFE = ("duplicate_effect", "false_success", "false_failure", "wrong_content")
 ORDER = ["raw", "naive", "sg", "sg_keyed", "sg_resumable", "sg_deadline", "sg_keyed_deadline"]
-FAMILIES = ["fault_free", "transport", "session", "crash", "slow", "drift"]
+FAMILIES = ["fault_free", "transport", "session", "crash", "adversarial", "slow", "drift"]
 
 #: Injected fault -> failure taxonomy category (TASKMAP.md) and whether it ran before the fault.
 CATEGORY = {
@@ -51,6 +51,11 @@ CATEGORY = {
     "after_record": ("I", "server crash after the key was recorded, before the answer"),
     "session_loss": ("D", "the server restarted between handshake and call; session unknown"),
     "drift": ("A", "the argument's field renamed by the caller (schema drift)"),
+    "duplicate": ("J", "executed; its answer sent twice"),
+    "garbage": ("H", "executed; its answer replaced by a line that is not JSON"),
+    "truncated": ("H", "executed; its answer cut off half-way"),
+    "nonconformant": ("C", "executed; its answer says jsonrpc 1.0"),
+    "stale_listing": ("B", "the listings before the call show a schema no longer served"),
     "slow": ("F", "no fault: the tool is slow; a deadline must not turn it into a failure"),
 }
 
