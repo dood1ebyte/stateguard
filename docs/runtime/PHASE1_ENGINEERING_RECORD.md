@@ -704,3 +704,63 @@ the arms that exercise it, on every default cell, 12 trials.
     (the resend won);
   - the other faults read `recovered` with their own fault;
   - fault-free rows read `answered`.
+
+## Extra session (Fri 2026-11-13, 17:15–22:15 IST; added by the founder)
+
+### A1: adversarial cells for categories J, H, C and B (`benchmarks/evidence/realstdio/A1`, code `c255b44`)
+
+**New shim modes** (the call always runs):
+- `duplicate` (J): the answer is sent twice;
+- `garbage` and `truncated` (H): the answer is replaced by non-JSON, or cut off half-way;
+- `nonconformant` (C): the answer says `"jsonrpc": "1.0"`;
+- `stale_listing` (B): the first two listings show the tool's first property capitalised, a
+  schema the server no longer serves.
+
+**Setup:** sqlite and memory, 12 trials per cell.
+
+| Category, fault | raw | sg | sg_keyed | sg_norefresh |
+|---|---|---|---|---|
+| J duplicate (read and write) | 0/24 | 0/24 | 0/24 | — |
+| H garbage (read and write) | 24/24 | 12/24 (unkeyed writes) | **0/24** | — |
+| H truncated (read and write) | 24/24 | 12/24 (unkeyed writes) | **0/24** | — |
+| C nonconformant (read and write) | 24/24 | **24/24** | **24/24** | — |
+| B stale_listing (write) | 0/12 | 0/12 | 0/12 | **12/12** (sqlite: 12 false successes) |
+
+(per server; the two servers match except the B false successes, which are sqlite's)
+
+- **J:** a duplicate response is harmless here. The relay drops the second.
+- **H:** the relay recovers what it can resend: reads are re-read at the deadline and keyed
+  writes replayed. An unkeyed write stays unresolved, correctly: it cannot be resent.
+- **C, a defect (D13):** the relay delivered the non-conformant answer as the request's answer.
+  The client rejected it, and nothing was resent. It also recorded those calls `answered`:
+  96 of the 120 record mismatches.
+- **B:** the default relay refreshes its listing before acting, so 0 failures. With
+  `--no-listing-refresh`, it "repaired" correct calls into the stale schema: 12/12 failed on
+  both servers. On sqlite they were answered success without writing (12 false successes);
+  memory answered tool errors. The help of both relays now states this risk.
+- **The other 24 record mismatches:**
+  - 12 are tool errors, which incidence counts as answers by definition (`PHASE1_METRICS.md`);
+  - 12 are sqlite's false successes, which no relay can see.
+
+### D13: a non-conformant answer to a call that can be resent is resent (`87f43d4`)
+
+- `jsonrpc.is_conformant_response` is the shared check: `"jsonrpc": "2.0"`, a valid id, and
+  exactly one of a result or a well-formed error.
+- **Both relays:** a non-conformant answer to a call the relay could resend (a declared read,
+  an honoured key, a request that changes nothing) counts as an unknown outcome and is resent.
+  On stdio it is resent at once: the server is up.
+- **Anything else** is passed through as it came, never rewritten, and logged category C.
+- **Incidence:** a client sent a non-conformant answer has resolution `nonconformant`
+  (unresolved).
+- **Tests:** in both relays, a keyed call answered non-conformantly is resent and executed once;
+  an unkeyed one passes through and is recorded `nonconformant`. Unit tests cover the check.
+
+### P2b: blocked by the kernel
+
+- iproute2 installs, and network namespaces work. But this VM's kernel has no `sch_netem`
+  ("Specified qdisc kind is unknown"), so no delay in the kernel is possible here.
+- A delay added by a proxy at connection setup would only restate the delay chosen. P2's
+  measured fact stands: one upstream connection per event-stream answer.
+- **The reuse optimisation** (reading a stream to its end so the connection can be reused) is
+  deferred to Phase 2. It saves at most one handshake per call (more with TLS), mainly for
+  remote servers. It is unmeasured here and is a stated limitation.
