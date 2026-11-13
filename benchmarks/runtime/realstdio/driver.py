@@ -13,6 +13,10 @@ Servers (reported separately):
            keys via ``node --import adapters/typescript/src/preload.ts``.
            read: search_nodes; write: add_observations, ground truth = the memory file.
            The tool drops an observation it already has, so a resend cannot duplicate there.
+  filesystem @modelcontextprotocol/server-filesystem 2026.8.31 (TypeScript, FS_JS); keys via the
+           preload. read: read_text_file; write: move_file (src-T -> dst-MARKER), ground truth
+           = the destination exists. A second move fails (the source is gone): a resend cannot
+           duplicate, but it can turn a move that happened into an error.
 
 Arms:
   raw        client -> shim -> server
@@ -57,6 +61,10 @@ MEMORY_JS = os.environ.get(
     "MEMORY_JS",
     "/opt/sg-servers/memory/node_modules/@modelcontextprotocol/server-memory/dist/index.js",
 )
+FS_JS = os.environ.get(
+    "FS_JS",
+    "/opt/sg-servers/filesystem/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
+)
 RELAY = str(CODE / "examples/mcp/stdio_proxy.py")
 SHIM = str(HERE / "shim.py")
 PRELOAD = str(CODE / "adapters/typescript/src/preload.ts")
@@ -71,11 +79,11 @@ CELLS = {
     s: ["read/none", "write/none"]
     + [f"{op}/{m}" for op in ("read", "write") for m in TRANSPORT]
     + [f"write/{m}" for m in CRASH]
-    for s in ("sqlite", "memory")
+    for s in ("sqlite", "memory", "filesystem")
 }
-ARMS = {s: ["raw", "naive", "sg", "sg_keyed"] for s in ("sqlite", "memory")}
-WRITE_TOOL = {"sqlite": "write_query", "memory": "add_observations"}
-READ_TOOL = {"sqlite": "read_query", "memory": "search_nodes"}
+ARMS = {s: ["raw", "naive", "sg", "sg_keyed"] for s in ("sqlite", "memory", "filesystem")}
+WRITE_TOOL = {"sqlite": "write_query", "memory": "add_observations", "filesystem": "move_file"}
+READ_TOOL = {"sqlite": "read_query", "memory": "search_nodes", "filesystem": "read_text_file"}
 CLIENT_WAIT = 8.0
 
 
@@ -105,6 +113,18 @@ def setup(server: str, base: Path, t: int, arm: str, op: str, mode: str) -> tupl
             cmd = [str(Path(MCP1).parent / "mcp-server-sqlite"), "--db-path", str(db)]
         read = ("read_query", {"query": "SELECT text FROM notes"}, f"seed-{t}")
         write = ("write_query", {"query": f"INSERT INTO notes VALUES ('{marker}')"})
+    elif server == "filesystem":
+        root = base / "root"
+        root.mkdir()
+        (root / "seed.txt").write_text(f"seed-{t}\n")
+        (root / f"src-{t}.txt").write_text(f"{marker}\n")
+        cmd = [NODE, "--no-warnings"]
+        if keyed or mode in CRASH:
+            cmd += ["--import", PRELOAD]
+        cmd += [FS_JS, str(root)]
+        read = ("read_text_file", {"path": str(root / "seed.txt")}, f"seed-{t}")
+        write = ("move_file", {"source": str(root / f"src-{t}.txt"),
+                               "destination": str(root / f"dst-{marker}.txt")})
     else:
         memory = base / "memory.jsonl"
         memory.write_text(json.dumps({"type": "entity", "name": "seed", "entityType": "test",
@@ -124,6 +144,8 @@ def truth_count(server: str, base: Path, marker: str) -> int:
     if server == "sqlite":
         with sqlite3.connect(base / "app.db") as conn:
             return conn.execute("SELECT COUNT(*) FROM notes WHERE text = ?", (marker,)).fetchone()[0]
+    if server == "filesystem":  # moved at most once: the destination exists, or not
+        return int((base / "root" / f"dst-{marker}.txt").exists())
     text = (base / "memory.jsonl").read_text() if (base / "memory.jsonl").exists() else ""
     return text.count(json.dumps(marker))
 
