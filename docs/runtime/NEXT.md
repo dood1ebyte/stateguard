@@ -77,8 +77,7 @@ allowed. Early completion or idle capacity never advances the schedule.
   Metrics: `docs/runtime/PHASE1_METRICS.md`. Evidence: `benchmarks/evidence/{realhttp,realstdio}/`.
 - **Rules learned:** never edit `benchmarks/runtime/` while a batch runs. Crash cells bypass the
   fault proxy (record, C1).
-- **Exact next action (Fri 2026-11-13, 09:00 IST):** check the environment and any founder
-  decision on items 1–2, then queue item 3.
+- **Exact next action (Fri 2026-11-13, 09:00 IST):** items 1–2 (decided), then item 3.
 
 ## Phase 1 queue (first not done or blocked; mark done here with its commit)
 
@@ -127,15 +126,39 @@ Done in Session 3 (2026-11-11, recovery engineering):
 - B3, the HTTP matrix on `51f6fdf` (results in the record).
 
 Next, in order (Session 4, Fri 2026-11-13, is hardening and compatibility):
-1. **Founder decision needed: the relays' deadlines differ.**
-   - HTTP `--call-deadline` is when to resend (the first answer wins).
-   - stdio `--call-deadline` is a promised answer time: "unknown" after about two deadlines
-     for a recoverable call, by its documented contract.
-   - Do not change stdio's contract without that decision (record, D10).
-2. **Founder decision needed: a default deadline for recoverable requests (HTTP).** E1–E3
-   (record) show the HTTP relay's deadline never cuts short a slow keyed write or a slow
-   declared read after D10, and it recovers `hang_after`. Costs: a second request per call
-   slower than the deadline, and slow calls counted as deadline faults in incidence.
+1. **Decided (the founder delegated both, 2026-11-11 evening): one meaning for `--call-deadline`.**
+   - **The deadline is when to try again. It never turns a call that is still running into a
+     failure.**
+     - An induced failure is the one outcome Phase 1 forbids, and stdio's answer-bound reading
+       creates one on every slow success.
+     - One flag with two meanings is a configuration trap.
+   - **stdio, a recoverable call past the deadline:** resend once, as now, then wait for the
+     first definitive answer of either attempt.
+     - "Unknown" is answered only if the server is lost, or after `--answer-timeout` (new,
+       default 300 s, as HTTP's `--upstream-timeout`).
+   - **stdio, a call that cannot be resent:** never cut short by the deadline.
+     `--deadline-scope recoverable` becomes the default; `--deadline-scope all` stays as the
+     explicit hard bound.
+   - **Verify:**
+     - a slow keyed call succeeds (the test discarded on 2026-11-09);
+     - a slow unkeyed write is never cut;
+     - a hung server still ends "unknown";
+     - S6 (the stdio matrix) plus slow cells (the shim delays the answer).
+   - This is a behaviour change: say so in the record.
+2. **Decided: the HTTP relay gets a default `--call-deadline` of 30 s, for recoverable requests
+   only** (keyed calls, declared reads, requests that change nothing). `--call-deadline 0`
+   turns it off.
+   - **Why:**
+     - since D10 it never cuts short a slow call (E1–E3);
+     - it recovers a hung server's call (B2: 24/168 to 0/168);
+     - 30 s is below common client timeouts (the TypeScript SDK's 60 s) and above most tool
+       latencies.
+   - **With it:** a slow call whose original answer wins is recorded `answered` with a count of
+     deadline resends, not as a `deadline` fault.
+   - **Verify:**
+     - tests for the default and for `0`;
+     - the B matrix unchanged (its client gives up at 8 s); keep the arms explicit;
+     - a long-hang cell shows recovery at the default.
 3. **Hardening and compatibility (Session 4):**
    - the multi-Python regression (3.11, 3.12, 3.14) on the Session 2–3 code;
    - the declaration's refusal paths under a real misconfiguration;
