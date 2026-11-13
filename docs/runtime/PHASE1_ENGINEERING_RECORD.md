@@ -620,3 +620,38 @@ Both are **behaviour changes** to the defaults.
 | `write/slow` (10 s) | sg_keyed_default | 0/12, answered, no resend, no fault recorded |
 
 0 record mismatches.
+
+### Decision 1: the stdio deadline is when to try again (`2d8a676`)
+
+- **`--deadline-scope recoverable` is now the default.** Only calls the relay could resend
+  (declared reads, honoured keys) are resent at `--call-deadline`.
+  - The resend is never cut short, and the first answer of either attempt is the client's.
+  - A call past its deadline is answered "unknown" only once its server is replaced or gone
+    for good, or after `--answer-timeout` (new, default 300 s).
+  - A keyed resend answered "still running" waits for the original.
+  - Calls the relay cannot resend wait for their answer.
+- **`--deadline-scope all` keeps the old hard bound.**
+- **Tests:**
+  - a keyed call slower than two deadlines is answered and executed once, and is "unknown"
+    under `all`;
+  - an unkeyed slow call is never cut short;
+  - a hung keyed call still running is "unknown" after the answer timeout.
+  - The stdio half of D10 (2026-11-09) is resolved this way.
+
+### S6: the stdio matrix on the new default, and slow answers (`benchmarks/evidence/realstdio/S6`, code `ba310ac`)
+
+**Matrix** (every default cell, 12 trials): identical to S4 per server. sg 84/132, sg_keyed
+24/132 (the two crash windows), fault-free 0.
+
+**Slow answers** (the shim delays the answer 5 s, no fault; deadline 2 s; 12 trials):
+
+| Arm, per server | read/slow | write/slow |
+|---|---|---|
+| raw | 0/12 | 0/12 |
+| **sg** (new default) | 0/12 | **0/12** |
+| sg_bound (`--deadline-scope all`, the old default) | 0/12 | **12/12 unknown, 12 induced vs raw** |
+| sg_keyed, sg_keyed_bound | 0/12 | 0/12 (replayed) |
+
+- **The old default turned every slow unkeyed write into "unknown", although the write
+  succeeded.** That is an induced failure, and the new default removes it.
+- 0 unsafe outcomes; all 720 relay records agree with ground truth.
