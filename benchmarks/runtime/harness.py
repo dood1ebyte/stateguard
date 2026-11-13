@@ -73,6 +73,7 @@ class ServerAction(StrEnum):
     CLOSE_BEFORE_EXECUTE = "close_before_execute"  # close the pipe, nothing executed
     CLOSE_AFTER_EXECUTE = "close_after_execute"  # execute, then close the pipe
     GARBAGE = "garbage"  # execute, answer bytes that are not JSON
+    NONCONFORMANT = "nonconformant"  # execute, answer a result that says "jsonrpc": "1.0"
     DUPLICATE_RESPONSE = "duplicate_response"  # execute once, answer twice
     HANG_BEFORE_EXECUTE = "hang_before_execute"  # never execute, never answer
     TRANSIENT_ERROR = "transient_error"  # do not execute, answer isError (temporary)
@@ -373,6 +374,12 @@ class ScriptedServer:
             return True
         if action is ServerAction.GARBAGE:
             self._write(writer, b'{"jsonrpc": "2.0", "id": ' + json.dumps(identifier).encode())
+            return True
+        if action is ServerAction.NONCONFORMANT:
+            result = self._result_for(tool, str(name), arguments, ServerAction.NORMAL)
+            self._write(
+                writer, json.dumps({"jsonrpc": "1.0", "id": identifier, "result": result}).encode()
+            )
             return True
         if action is ServerAction.TOOL_ERROR:
             self._reply(writer, identifier, _error_result(f"{name} failed while executing"))

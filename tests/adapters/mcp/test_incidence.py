@@ -79,6 +79,7 @@ def test_an_answer_after_a_fault_is_a_recovery_and_nothing_else_is() -> None:
         ("in_progress", True, True),
         ("client_gone", True, True),
         ("unfinished", True, True),  # the relay stopped before it answered
+        ("nonconformant", True, True),  # the client could not use what it was sent
         ("http_503", True, True),
         ("not_sent", False, True),  # it did not run: resolved, but failed
         ("refused", False, True),
@@ -224,3 +225,9 @@ def test_an_open_line_and_its_record_pair_across_logs_in_any_order(tmp_path: Pat
 def test_records_without_open_lines_are_read_as_before(tmp_path: Path) -> None:
     audit = _write(tmp_path / "audit.jsonl", [_record("answered", []), _record("unknown", [])])
     assert [r["resolution"] for r in read_records([audit])] == ["answered", "unknown"]
+
+
+def test_a_nonconformant_answer_is_its_own_unresolved_resolution() -> None:
+    kind, _ = resolution({"jsonrpc": "1.0", "id": 1, "result": {"content": []}})
+    assert kind == "nonconformant" and unresolved(kind) and failed(kind)
+    assert resolution({"jsonrpc": "2.0", "id": 1, "result": {}})[0] == "answered"

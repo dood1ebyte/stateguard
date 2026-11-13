@@ -37,6 +37,8 @@ What a record can and cannot see
   ``in_progress``      the server's keyed answer "still running" (-32011);
   ``refused``          refused by the relay's schema check, never sent;
   ``client_gone``      the client went away before its answer;
+  ``nonconformant``    the client was sent a response that is not conformant JSON-RPC 2.0
+                       (category C): it cannot use it, and nothing in it says what happened;
   ``unfinished``       open when the log was read: the relay stopped (or was killed) before it
                        answered, or the request is still running. A relay writes an
                        ``invocation_open`` line when a request arrives, and its ``invocation``
@@ -44,12 +46,12 @@ What a record can and cannot see
                        this. Read a log after its relay has stopped;
   ``http_<status>``    an HTTP status passed through from the server, or the relay's own.
 
-  ``unknown``, ``in_doubt``, ``in_progress``, ``client_gone``, ``unfinished`` and ``http_5xx``
-  are *unresolved*: the client cannot tell whether the call ran. *Failed* is every invocation
-  the server did not answer: the unresolved ones and also ``not_sent``, ``refused`` and any
-  other ``http_<status>``. A tool's own error (``answered_error``) is an answer, not a failure
-  of the invocation. Rates are per invocation, with Wilson 95% intervals, and nothing is dropped
-  from the denominator.
+  ``unknown``, ``in_doubt``, ``in_progress``, ``client_gone``, ``unfinished``,
+  ``nonconformant`` and ``http_5xx`` are *unresolved*: the client cannot tell whether the
+  call ran. *Failed* is every invocation the server did not answer: the unresolved ones and
+  also ``not_sent``, ``refused`` and any other ``http_<status>``. A tool's own error
+  (``answered_error``) is an answer, not a failure of the invocation. Rates are per
+  invocation, with Wilson 95% intervals, and nothing is dropped from the denominator.
 
 Usage: ``stateguard incidence AUDIT.jsonl [...] [--json]``.
 """
@@ -62,6 +64,8 @@ from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
+from stateguard.adapters.mcp.jsonrpc import is_conformant_response
 
 #: The audit event name of one finished client request.
 INVOCATION_EVENT = "invocation"
@@ -91,7 +95,9 @@ FAULTS = (
     "stream_cut",  # an event stream ended before its answer
     "deadline",  # no answer within --call-deadline
 )
-UNRESOLVED = frozenset({"unknown", "in_doubt", "in_progress", "client_gone", "unfinished"})
+UNRESOLVED = frozenset(
+    {"unknown", "in_doubt", "in_progress", "client_gone", "unfinished", "nonconformant"}
+)
 ANSWERED = frozenset({"answered", "answered_error", "recovered", "recovered_error"})
 
 
@@ -106,6 +112,8 @@ def resolution(final: Mapping[str, Any] | None, *, status: int | None = None) ->
         return f"http_{status}", None
     if final is None:
         return "client_gone", None
+    if not is_conformant_response(final):
+        return "nonconformant", None
     result = final.get("result")
     if isinstance(result, Mapping):
         meta = result.get("_meta")

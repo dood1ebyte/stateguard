@@ -438,3 +438,32 @@ def test_an_unkeyed_mutation_is_not_resent_after_a_tool_error(tmp_path: Path) ->
         assert len(_sent_calls(rig, "pay")) == 1
     finally:
         rig.close()
+
+
+# -- a server answer that is not conformant JSON-RPC 2.0 (category C, D13) -------------------------
+
+
+def test_a_nonconformant_answer_to_a_keyed_call_is_resent_and_replayed(tmp_path: Path) -> None:
+    rig = _rig(tmp_path, Plan(ServerAction.NONCONFORMANT))
+    try:
+        answers = _answers(rig, _send(rig, "pay"))
+        assert len(answers) == 1 and answers[0].get("jsonrpc") == "2.0" and _ok(answers[0])
+        assert _executed(rig, "pay") == 1  # the resend was answered from the key's record
+        (event,) = [e for e in rig.audit if e.get("event") == "nonconformant_answer"]
+        assert event["action"] == "resent" and event["category"] == "C"
+    finally:
+        rig.close()
+
+
+def test_a_nonconformant_answer_that_cannot_be_resent_passes_through(tmp_path: Path) -> None:
+    rig = _rig(tmp_path, Plan(ServerAction.NONCONFORMANT), keys=False)
+    try:
+        answers = _answers(rig, _send(rig, "pay"))
+        assert len(answers) == 1 and answers[0].get("jsonrpc") == "1.0"  # as it came
+        assert _executed(rig, "pay") == 1
+        (event,) = [e for e in rig.audit if e.get("event") == "nonconformant_answer"]
+        assert event["action"] == "passed_through"
+        records = [e for e in rig.audit if e.get("event") == "invocation" and e["tool"] == "pay"]
+        assert [r["resolution"] for r in records] == ["nonconformant"]
+    finally:
+        rig.close()

@@ -21,6 +21,8 @@ Modes (the fault fires once per ``--fault-file``; every other request passes):
                      (a JSON answer is lost whole, as ``lost_response``)
 ``rpc_internal_error`` answer a JSON-RPC -32603 itself, without forwarding
                      (never executed); ``rpc_internal_error_sse`` the same as an event stream
+``rpc_nonconformant`` answer a result that says "jsonrpc": "1.0" itself, without
+                     forwarding (never executed; protocol category C)
 
 Each request runs on its own connection (``Connection: close`` both ways), so
 a fault ends exactly one exchange. The server's answer is read by its own
@@ -55,6 +57,7 @@ MODES = (
     "cut_stream",
     "rpc_internal_error",
     "rpc_internal_error_sse",
+    "rpc_nonconformant",
 )
 
 
@@ -123,9 +126,15 @@ class Proxy:
             )
             await client_w.drain()
             return
-        if fault in ("rpc_internal_error", "rpc_internal_error_sse"):
+        if fault in ("rpc_internal_error", "rpc_internal_error_sse", "rpc_nonconformant"):
             body = json.dumps(
                 {
+                    "jsonrpc": "1.0",
+                    "id": message.get("id") if isinstance(message, dict) else None,
+                    "result": {"content": [{"type": "text", "text": "nonconformant"}]},
+                }
+                if fault == "rpc_nonconformant"
+                else {
                     "jsonrpc": "2.0",
                     "id": message.get("id") if isinstance(message, dict) else None,
                     "error": {"code": -32603, "message": "Internal error (TEST-ONLY fault)"},

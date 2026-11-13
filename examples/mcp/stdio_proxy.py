@@ -2591,7 +2591,10 @@ class StdioRelay:
         unknown = self.ledger.unknown(identifier, "nonconformant")
         if unknown is None:
             return False
-        self._resolve_unknown([unknown], Observed.UNKNOWN_TRANSPORT)
+        # The server is up and answered: resent now, as after a deadline (not deferred to a
+        # restarted server, as after a lost connection). With no attempt left: unknown.
+        if not self._consider_retry(client_id, Observed.UNKNOWN_DEADLINE):
+            self._surface_unknown(unknown)
         return True
 
     def _note_failure(self, client_id: Any, failure: FailureClassification | None) -> None:
