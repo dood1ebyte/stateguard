@@ -654,4 +654,4 @@ Both are **behaviour changes** to the defaults.
 
 - **The old default turned every slow unkeyed write into "unknown", although the write
   succeeded.** That is an induced failure, and the new default removes it.
-- 0 unsafe outcomes; all 720 relay records agree with ground truth.
+- 0 unsafe outcomes; all 816 relay records agree with ground truth.
