@@ -36,8 +36,10 @@ usage: driver.py SERVER N [cells] [arms] [workers] -> JSONL rows on stdout
 """
 
 import concurrent.futures
+import itertools
 import json
 import os
+import random
 import shutil
 import socket
 import subprocess
@@ -95,10 +97,26 @@ CLIENT_WAIT = 8.0
 SLOW_SECONDS = 10.0
 
 
+#: One port sequence for the whole batch (its worker threads share it), so two parallel trials
+#: never get the same port: binding port 0 and releasing it let two trials pick the same one, and
+#: one server then failed to bind while its trial talked to the other's (B5, EADDRINUSE). Below
+#: the kernel's ephemeral range (32768-60999), from a random offset per process; a port another
+#: process holds fails the bind test and is skipped.
+_PORT_BASE, _PORT_SPAN = 10000, 22000
+_PORTS = itertools.count(random.randrange(_PORT_SPAN))
+_PORTS_LOCK = threading.Lock()
+
+
 def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+    while True:
+        with _PORTS_LOCK:
+            port = _PORT_BASE + next(_PORTS) % _PORT_SPAN
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        return port
 
 
 def wait_port(port, timeout=20.0):
