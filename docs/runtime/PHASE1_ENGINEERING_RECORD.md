@@ -823,3 +823,9 @@ notes and tsnotes, 12 trials.
   "unknown" at once). Both are unresolved.
 - **Tests:** in both relays, an unkeyed call answered non-conformantly is answered "unknown"
   and recorded `unknown` with fault `nonconformant`; shadow mode passes through.
+
+**A2 on D14** (parts `c_*_d14`, code `fccee7c`), `{read,write}/nonconformant_answer`, per server:
+- sg 12/24, all "unknown", **0 false failures** (12 before D14);
+- sg_keyed 0/24;
+- raw 24/24 (12 false failures; the client's SDK);
+- 96 relay records, 0 mismatches.
