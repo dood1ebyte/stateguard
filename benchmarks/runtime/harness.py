@@ -33,6 +33,7 @@ import os
 import queue
 import sys
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -84,6 +85,10 @@ class ServerAction(StrEnum):
     GATEWAY_ERROR = "gateway_error"
     # the process dies before the call reaches the tool or its keys (a crash loop; D16)
     CLOSE_BEFORE_KEY = "close_before_key"
+    # a layer in front of the keys swallows the request: nothing executed, never answered (D17)
+    DROP_BEFORE_KEY = "drop_before_key"
+    # a layer in front of the keys holds the request DELAY_SECONDS, then passes it on (D17)
+    SLOW_GATEWAY = "slow_gateway"
     DELAYED_RESPONSE = "delayed_response"  # execute, answer correctly after DELAY_SECONDS
     # execute, answer success with structuredContent breaking the tool's
     # outputSchema (the definition's "x-bad-structured")
@@ -323,6 +328,10 @@ class ScriptedServer:
         if action is ServerAction.CLOSE_BEFORE_KEY:
             self.dead = True
             return False
+        if action is ServerAction.DROP_BEFORE_KEY:
+            return True
+        if action is ServerAction.SLOW_GATEWAY:
+            time.sleep(DELAY_SECONDS)
         if action is ServerAction.GATEWAY_ERROR:
             self._write(
                 writer,
@@ -415,8 +424,6 @@ class ScriptedServer:
             key = "x-bad-structured" if action is ServerAction.BAD_STRUCTURED else "x-structured"
             result["structuredContent"] = tool.definition.get(key, {})
         if action is ServerAction.DELAYED_RESPONSE:
-            import time
-
             time.sleep(DELAY_SECONDS)
         self._reply(writer, identifier, result)
         if action is ServerAction.DUPLICATE_RESPONSE:

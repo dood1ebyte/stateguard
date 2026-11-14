@@ -337,6 +337,7 @@ from stateguard.adapters.mcp import (
     forward_message,
     refusal_response,
 )
+from stateguard.adapters.mcp.effects import KEYED_MAX_ATTEMPTS
 from stateguard.adapters.mcp.executor_scope import (
     PidNamespaceScope,
     ScopeError,
@@ -1203,12 +1204,29 @@ class StdioRelay:
         """
         "recoverable" scope: a client's own request the relay could resend. A resend
         is never cut short by the deadline: the deadline is when to try again, and
-        the call has been tried again.
+        the call has been tried again -- except a keyed resend with attempts left
+        (D17): its answer may be lost too (R2: a garbage answer, then a truncated
+        one), and only its deadline can tell. Tried again, the server answers from
+        its record ("in progress" if the call still runs, and the relay waits).
         """
         identifier = getattr(invocation, "request_id", None)
         if isinstance(identifier, str) and identifier.startswith(RETRY_ID_PREFIX):
-            return False
+            return self._keyed_attempts_left(identifier)
         return self._resendable(invocation)
+
+    def _keyed_attempts_left(self, retry_id: str) -> bool:
+        """A keyed resend whose call has attempts left (``KEYED_MAX_ATTEMPTS``)."""
+        if self._retry_mode != "auto":
+            return False
+        with self._retry_lock:
+            client_id = self._client_of.get(retry_id)
+            call = self._calls.get(client_id) if client_id is not None else None
+            attempts = self._attempts.get(client_id, 1) if client_id is not None else 0
+        return (
+            call is not None
+            and attempts < KEYED_MAX_ATTEMPTS
+            and self._carries_honoured_key(call[0], call[1])
+        )
 
     def _await_answer(self, client_id: Any) -> None:
         """A call past its deadline waits for the first answer of any of its attempts."""
@@ -2704,6 +2722,18 @@ class StdioRelay:
                         outcome=left_unknown.value,
                     )
                     self._answer_in_doubt(client_id, left_unknown)
+                elif (
+                    disposition is ResponseDisposition.LATE
+                    and not is_error
+                    and client_id is not None
+                    and self._unanswered(client_id)
+                ):
+                    # D17: a resend past its own deadline (tried again since) answered
+                    # first, and the client is still waiting: its answer.
+                    self._log(
+                        "late_answer_delivered", category="I", id=client_id, attempt=identifier
+                    )
+                    self._deliver_as(client_id, message)
                 elif disposition is ResponseDisposition.DELIVER and client_id is not None:
                     self._note_failure(client_id, failure)
                     if not (is_error and self._consider_retry(client_id, observed)) and not (

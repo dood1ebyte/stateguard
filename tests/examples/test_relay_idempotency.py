@@ -489,6 +489,44 @@ def test_a_keyed_call_lost_with_its_server_twice_is_replayed_by_the_third(tmp_pa
         rig.close()
 
 
+def test_a_keyed_resend_lost_too_is_tried_again_at_its_own_deadline(tmp_path: Path) -> None:
+    """D17 (R2): the first answer lost, the resend swallowed; the third attempt is replayed."""
+    rig = _rig(
+        tmp_path,
+        Plan(ServerAction.DROP_RESPONSE, ServerAction.DROP_BEFORE_KEY),
+        call_deadline=0.2,
+        deadline_scope="recoverable",
+    )
+    try:
+        answers = _answers(rig, _send(rig, "pay"))
+        assert len(answers) == 1 and _ok(answers[0])
+        assert _executed(rig, "pay") == 1
+        sent = _sent_calls(rig, "pay")
+        assert len(sent) == 3 and len({call_key(c) for c in sent}) == 1
+    finally:
+        rig.close()
+
+
+def test_a_keyed_resend_answering_after_its_deadline_is_delivered(tmp_path: Path) -> None:
+    """
+    D17: the resend's answer came after its own deadline, before the third attempt's: it wins.
+    The relay's default scope ("recoverable"); the hard bound would answer unknown instead.
+    """
+    rig = _rig(
+        tmp_path,
+        Plan(ServerAction.DROP_RESPONSE, ServerAction.SLOW_GATEWAY),
+        call_deadline=0.2,
+        deadline_scope="recoverable",
+    )
+    try:
+        answers = _answers(rig, _send(rig, "pay"), settle=1.0)
+        assert len(answers) == 1 and _ok(answers[0])
+        assert _executed(rig, "pay") == 1
+        assert any(e.get("event") == "late_answer_delivered" for e in rig.audit)
+    finally:
+        rig.close()
+
+
 def test_a_keyed_call_failing_on_every_attempt_stops_after_three(tmp_path: Path) -> None:
     rig = _rig(tmp_path, Plan(*[ServerAction.GATEWAY_ERROR] * 4))
     try:
