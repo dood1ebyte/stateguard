@@ -876,3 +876,19 @@ neither is a relay defect.
   could be read.
 - The rig now checks that the process it spawned is the one listening on each port, so this
   becomes a clear error.
+
+### A harness race found in B5: two trials can be handed the same port
+
+- **What happened:** in B5 (tsnotes), one fault-free `read/none` row of the `naive` arm (no
+  StateGuard in the path) failed. Its TypeScript server exited with `EADDRINUSE`: another
+  parallel trial had bound the port that `free_port()` chose, and the trial's requests reached
+  the other trial's server.
+- **The cause:** `free_port()` picks a port that is free when checked, and `wait_port()` only
+  checks that *something* listens on it.
+- **This can only cause a failure, never a false success:** a trial on the wrong server finds
+  its own seed or note missing, so it fails, visibly. Every earlier batch's fault-free cells
+  are 0, so no earlier result was hit this way.
+- **The row stays in the data**, explained here.
+- **Fix:** the driver checks that the process it started is the one listening, and takes
+  another port before the trial's client starts (after S8; `benchmarks/runtime/` is not
+  edited while a batch runs). The same race is the likely cause of the 3.12 test failure above.
