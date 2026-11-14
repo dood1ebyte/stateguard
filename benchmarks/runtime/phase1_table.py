@@ -56,6 +56,10 @@ CATEGORY = {
     "truncated": ("H", "executed; its answer cut off half-way"),
     "nonconformant": ("C", "executed; its answer says jsonrpc 1.0"),
     "stale_listing": ("B", "the listings before the call show a schema no longer served"),
+    "dup_answer": ("J", "executed; its answer event sent twice"),
+    "garbage_answer": ("H", "executed; its answer replaced by text that is not JSON"),
+    "truncated_answer": ("H", "executed; its answer cut off half-way"),
+    "nonconformant_answer": ("C", "executed; its answer says jsonrpc 1.0"),
     "slow": ("F", "no fault: the tool is slow; a deadline must not turn it into a failure"),
 }
 

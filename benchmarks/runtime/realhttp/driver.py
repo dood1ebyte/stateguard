@@ -76,6 +76,9 @@ FULL = [f"read/{m}" for m in MODES] + [f"write/{m}" for m in MODES]
 #: unkeyed arms around the unmodified handler (the injector / preload in fault-only mode) -- and
 #: a supervisor restarts it on the same port, as systemd's Restart= would.
 CRASH = ["after_begin", "after_effect", "after_record"]
+#: The taxonomy's J, H, C and B (fault proxy modes; not in the default cells; the call runs).
+ADVERSARIAL = ["dup_answer", "garbage_answer", "truncated_answer", "nonconformant_answer",
+               "stale_listing"]
 CELLS = {"notes": FULL, "tsnotes": FULL, "everything": [f"read/{m}" for m in MODES]}
 ARMS = {"notes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
         "tsnotes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
@@ -214,6 +217,8 @@ def run(server, cell, arm, t):
             deadline = ["--call-deadline", DEADLINE if arm.endswith("_deadline") else "0"]
             if arm.endswith("_default"):
                 deadline = []
+            if arm.endswith("_norefresh"):  # act on the last listing seen (the stale one, for B)
+                deadline.append("--no-listing-refresh")
             procs.start("relay", [PY, RELAY, "--listen", f"127.0.0.1:{relay_port}", "--retry", "auto",
                                   "--trust-read-only-hints", "--effects", str(effects), *deadline,
                                   "--audit", str(base / "audit.jsonl"), "--",
@@ -301,7 +306,8 @@ def run(server, cell, arm, t):
     row = {
         "server": server, "op": op, "tool": name, "mode": mode,
         "family": {"session_loss": "session", "slow": "slow"}.get(
-            mode, "crash" if mode in CRASH else "transport"),
+            mode, "crash" if mode in CRASH else (
+                "adversarial" if mode in ADVERSARIAL else "transport")),
         "arm": arm, "trial": t,
         "run": base.name, "success": success, "kinds": kinds, "latency_s": round(latency, 3),
         "count": count, "told_ok": told_ok, "server_outcome": server_outcome,

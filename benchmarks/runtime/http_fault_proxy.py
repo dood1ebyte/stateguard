@@ -24,6 +24,18 @@ Modes (the fault fires once per ``--fault-file``; every other request passes):
 ``rpc_nonconformant`` answer a result that says "jsonrpc": "1.0" itself, without
                      forwarding (never executed; protocol category C)
 
+Adversarial modes (the taxonomy's J, H, C and B): the call is forwarded and runs; the
+server's answer is then altered (the body re-sent whole, with a Content-Length):
+
+``dup_answer``           the answer event sent twice (an event stream; J)
+``garbage_answer``       the answer replaced by text that is not JSON (H)
+``truncated_answer``     the answer cut off half-way (H)
+``nonconformant_answer`` the answer says "jsonrpc": "1.0" (C)
+``stale_listing``        the first tools/list answer (the client's: the HTTP relay does not
+                         list on its own) shows --tool with its first input property
+                         capitalised, a schema the server has since changed (B); later
+                         listings, the relay's refresh included, are true
+
 Each request runs on its own connection (``Connection: close`` both ways), so
 a fault ends exactly one exchange. The server's answer is read by its own
 framing (``Content-Length`` or chunks) and passed on with its ``Connection``
@@ -58,7 +70,14 @@ MODES = (
     "rpc_internal_error",
     "rpc_internal_error_sse",
     "rpc_nonconformant",
+    "dup_answer",
+    "garbage_answer",
+    "truncated_answer",
+    "nonconformant_answer",
+    "stale_listing",
 )
+#: Modes that alter the server's answer to the faulted call (it runs first).
+ALTERED = ("dup_answer", "garbage_answer", "truncated_answer", "nonconformant_answer")
 
 
 class Proxy:
@@ -69,6 +88,7 @@ class Proxy:
         self.tool: str = args.tool
         self.fault_file = Path(args.fault_file) if args.fault_file else None
         self.log_file = Path(args.log) if args.log else None
+        self.listings = 0  # tools/list requests seen (stale_listing)
 
     def log(self, line: str) -> None:
         if self.log_file is not None:
@@ -115,6 +135,12 @@ class Proxy:
         params = message.get("params") if isinstance(message, dict) else None
         tool = params.get("name") if isinstance(params, dict) else None
         fault = self.mode if request_line.startswith("POST") and self.fires(message) else None
+        stale = False
+        if self.mode == "stale_listing" and method == "tools/list":
+            self.listings += 1
+            stale = self.listings <= 1
+            if stale and self.fault_file is not None:
+                self.fault_file.write_text("stale_listing")
         self.log(f"{method or request_line.split(' ')[0]} {tool or '-'} {fault or 'pass'}")
         if fault == "kill_before":
             client_w.transport.abort()
@@ -179,6 +205,9 @@ class Proxy:
             if fault == "cut_stream":
                 await self._cut(up_r, client_w, message)
                 return
+            if fault in ALTERED or stale:
+                await self._alter(up_r, client_w, message, "stale_listing" if stale else fault)
+                return
             head, response = await _response_head(up_r)
             client_w.write(head)
             await client_w.drain()
@@ -187,6 +216,39 @@ class Proxy:
                 await client_w.drain()
         finally:
             up_w.close()
+
+    async def _alter(
+        self, up_r: asyncio.StreamReader, client_w: asyncio.StreamWriter, request: Any, how: str
+    ) -> None:
+        """Read the server's whole answer, alter the message that answers *request*, re-send it."""
+        _, response = await _response_head(up_r)
+        body = b"".join([piece async for piece in _body(up_r, response)])
+        if "chunked" in response.get("transfer-encoding", "").lower():
+            body = _dechunk(body)
+        answer_id = request.get("id") if isinstance(request, dict) else None
+        stream = "text/event-stream" in response.get("content-type", "").lower()
+        if stream:
+            events = body.decode().replace("\r\n", "\n").split("\n\n")
+            out: list[str] = []
+            for event in events:
+                data = [ln[5:].strip() for ln in event.split("\n") if ln.startswith("data:")]
+                if not data or not _answers(event, answer_id):
+                    out.append(event)
+                    continue
+                for text in _altered(data[0], how, self.tool):
+                    out.append("event: message\ndata: " + text)
+            body = "\n\n".join(out).encode()
+        else:
+            body = "".join(_altered(body.decode(), how, self.tool)).encode()
+        status = response[":status"]
+        kind = response.get("content-type", "application/json")
+        extra = "".join(f"{k}: {v}\r\n" for k, v in response.items() if k in ("mcp-session-id",))
+        client_w.write(
+            f"{status}\r\nContent-Type: {kind}\r\n{extra}".encode()
+            + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+            + body
+        )
+        await client_w.drain()
 
     async def _cut(
         self, up_r: asyncio.StreamReader, client_w: asyncio.StreamWriter, request: Any
@@ -277,6 +339,43 @@ def _answers(event: str, answer_id: Any) -> bool:
                 and ("result" in message or "error" in message)
             )
     return False
+
+
+def _dechunk(raw: bytes) -> bytes:
+    """A chunked body as ``_body`` yields it (framing kept), without its framing."""
+    out, rest = b"", raw
+    while rest:
+        size_line, rest = rest.split(b"\r\n", 1)
+        size = int(size_line.split(b";")[0], 16)
+        if size == 0:
+            break
+        out, rest = out + rest[:size], rest[size + 2 :]
+    return out
+
+
+def _altered(text: str, how: str, tool: str) -> list[str]:
+    """The answer *text* (one JSON-RPC message) after the fault: zero, one or two texts."""
+    if how == "dup_answer":
+        return [text, text]
+    if how == "garbage_answer":
+        return ["<<TEST-ONLY: an answer that is not JSON>>"]
+    if how == "truncated_answer":
+        return [text[: max(1, len(text) // 2)]]
+    message = json.loads(text)
+    if how == "nonconformant_answer":
+        return [json.dumps({**message, "jsonrpc": "1.0"})]
+    # stale_listing: the tool's first input property capitalised
+    for entry in (message.get("result") or {}).get("tools") or []:
+        schema = entry.get("inputSchema") if isinstance(entry, dict) else None
+        properties = schema.get("properties") if isinstance(schema, dict) else None
+        if entry.get("name") != tool or not isinstance(properties, dict) or not properties:
+            continue
+        first = next(iter(properties))
+        renamed = first[:1].upper() + first[1:]
+        schema["properties"] = {(renamed if k == first else k): v for k, v in properties.items()}
+        if isinstance(schema.get("required"), list):
+            schema["required"] = [renamed if r == first else r for r in schema["required"]]
+    return [json.dumps(message)]
 
 
 async def serve(args: argparse.Namespace) -> None:
