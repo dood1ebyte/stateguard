@@ -829,3 +829,19 @@ notes and tsnotes, 12 trials.
 - sg_keyed 0/24;
 - raw 24/24 (12 false failures; the client's SDK);
 - 96 relay records, 0 mismatches.
+
+### P4: overhead on the final code, paired and uncontended (`benchmarks/evidence/{realhttp,realstdio}/P4`, code `16e26b9`)
+
+- **HTTP relay, per session against raw** (20 paired trials per cell, client start included):
+  - +0.009 to +0.058 s (sg and sg_keyed_default) on notes and tsnotes, and +0.021 s on
+    everything;
+  - within P1's range (+0.006 to +0.066 s) and the 0.15 s bound, with the 30 s default
+    deadline on;
+  - 0 failures.
+- **stdio relay, per warm call** (20 rounds × 50 calls; 6,000 calls, 0 failed):
+  - sg +0.51 to +0.95 ms;
+  - sg_keyed reads +0.63 to +1.18 ms; **sg_keyed writes +4.53 ms (sqlite) and +4.99 ms
+    (memory)**.
+- **The keyed writes are lower than P3's +6.3 to +6.9 ms, although the keyed path did not
+  change.** This is run-to-run variance of the machine (another day, another VM boot), not an
+  improvement to claim. The cost of a keyed write is about 4.5–7 ms on this machine.

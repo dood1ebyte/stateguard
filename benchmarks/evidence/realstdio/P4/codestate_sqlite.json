@@ -1,0 +1,26 @@
+{
+ "batch": "P4",
+ "part": "sqlite",
+ "started": "2026-11-14T15:09:02.220376+00:00",
+ "commit": "16e26b9899713305b0f6110011d97c0563725f9a",
+ "harness_commit": "38a1b4ea979f87ff0da1d21a36fbfa3cae4aa8b5",
+ "harness_dirty": false,
+ "driver": "../realstdio/per_call.py",
+ "driver_args": [
+  "sqlite",
+  "20",
+  "50"
+ ],
+ "trial_offset": "19000",
+ "python": "3.13.18",
+ "mcp": "2.3.0",
+ "node": "v22.23.4",
+ "typescript_sdk": "1.32.1",
+ "typescript_lockfile_sha256": "ffdaebb2f832db1ec9f116eec1b458c2d5b444f8a1f24b56a5173c2788c471cd",
+ "everything_tree_sha256": "823e40005f94f353567c7b9bce56146516c8038ff3a15d44cbeef53b60a99778",
+ "platform": "Linux-6.18.44-fc-v470-x86_64-with-glibc2.39",
+ "cpus": 4,
+ "driver_exit": 0,
+ "finished": "2026-11-14T15:09:59.568230+00:00",
+ "everything_tree_sha256_after": "823e40005f94f353567c7b9bce56146516c8038ff3a15d44cbeef53b60a99778"
+}
