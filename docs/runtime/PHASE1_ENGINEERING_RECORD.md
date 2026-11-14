@@ -908,3 +908,18 @@ neither is a relay defect.
   - unkeyed arms 12/12 unresolved;
   - 0 unsafe outcomes in StateGuard arms.
 - All 2,400 relay records agree with ground truth; the harness was clean in every part.
+
+### S8: the stdio matrix on the final Phase 1 code, three servers (`benchmarks/evidence/realstdio/S8`, code `47fa17e`)
+
+| Arm, faulted (132 per server) | sqlite | memory | filesystem |
+|---|---|---|---|
+| raw | 132/132 | 132/132 | 132/132 |
+| naive | 48/132, **48 duplicates** | 0/132 | 48/132, **48 false failures** |
+| sg | 84/132 | 84/132 | 84/132 |
+| **sg_keyed** | **24/132 (18.2%)** | **24/132** | **24/132** |
+| sg_keyed_idempotent (D11) | — | **0/84 (≤ 4.4%)** | — |
+
+- The sg_keyed residual on every server is only the two crash windows, unresolved.
+- Fault-free 0 everywhere; 0 unsafe outcomes in StateGuard arms; all 1,032 relay records agree
+  with ground truth.
+- **On the final code these match S4, S5, S6 and S7 cell for cell.**
