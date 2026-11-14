@@ -776,3 +776,50 @@ the arms that exercise it, on every default cell, 12 trials.
   and recorded `nonconformant`.
 - J, H and B: unchanged.
 - **All 432 relay records agree with ground truth;** before D13, 96 disagreed.
+
+### The extra session resumed (Sat 2026-11-14, 20:22 IST; the founder's "Try again")
+
+**Why it resumed:** the extra session's turn ended at about 17:53 IST on Friday without
+closing out. The A2 harness was left uncommitted and `NEXT.md` was not updated.
+
+**What happened on resuming:** the harness was committed (`db99799`), and the session resumed
+with the time it had lost.
+
+### A2: adversarial cells J, H, C and B under the HTTP relay (`benchmarks/evidence/realhttp/A2`, code `69079ed`)
+
+**Setup:** new fault proxy modes alter the server's answer to a call that ran:
+- `dup_answer` (J), `garbage_answer` and `truncated_answer` (H), `nonconformant_answer` (C);
+- `stale_listing` (B): the client's first listing is stale. The HTTP relay does not list on
+  its own, so its refresh gets the true one.
+
+notes and tsnotes, 12 trials.
+
+| Category, per server | raw | sg | sg_keyed | sg_norefresh |
+|---|---|---|---|---|
+| J dup_answer | 0/24 | 0/24 | 0/24 | — |
+| H garbage_answer, truncated_answer | 24/24 each | 12/24 each (unkeyed writes unknown) | **0/24 each** | — |
+| C nonconformant_answer | 24/24 | **12/24, 12 false failures** | **0/24** | — |
+| B stale_listing | 0/12 | 0/12 | 0/12 | 12/12 (tool errors) |
+
+- **raw's write failures under H and C are false failures:** the client's SDK turns the
+  altered answer into a parse error (`-32700`) for a write that ran.
+- **C under sg is a defect (D14):** the relay passed through the non-conformant answer to an
+  unkeyed write, and the SDK turned it into the same false failure. That is an unsafe outcome
+  in a StateGuard arm.
+- **A finding from the dry runs:** with the first *two* listings stale, the second was the
+  HTTP relay's own refresh. The server's fresh listing then disagreed with what it accepts, and
+  the relay "repaired" correct calls into errors that raw delivered successfully. Schema repair
+  trusts the server's listing; a server whose listing is wrong defeats it. This is a stated
+  limitation, not a batch cell.
+- **Records:** the 24 mismatches are the tool errors with refresh off, by definition.
+
+### D14: a non-conformant answer that cannot be resent is answered unknown (`fccee7c`)
+
+- **Both relays:** a non-conformant answer to a call the relay cannot resend is replaced by
+  "outcome unknown" (reason `nonconformant`), not passed through. The client is never told
+  "failure" for a call that may have run.
+- Recoverable calls are resent as in D13. Shadow mode still passes the answer through.
+- **On stdio** the A1 counts do not change (the client got no answer before; now it is told
+  "unknown" at once). Both are unresolved.
+- **Tests:** in both relays, an unkeyed call answered non-conformantly is answered "unknown"
+  and recorded `unknown` with fault `nonconformant`; shadow mode passes through.
