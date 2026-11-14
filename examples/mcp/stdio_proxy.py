@@ -511,6 +511,8 @@ class StdioRelay:
         # client id -> (payload, tool, server generation it was decided against)
         self._calls: dict[Any, tuple[bytes, str | None, int]] = {}
         self._attempts: dict[Any, int] = {}  # client id -> attempts sent
+        #: client ids resent after an attempt whose outcome is unknown (D15).
+        self._in_doubt: set[Any] = set()
         self._inv: dict[Any, str] = {}  # client id -> the token pairing its open and record
         #: client id -> attempts, once forgotten and until its invocation record is written.
         self._spent_attempts: OrderedDict[Any, int] = OrderedDict()
@@ -1707,6 +1709,9 @@ class StdioRelay:
         )
         if not acted:
             return False
+        if observed.outcome_unknown:
+            with self._retry_lock:
+                self._in_doubt.add(client_id)
         if deferred:
             if not reread_channel:
                 self._log(
@@ -1887,6 +1892,53 @@ class StdioRelay:
         else:
             answer()
 
+    def _error_after_unknown(self, client_id: Any, observed: Observed) -> bool:
+        """
+        D15 (R1): a resend, sent because an earlier attempt's outcome was unknown, was answered
+        with an internal error (-32603) and is not resent again. That error answers only the
+        resend, so it says nothing about the earlier attempt. Passed on, it would tell the client
+        a call that ran had failed. The call is answered "outcome unknown" instead (after a
+        deadline, once the original has had one more deadline to answer, as
+        ``_answer_in_doubt``). A declared read, which no attempt changes anything by, gets its
+        error as sent. True: answered here.
+        """
+        with self._retry_lock:
+            in_doubt = client_id in self._in_doubt
+            call = self._calls.get(client_id)
+        if self._shadow or not in_doubt or observed is not Observed.SERVER_ERROR or call is None:
+            return False
+        declaration = self._declaration(call[1])
+        if declaration.declared and declaration.effect is Effect.READ_ONLY:
+            return False
+        self._log("internal_error_after_unknown", category="I", id=client_id, action="unknown")
+        original = self.ledger.get(client_id)
+        wait = (
+            self._call_deadline
+            if self._call_deadline is not None
+            and original is not None
+            and original.unknown_reason == "deadline"
+            else 0.0
+        )
+
+        def answer() -> None:
+            if wait and self._stopped.wait(wait):
+                pass  # stopping: answer now
+            if not self._unanswered(client_id):
+                return  # the original's late answer came first
+            self._forget(client_id)
+            with contextlib.suppress(OSError, ValueError):
+                self._send_json(
+                    self._client_out,
+                    self._to_client,
+                    unknown_outcome_response(client_id, "in_doubt"),
+                )
+
+        if wait:
+            threading.Thread(target=answer, daemon=True).start()
+        else:
+            answer()
+        return True
+
     def _honours_keys(self, tool: str | None) -> bool:
         """The current server's own listing says *tool* honours idempotency keys."""
         entry = self.registry.find(tool) if tool else None
@@ -1954,6 +2006,7 @@ class StdioRelay:
     def _forget(self, client_id: Any) -> None:
         with self._retry_lock:
             self._calls.pop(client_id, None)
+            self._in_doubt.discard(client_id)
             attempts = self._attempts.pop(client_id, None)
             if attempts is not None and attempts > 1:
                 # Kept for the request's invocation record, written once its answer goes out.
@@ -2653,7 +2706,9 @@ class StdioRelay:
                     self._answer_in_doubt(client_id, left_unknown)
                 elif disposition is ResponseDisposition.DELIVER and client_id is not None:
                     self._note_failure(client_id, failure)
-                    if not (is_error and self._consider_retry(client_id, observed)):
+                    if not (is_error and self._consider_retry(client_id, observed)) and not (
+                        is_error and self._error_after_unknown(client_id, observed)
+                    ):
                         self._deliver_as(client_id, message)
                 else:
                     self._log(
@@ -2796,6 +2851,8 @@ def unknown_outcome_response(
         "deadline": "the MCP server did not answer within the relay's deadline",
         "send_failed": "the request could not be fully written to the MCP server",
         "not_sent_unconfirmed": "the relay could not confirm the request was never sent",
+        "in_doubt": "an earlier attempt's outcome is unknown, and the last attempt was answered "
+        "with an internal error, which does not show that the earlier one did not run",
     }.get(reason, "the relay cannot determine the outcome")
     data: dict[str, Any] = {UNKNOWN_OUTCOME_KEY: "unknown", "io.stateguard/reason": reason}
     message = (

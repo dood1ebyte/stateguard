@@ -212,6 +212,8 @@ def unknown_outcome_response(identifier: Any, reason: str) -> dict[str, Any]:
         "deadline": "the MCP server did not answer within the relay's deadline",
         "server_error": "the MCP server answered with an HTTP server error",
         "stream_cut": "the MCP server's event stream ended before its answer",
+        "in_doubt": "an earlier attempt's outcome is unknown, and the last attempt was answered "
+        "with an internal error, which does not show that the earlier one did not run",
     }.get(reason, "the relay cannot determine the outcome")
     return {
         "jsonrpc": "2.0",
@@ -365,10 +367,12 @@ class Relay:
         """
         One client request's attempt counters, its token among live requests, the faults it
         met (for its ``invocation`` record), when it started, and the answer it was sent.
-        ``inv`` pairs its ``invocation_open`` line with that record.
+        ``inv`` pairs its ``invocation_open`` line with that record. ``in_doubt``: an attempt
+        ended with its outcome unknown (D15: a later attempt's error then settles nothing).
         """
         return {
             "attempts": 0,
+            "in_doubt": False,
             "reopened": 0,
             "token": next(self._tokens),
             "inv": secrets.token_hex(8),
@@ -724,6 +728,13 @@ class Relay:
             return True, f"{method} changes nothing on the server; requested again"
         return False, f"{method} is not known to be safe to send twice"
 
+    def _may_have_effect(self, method: str, tool: str | None) -> bool:
+        """A request an attempt can change something by: a tools/call not declared a read."""
+        if method != "tools/call":
+            return False
+        declaration = self._declaration(tool)
+        return not (declaration.declared and declaration.effect.value == "read_only")
+
     def _recoverable(self, method: str, tool: str | None, keyed: bool) -> bool:
         """A request the relay may send again after a deadline: it cannot run twice."""
         if method in SAFE_METHODS or keyed:
@@ -839,6 +850,7 @@ class Relay:
                     winner = got[1]
                 else:
                     state["faults"].append("deadline")
+                    state["in_doubt"] = True
                     retry, why = self._decide(
                         message, Observed.UNKNOWN_DEADLINE, state["attempts"], keyed, tool
                     )
@@ -920,6 +932,7 @@ class Relay:
             except httpx2.TransportError as exc:
                 self.log("transport_lost", id=sent.get("id"), error=f"{type(exc).__name__}: {exc}")
                 state["faults"].append("transport_lost")
+                state["in_doubt"] = True
                 return Attempt("unknown", reason="transport_closed")
             break
         status = answer.status_code
@@ -941,6 +954,7 @@ class Relay:
             await answer.aclose()
             self.log("server_error", id=sent.get("id"), status=status)
             state["faults"].append("server_error")
+            state["in_doubt"] = True
             return Attempt("unknown", reason="server_error", response=answer)
         if status != 200:
             body = await answer.aread()
@@ -953,6 +967,7 @@ class Relay:
             body = await answer.aread()
         except httpx2.TransportError:
             self.log("transport_lost", id=sent.get("id"), phase="body")
+            state["in_doubt"] = True
             return Attempt("unknown", reason="transport_closed")
         finally:
             await answer.aclose()
@@ -1004,6 +1019,7 @@ class Relay:
                 await response.aclose()
             if state is not None:
                 state["faults"].append("stream_cut")
+                state["in_doubt"] = True
             # Ended without the answer: resume it if the server numbered its events.
             if self.passthrough or last_id is None or session is None or resumed >= 3:
                 yield "end", None
@@ -1185,6 +1201,7 @@ class Relay:
         error = answer.get("error")
         if not is_conformant_response(answer):
             observed, fault = Observed.UNKNOWN_TRANSPORT, "nonconformant"
+            state["in_doubt"] = True
         elif (
             isinstance(error, dict)
             and error.get("code") == INTERNAL_ERROR_CODE
@@ -1214,6 +1231,14 @@ class Relay:
                 state["faults"].append(fault)
                 return Attempt("final", reason="nonconformant")
         if not retry:
+            method = str(message.get("method"))
+            if state["in_doubt"] and not self.shadow and self._may_have_effect(method, tool):
+                # D15 (R1): an earlier attempt's outcome is unknown -- it may have run -- and
+                # this internal error answers only the last attempt. Passed on, it would tell
+                # the client the call failed: a false failure when the earlier one ran.
+                self.log("internal_error_after_unknown", id=message.get("id"), action="unknown")
+                state["faults"].append(fault)
+                return Attempt("final", reason="in_doubt")
             return None
         state["faults"].append(fault)
         return await self._attempt(request, sent, session, state)

@@ -79,6 +79,9 @@ class ServerAction(StrEnum):
     TRANSIENT_ERROR = "transient_error"  # do not execute, answer isError (temporary)
     AUTH_EXPIRED = "auth_expired"  # do not execute, answer a JSON-RPC auth error
     INTERNAL_ERROR = "internal_error"  # do not execute, answer a JSON-RPC -32603
+    # a layer in front of the tool and its keys (a gateway, a wrapper) answers -32603, before
+    # any key is looked up; nothing executed (D15)
+    GATEWAY_ERROR = "gateway_error"
     DELAYED_RESPONSE = "delayed_response"  # execute, answer correctly after DELAY_SECONDS
     # execute, answer success with structuredContent breaking the tool's
     # outputSchema (the definition's "x-bad-structured")
@@ -315,6 +318,18 @@ class ScriptedServer:
         action = self.faults(call)
         if action is not ServerAction.NORMAL and self.on_fault is not None:
             self.on_fault(call, action)
+        if action is ServerAction.GATEWAY_ERROR:
+            self._write(
+                writer,
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": identifier,
+                        "error": {"code": -32603, "message": "Internal error (gateway)"},
+                    }
+                ).encode(),
+            )
+            return True
         key = self._begin_key(identifier, str(name), arguments, message, writer)
         if key is False:
             return True  # answered from the store; nothing executed

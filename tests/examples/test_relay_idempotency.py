@@ -440,6 +440,51 @@ def test_an_unkeyed_mutation_is_not_resent_after_a_tool_error(tmp_path: Path) ->
         rig.close()
 
 
+# -- an internal error answering a resend after an unknown attempt (D15, R1) ---------------------
+
+
+@pytest.mark.parametrize(
+    "first, extra",
+    [
+        (ServerAction.DROP_RESPONSE, {"call_deadline": 0.2}),
+        (ServerAction.CLOSE_AFTER_EXECUTE, {"max_restarts": 2}),
+    ],
+)
+def test_an_internal_error_answering_a_resend_after_an_unknown_attempt_is_unknown(
+    tmp_path: Path, first: ServerAction, extra: dict[str, Any]
+) -> None:
+    """
+    The first attempt ran and its answer never came; the keyed resend was answered -32603 by a
+    layer in front of the server's keys (as R1's fault proxy, or a wrapper), and no attempt is
+    left. That error answers only the resend: passed on, it would tell the client
+    a call that ran had failed.
+    """
+    rig = _rig(tmp_path, Plan(first, ServerAction.GATEWAY_ERROR), **extra)
+    try:
+        answers = _answers(rig, _send(rig, "pay"))
+        assert len(answers) == 1 and _unknown(answers[0])
+        assert answers[0]["error"]["data"]["io.stateguard/reason"] == "in_doubt"
+        assert _executed(rig, "pay") == 1 and len(_sent_calls(rig, "pay")) == 2
+        assert any(e.get("event") == "internal_error_after_unknown" for e in rig.audit)
+    finally:
+        rig.close()
+
+
+def test_an_internal_error_answering_a_reread_of_a_declared_read_is_delivered(
+    tmp_path: Path,
+) -> None:
+    """A read changes nothing, whichever attempt ran: its error is the answer."""
+    rig = _rig(
+        tmp_path, Plan(ServerAction.DROP_RESPONSE, ServerAction.INTERNAL_ERROR), call_deadline=0.2
+    )
+    try:
+        answers = _answers(rig, _send(rig, "search"))
+        assert len(answers) == 1 and answers[0]["error"]["code"] == -32603
+        assert not any(e.get("event") == "internal_error_after_unknown" for e in rig.audit)
+    finally:
+        rig.close()
+
+
 # -- a server answer that is not conformant JSON-RPC 2.0 (category C, D13) -------------------------
 
 

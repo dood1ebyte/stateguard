@@ -66,3 +66,30 @@ budget for keyed calls is the candidate change. It would run as a separate part,
 commit, with this batch's parts as its baseline.
 
 Synthetic fault injection on two controlled servers on one VM; not production traffic.
+
+## Part 2: on D15 (written before its rows, after parts `notes` and `tsnotes`)
+
+**What parts 1 found** (code `4d27df8`; details in the engineering record): StateGuard arms
+produced 5 false failures, all in sg_keyed (notes 1, tsnotes 4). Each was a call whose first
+attempt ran and whose answer was lost (`lost_response` or `http_502_after`). Its keyed resend
+was then answered `-32603` by the fault proxy, no attempt was left, and the relay passed that
+error on. It answered only the resend, so the client was told a call that ran had failed.
+
+**D15** (both relays): once an attempt's outcome is unknown, an internal error answering a
+later attempt that is not resent again is answered "outcome unknown" (`in_doubt`). A declared
+read, and a request that is not a `tools/call`, still get the error as sent.
+
+**Parts `notes_d15` and `tsnotes_d15`:**
+- arms sg and sg_keyed; 10 trials each; the same driver and parameters as parts 1.
+- raw and naive are not re-run: they have no relay in the path, and D15 changes only the relays.
+
+**Prediction:**
+- sg_keyed: 0 false failures. Those calls become unresolved, so its residual stays about where
+  it was (8–9%), now all unresolved.
+- sg: unchanged. An unknown outcome of an unkeyed non-idempotent call is never resent, so D15
+  cannot apply to it.
+- 0 unsafe outcomes in either arm. Every trial's relay records agree.
+- Any false failure, duplicate or false success in a StateGuard arm is a defect.
+
+The other residual, calls faulted on both of their two allowed attempts, is a matter of the
+attempt budget. It is not changed in this part.

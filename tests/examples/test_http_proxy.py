@@ -133,6 +133,33 @@ class Rig:
         )
         self._listening("faults", self.proxy_port)
 
+    def faults_repeat(self, every: int, cycle: list[str], tool: str = "add_note") -> None:
+        """The fault proxy's repeat mode: every *every*-th call of *tool* gets the next fault."""
+        self._spawn(
+            "faults",
+            [
+                sys.executable,
+                str(FAULTS),
+                "--listen",
+                f"127.0.0.1:{self.proxy_port}",
+                "--upstream",
+                f"127.0.0.1:{self.server_port}",
+                "--mode",
+                "repeat",
+                "--every",
+                str(every),
+                "--cycle",
+                ",".join(cycle),
+                "--tool",
+                tool,
+                "--fault-file",
+                str(self.tmp / "fault.fired"),
+                "--log",
+                str(self.tmp / "faults.txt"),
+            ],
+        )
+        self._listening("faults", self.proxy_port)
+
     def relay(self, *extra: str) -> None:
         self._spawn(
             "relay",
@@ -1260,6 +1287,40 @@ def test_an_internal_error_on_a_keyed_write_is_resent_and_runs_once(rig: Rig, mo
     answer = _session(rig.relay_url, _add_note())
     assert _ok(answer) and (answer.meta or {}).get(OUTCOME) == "executed"
     assert rig.notes() == ["a"]
+
+
+@pytest.mark.parametrize("deadline", [[], ["--call-deadline", "0"]])
+@pytest.mark.parametrize("first", ["lost_response", "http_502_after", "cut_stream"])
+def test_an_internal_error_answering_a_resend_after_an_unknown_attempt_is_unknown(
+    rig: Rig, first: str, deadline: list[str]
+) -> None:
+    """
+    D15 (R1): the first attempt ran and its answer was lost; the keyed resend was answered with
+    an internal error, and no attempt is left. That error answers only the resend: passed on,
+    it would tell the client a call that ran had failed. The default deadline (the race) and
+    no deadline take different paths.
+    """
+    rig.server(keyed=True)
+    rig.faults_repeat(1, [first, "rpc_internal_error"])
+    rig.relay("--retry", "auto", *deadline)
+    answer = _session(rig.relay_url, _add_note())
+    assert _state(answer) == "unknown"
+    assert rig.notes() == ["a"]
+    (record,) = [
+        e for e in rig.audit() if e["event"] == "invocation" and e["method"] == "tools/call"
+    ]
+    assert record["resolution"] == "unknown" and "internal_error" in record["faults"]
+    assert "internal_error_after_unknown" in rig.events()
+
+
+def test_an_internal_error_on_a_first_attempt_is_still_delivered(rig: Rig) -> None:
+    """Nothing was in doubt before it: the internal error stands (an unkeyed write)."""
+    rig.server()
+    rig.faults_repeat(1, ["rpc_internal_error"])
+    rig.relay("--retry", "auto")
+    answer = _session(rig.relay_url, _add_note())
+    assert getattr(answer, "code", None) == -32603
+    assert rig.notes() == [] and "internal_error_after_unknown" not in rig.events()
 
 
 def test_an_internal_error_on_an_unkeyed_write_is_delivered_never_resent(rig: Rig) -> None:
