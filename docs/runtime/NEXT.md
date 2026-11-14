@@ -147,20 +147,34 @@ Done in Session 4 (2026-11-13, hardening):
 - Decided (scope): a key-bound recovery check for non-idempotent tools is tool-specific
   operator integration, outside Phase 1. Their crash windows stay a documented limitation.
 
+Done in the extra session (Fri 2026-11-13 17:15–17:53, resumed Sat 11-14 20:22 IST):
+- A1, adversarial cells J, H, C and B on stdio (`5363974`). D13: a non-conformant answer to a
+  call that can be resent is resent (`87f43d4`). C sg_keyed 24/24 -> 0/24; every record agrees.
+- A2, the same on HTTP (`69079ed` and on D14). D14: a non-conformant answer that cannot be resent
+  is answered "unknown" (`fccee7c`). A2 had 12 false failures per server in arm sg; after D14, 0.
+- The `--no-listing-refresh` risk measured (B) and stated in both relays' help.
+- P2b blocked: this VM's kernel has no netem. The reuse optimisation is deferred to Phase 2
+  (a limitation).
+- P4, overhead on the final code (`16e26b9`): HTTP +0.009 to +0.058 s per session; stdio under
+  1 ms per call, keyed writes about 4.5–5 ms.
+- B5 and S8 plans: the HTTP and stdio matrices on the final code, the Completion Report's
+  evidence base (status in the session log).
+
 Next, in order (Session 5, Mon 2026-11-16, is adversarial validation and overhead):
-1. **Adversarial cells for the categories the matrix does not cover** (`PHASE1_METRICS.md`):
-   B (a listing that changes mid-session), H (a corrupted or contract-breaking result), J (a
-   duplicate response), C (a non-conformant message). Use fault proxy and shim modes, with a
-   plan before rows. Keep what is measured apart from what is only tested.
-2. **P2b: the event-stream connection cost with a kernel delay** (install iproute2; netem in a
-   network namespace). Then decide whether to read event streams to their end so the
-   connection can be reused.
-3. **Overhead on the final code:** paired, single worker (as P1 and P3), HTTP and stdio, with
-   the new defaults.
-4. **Real capture for incidence** (owner-dependent; see the old queue item 3).
-5. Phase Completion Report (Session 6), with the limitations: the non-idempotent crash
-   windows, B/C/G/H/K outside the measured RFR unless item 1 adds them, no traffic-weighted
-   RFR.
+1. **B5 and S8, if the extra session did not finish them** (plans in
+   `benchmarks/evidence/realhttp/B5`, `realstdio/S8`).
+2. **Adversarial validation, remaining:**
+   - concurrency under repeated faults (several sessions, several faults each);
+   - Python and TypeScript behaviour side by side on the A1/A2 cells (tsnotes is in A2;
+     memory is in A1).
+   - Fix what is found.
+3. **Real capture for incidence** (owner-dependent; see the old queue item 3).
+4. Phase Completion Report (Session 6). Limitations to state:
+   - the non-idempotent crash windows;
+   - G and K outside the measured RFR;
+   - schema repair trusts the server's listing (A2 finding);
+   - P2b unmeasured (no netem);
+   - no traffic-weighted RFR.
 
 ## Session log
 
