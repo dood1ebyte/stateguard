@@ -2574,31 +2574,25 @@ class StdioRelay:
         A server answer that is not a conformant JSON-RPC 2.0 response (category C):
         the client cannot use it, and nothing in it says what happened. A call the
         relay could resend -- a declared read, an honoured key -- is resent, its
-        outcome unknown; True. Anything else is passed through as it came (never
-        rewritten), and logged; False.
+        outcome unknown. Any other call is answered "outcome unknown": passed through,
+        a client's SDK may turn it into an error, a false failure if the call ran (A2).
+        True when handled here. Shadow mode only logs and passes it through: False.
         """
         invocation = self.ledger.get(identifier)
-        recoverable = (
-            not self._shadow
-            and invocation is not None
-            and self.ledger.in_flight(identifier)
-            and self._resendable(invocation)
-        )
+        tracked = invocation is not None and self.ledger.in_flight(identifier)
+        recoverable = tracked and not self._shadow and self._resendable(invocation)
         client_id = self._client_of.get(identifier, identifier)
-        self._log(
-            "nonconformant_answer",
-            category="C",
-            id=client_id,
-            action="resent" if recoverable else "passed_through",
-        )
-        if not recoverable:
+        action = "resent" if recoverable else ("passed_through" if self._shadow else "unknown")
+        self._log("nonconformant_answer", category="C", id=client_id, action=action)
+        if self._shadow or not tracked:
             return False
         unknown = self.ledger.unknown(identifier, "nonconformant")
         if unknown is None:
             return False
         # The server is up and answered: resent now, as after a deadline (not deferred to a
-        # restarted server, as after a lost connection). With no attempt left: unknown.
-        if not self._consider_retry(client_id, Observed.UNKNOWN_DEADLINE):
+        # restarted server, as after a lost connection). Not resendable, or no attempt left:
+        # the client is told the outcome is unknown.
+        if not (recoverable and self._consider_retry(client_id, Observed.UNKNOWN_DEADLINE)):
             self._surface_unknown(unknown)
         return True
 

@@ -1205,24 +1205,18 @@ def test_a_nonconformant_answer_to_a_keyed_call_is_sent_again(rig: Rig) -> None:
     assert event["action"] == "resent"
 
 
-def test_a_nonconformant_answer_that_cannot_be_resent_passes_through(rig: Rig) -> None:
+def test_a_nonconformant_answer_that_cannot_be_resent_is_answered_unknown(rig: Rig) -> None:
+    """Passed through, the client's SDK would turn it into a parse error: a false failure."""
     rig.server()
     rig.faults("rpc_nonconformant")
     rig.relay("--retry", "auto", "--call-deadline", "0")
-
-    async def body(session: Any) -> Any:
-        try:
-            with anyio.fail_after(3):  # the client cannot use the answer it is sent
-                return await _add_note()(session)
-        except TimeoutError as exc:
-            return exc
-
-    answer = _session(rig.relay_url, body, survive=True)
-    assert not _ok(answer) and rig.notes() == []
+    answer = _session(rig.relay_url, _add_note(), survive=True)
+    assert getattr(answer, "code", None) == -32000 and _state(answer) == "unknown", answer
+    assert rig.notes() == []  # the proxy answered: it never ran
     (event,) = [e for e in rig.audit() if e["event"] == "nonconformant_answer"]
-    assert event["action"] == "passed_through"
+    assert event["action"] == "unknown"
     (record,) = _invocations(rig)
-    assert record["resolution"] == "nonconformant"
+    assert record["resolution"] == "unknown" and record["faults"] == ["nonconformant"]
 
 
 def test_an_internal_error_on_a_declared_read_is_requested_again(rig: Rig) -> None:

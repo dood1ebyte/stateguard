@@ -455,15 +455,28 @@ def test_a_nonconformant_answer_to_a_keyed_call_is_resent_and_replayed(tmp_path:
         rig.close()
 
 
-def test_a_nonconformant_answer_that_cannot_be_resent_passes_through(tmp_path: Path) -> None:
+def test_a_nonconformant_answer_that_cannot_be_resent_is_answered_unknown(tmp_path: Path) -> None:
+    """Passed through, a client's SDK turns it into an error: a false failure, as it ran."""
     rig = _rig(tmp_path, Plan(ServerAction.NONCONFORMANT), keys=False)
     try:
         answers = _answers(rig, _send(rig, "pay"))
-        assert len(answers) == 1 and answers[0].get("jsonrpc") == "1.0"  # as it came
+        assert len(answers) == 1 and answers[0].get("jsonrpc") == "2.0" and _unknown(answers[0])
+        assert answers[0]["error"]["data"]["io.stateguard/reason"] == "nonconformant"
         assert _executed(rig, "pay") == 1
         (event,) = [e for e in rig.audit if e.get("event") == "nonconformant_answer"]
-        assert event["action"] == "passed_through"
+        assert event["action"] == "unknown"
         records = [e for e in rig.audit if e.get("event") == "invocation" and e["tool"] == "pay"]
-        assert [r["resolution"] for r in records] == ["nonconformant"]
+        assert [r["resolution"] for r in records] == ["unknown"]
+    finally:
+        rig.close()
+
+
+def test_shadow_mode_passes_a_nonconformant_answer_through(tmp_path: Path) -> None:
+    rig = _rig(tmp_path, Plan(ServerAction.NONCONFORMANT), mode=RelayMode.SHADOW)
+    try:
+        answers = _answers(rig, _send(rig, "pay"))
+        assert len(answers) == 1 and answers[0].get("jsonrpc") == "1.0"  # as it came
+        (event,) = [e for e in rig.audit if e.get("event") == "nonconformant_answer"]
+        assert event["action"] == "passed_through"
     finally:
         rig.close()

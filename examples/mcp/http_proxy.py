@@ -1175,8 +1175,10 @@ class Relay:
         response that is not conformant JSON-RPC 2.0 (category C; nothing in it says what
         happened, so the outcome is unknown). One more attempt if the request is safe to repeat
         (a keyed call, a declared read or idempotent tool, a request that changes nothing), as
-        the stdio relay decides it. Otherwise ``None``: the answer stands, passed through as it
-        came (never rewritten).
+        the stdio relay decides it. Otherwise: an internal error stands (``None``); a
+        non-conformant answer is replaced by "outcome unknown" -- passed through, a client's
+        SDK turns it into a parse error, a false failure when the call ran (A2). Shadow mode
+        passes it through as it came.
         """
         if self.passthrough or self.retry != "auto":
             return None
@@ -1204,12 +1206,13 @@ class Relay:
             reason=why,
         )
         if fault == "nonconformant":
-            self.log(
-                "nonconformant_answer",
-                category="C",
-                id=message.get("id"),
-                action="resent" if retry else "passed_through",
-            )
+            action = "resent" if retry else ("passed_through" if self.shadow else "unknown")
+            self.log("nonconformant_answer", category="C", id=message.get("id"), action=action)
+            if self.shadow:
+                return None
+            if not retry:
+                state["faults"].append(fault)
+                return Attempt("final", reason="nonconformant")
         if not retry:
             return None
         state["faults"].append(fault)
