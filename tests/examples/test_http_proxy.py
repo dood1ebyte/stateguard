@@ -75,6 +75,17 @@ class Rig:
             argv, stdout=log, stderr=subprocess.STDOUT, env=env or self.env
         )
 
+    def _listening(self, name: str, port: int) -> None:
+        """
+        *name* listens on *port* -- its own process, not another one that happens to: a port
+        taken between its choice and the bind would otherwise send the test's traffic elsewhere.
+        """
+        _wait_for(port)
+        time.sleep(0.05)
+        if self.procs[name].poll() is not None:
+            log = (self.tmp / f"{name}.log").read_text(errors="replace")[-2000:]
+            raise RuntimeError(f"{name} exited instead of listening on {port}:\n{log}")
+
     def server(
         self, *, keyed: bool = False, resumable: bool = False, slow: float = 0, json: bool = False
     ) -> None:
@@ -93,7 +104,7 @@ class Rig:
             )
             argv = ["-m", "stateguard.adapters.mcp.inject", *argv]
         self._spawn("server", [sys.executable, *argv], env)
-        _wait_for(self.server_port)
+        self._listening("server", self.server_port)
 
     def kill_server(self) -> None:
         proc = self.procs.pop("server")
@@ -120,7 +131,7 @@ class Rig:
                 str(self.tmp / "faults.txt"),
             ],
         )
-        _wait_for(self.proxy_port)
+        self._listening("faults", self.proxy_port)
 
     def relay(self, *extra: str) -> None:
         self._spawn(
@@ -137,7 +148,7 @@ class Rig:
                 f"http://127.0.0.1:{self.proxy_port}/mcp",
             ],
         )
-        _wait_for(self.relay_port)
+        self._listening("relay", self.relay_port)
 
     @property
     def relay_url(self) -> str:
@@ -1153,8 +1164,11 @@ def test_concurrent_sessions_across_a_server_crash_never_duplicate_or_misreport(
     def in_flight(text: str) -> None:
         answers[text] = _session(rig.relay_url, _add_note(text), survive=True)
 
+    handshaken = threading.Semaphore(0)  # a late session finished initialize and tools/list
+
     def after_restart(text: str) -> None:
         async def body(session: Any) -> Any:
+            handshaken.release()
             while not restarted.is_set():
                 await anyio.sleep(0.02)
             return await _add_note(text)(session)
@@ -1171,6 +1185,10 @@ def test_concurrent_sessions_across_a_server_crash_never_duplicate_or_misreport(
     while rig.calls_reaching_server() < len(early):
         assert time.monotonic() < deadline, "the in-flight calls never reached the server"
         time.sleep(0.02)
+    # The late sessions finished their handshake before the crash (as the docstring says):
+    # without this wait, a late session's own tools/list could still be in flight at the kill.
+    for _ in late:
+        assert handshaken.acquire(timeout=30), "a late session never finished its handshake"
     rig.kill_server()  # every early call is inside add_note's wait: none has written
     rig.server(keyed=keyed, slow=0.8)
     restarted.set()
