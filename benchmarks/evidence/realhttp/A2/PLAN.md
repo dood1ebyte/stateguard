@@ -28,3 +28,20 @@ this commit.
     answered "outcome unknown", not passed through. A part on the fix follows.
 - B: raw, sg and sg_keyed 0/12; sg_norefresh 12/12 (the server rejects the stale field).
 - 0 record mismatches except where the client's view differs from the relay's (named if any).
+
+## Addendum (before the `c_*_d14` parts' rows): the C cells on D14
+
+**What A2 confirmed** (code `69079ed`): the unkeyed relay passed a non-conformant answer through.
+The client's SDK turned it into a parse error, which is 12 false failures per server in arm sg.
+
+**D14** (`fccee7c`): such an answer is now replaced by "outcome unknown"; recoverable calls are
+resent as before.
+
+**Parts `c_notes_d14` and `c_tsnotes_d14`:** cells `{read,write}/nonconformant_answer`, arms raw,
+sg and sg_keyed, TRIAL_OFFSET=21000, on `fccee7c`.
+
+**Expectations:**
+- sg 12/24, all unresolved ("unknown"), **0 false failures**;
+- sg_keyed 0/24;
+- raw unchanged;
+- 0 record mismatches.
