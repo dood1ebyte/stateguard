@@ -67,6 +67,9 @@ allowed. Early completion or idle capacity never advances the schedule.
   - **Extra session** (the founder, 2026-11-13: "schedule an extra session today. use it at
     maximum capacity"): `trig_01HJUHp5EKmRt2h2Q2dPuHRW`, Fri 11-13, 17:15–22:15 IST. It
     advances the queue; Sessions 5 and 6 continue with what remains.
+    It was cut off at about 17:53 IST (the turn ended without closing out: the A2 harness
+    uncommitted, no NEXT.md update). On the founder's "Try again" (Sat 11-14, 20:21 IST),
+    it resumed with the time it lost: Sat 20:22 to Sun 00:45 IST.
 - **The 14:00 IST end** is enforced by each session's own clock checks, not by the platform.
 
 ## Handoff (end of Session 4, Fri 2026-11-13)
