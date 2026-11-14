@@ -927,3 +927,74 @@ neither is a relay defect.
 - Fault-free 0 everywhere; 0 unsafe outcomes in StateGuard arms; all 1,032 relay records agree
   with ground truth.
 - **On the final code these match S4, S5, S6 and S7 cell for cell.**
+
+### R1: concurrency under repeated faults (`benchmarks/evidence/realhttp/R1`)
+
+**Setup.**
+- Four client sessions call one relay at once. Each session makes six `add_note` writes, so
+  each trial has 24 calls.
+- The fault proxy's new `repeat` mode faults every 3rd write request that reaches it, from any
+  session, the relay's own resends included. It cycles through `kill_before`,
+  `http_503_before`, `lost_response`, `http_502_after`, `cut_stream` and `rpc_internal_error`.
+- Ten trials per arm per server.
+- Each call is scored by its note's count in the notes file (ground truth).
+- Rows are not paired with raw. Resends use up fault slots: StateGuard's keyed arm met about
+  103 faults per 240 calls, against raw's 80.
+- `phase1_table.py` pools a batch's parts, which here ran on two commits. The numbers below are
+  the per-part summaries.
+
+**Parts `notes` and `tsnotes` (code `4d27df8`, before D15):**
+
+| Arm (240 calls per server) | notes | tsnotes |
+|---|---|---|
+| raw | 80 (33.3%, 27.7–39.5%), **20 false failures** | 80, **20 false failures** |
+| naive | 55 (22.9%), **46 duplicates**, 9 false failures | 51 (21.2%), **39 duplicates**, 8 false failures |
+| sg | 80 (33.3%): 70 unresolved, 10 resolved; **0 unsafe** | the same |
+| sg_keyed | 21 (8.8%, 5.8–13.0%): 20 unresolved, **1 false failure** | 20 (8.3%): 16 unresolved, **4 false failures** |
+
+- **A defect: the 5 false failures (D15).** Each was a call whose first attempt ran and whose
+  answer was lost (`lost_response` or `http_502_after`). The keyed resend was then answered
+  `-32603` by the fault proxy, no attempt was left, and the relay passed that error on. It
+  answered only the resend, so the client was told a call that ran had failed. No earlier
+  batch could show this: each faulted one attempt only.
+- **sg (unkeyed, non-idempotent):** every failure is a single fault the relay correctly could
+  not settle.
+  - The 70 unresolved are unknown outcomes, never resent. Over HTTP, a connection closed or
+    a 5xx after the request was sent cannot be told apart from a call that ran.
+  - The 10 resolved are first-attempt `-32603`s, which were not executed and were reported as
+    failed, correctly.
+- **The rest of sg_keyed's residual** is calls faulted on both of their two allowed attempts,
+  surfaced as unknown.
+
+**D15** (`4969b89`, both relays):
+- Once an attempt's outcome is unknown, an internal error answering a later attempt that is
+  not resent again is answered "outcome unknown" (`io.stateguard/reason: in_doubt`).
+- A declared read, and a request that is not a `tools/call`, still get the error as sent.
+- The stdio relay first gives an original that is past its deadline one more deadline to
+  answer, as it does for a resend answered "in doubt".
+- Tests:
+  - HTTP: 7 new tests (lost answer, 502 or cut stream, then `-32603`, on the default-deadline
+    path and with no deadline), plus one first-attempt control. Without the fix, the 6 D15
+    cases fail.
+  - stdio: 3 new tests. The scripted server gets `GATEWAY_ERROR`, a `-32603` from in front of
+    its keys. Without the fix, the 2 D15 cases fail.
+
+**Parts `notes_d15` and `tsnotes_d15` (code `4969b89`; sg and sg_keyed only):**
+- sg: 80/240 on each server, unchanged, 0 unsafe.
+- **sg_keyed: 18/240 (7.5%, 4.8–11.5%) on each server.** All 18 are unresolved, with **0
+  unsafe outcomes**, and every one met a fault on both of its two attempts.
+- Every trial's relay records agree with ground truth:
+  - `tools/call` records = calls made;
+  - calls the relay said ran = calls that succeeded.
+- No driver errors; the harness was clean in every part.
+
+**What remains (for Session 5): the attempt budget.**
+- `DEFAULT_MAX_ATTEMPTS` is 2: one resend. A keyed resend can never run twice, so a larger
+  budget for keyed calls would recover most of the remaining 7.5% under faults this frequent.
+- It is not changed here. It is a shared default of both relays, and the stdio relay's
+  deferred resend after a restart assumes only a first attempt is deferred.
+- It should be measured with R1's harness.
+
+**Python and TypeScript side by side:** under concurrency and repeated faults, notes (Python)
+and tsnotes (TypeScript) behave alike in every arm. On D15 their sg_keyed residuals are equal
+(18/240 each).

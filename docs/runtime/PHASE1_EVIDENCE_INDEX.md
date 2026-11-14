@@ -23,6 +23,7 @@ servers, never production traffic.
 | realhttp | P1 | P1: HTTP relay overhead, paired and uncontended (written before any row) | 1852365 | 3 | 300 |
 | realhttp | P2 | P2: the cost of event-stream answers on the relay's upstream connections (before any row) | 1852365 | 2 | 122 |
 | realhttp | P4 | P4: HTTP relay overhead on the final Phase 1 code, paired and uncontended (written before any row) | 16e26b9 | 3 | 280 |
+| realhttp | R1 | R1: concurrency under repeated faults (written before any row) | 4969b89, 4d27df8 | 4 | 2880 |
 | realhttp | S1 | S1: the stale pooled connection race, relay to server (written before any row) | 8de3735 | 4 | 244 |
 | realstdio | A1 | A1: adversarial cells for categories J, H, C and B (written before any row) | 87f43d4, c255b44 | 6 | 1320 |
 | realstdio | P1 | P1 (stdio): relay overhead, paired and uncontended (written before any row) | 1852365 | 2 | 240 |

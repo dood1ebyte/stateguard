@@ -70,7 +70,20 @@ allowed. Early completion or idle capacity never advances the schedule.
     It was cut off at about 17:53 IST (the turn ended without closing out: the A2 harness
     uncommitted, no NEXT.md update). On the founder's "Try again" (Sat 11-14, 20:21 IST),
     it resumed with the time it lost: Sat 20:22 to Sun 00:45 IST.
+    It was cut off again at about 22:40 IST (the founder's usage limit; R1's harness and plan
+    were pushed, its scorer uncommitted). On the founder's "Please continue from where you left
+    off" (Sun 11-15, 01:22 IST), it resumed with the time it lost: to 03:20 IST, no new task
+    after 02:50.
 - **The 14:00 IST end** is enforced by each session's own clock checks, not by the platform.
+
+## Handoff (end of the extra session, Sun 2026-11-15 early morning IST)
+
+- **Pushed:** everything up to the commit that adds this section; `origin` and the local branch
+  are level. **Uncommitted:** nothing. **Running:** nothing.
+- **Behaviour change in the extra session:** D13, D14 and D15 (relay answers to non-conformant
+  answers, and to an internal error after an unknown attempt). Defaults are unchanged.
+- **Exact next action (Mon 2026-11-16, 09:00 IST):** check the environment, then queue item 2
+  (the attempt budget for keyed calls, measured with R1's harness).
 
 ## Handoff (end of Session 4, Fri 2026-11-13)
 
@@ -157,30 +170,55 @@ Done in the extra session (Fri 2026-11-13 17:15–17:53, resumed Sat 11-14 20:22
   (a limitation).
 - P4, overhead on the final code (`16e26b9`): HTTP +0.009 to +0.058 s per session; stdio under
   1 ms per call, keyed writes about 4.5–5 ms.
-- B5 and S8 plans: the HTTP and stdio matrices on the final code, the Completion Report's
-  evidence base (status in the session log).
+- Python 3.11, 3.12 and 3.14 regression. Two test fixes: a race in the concurrency test, and
+  a check that each rig process is the one listening on its port.
+- B5 (`4ee41bb`) and S8 (`077c046`): the HTTP and stdio matrices on the final code. They match
+  B3 and S4–S7 cell for cell. The Completion Report's evidence base.
+- The harness port race (`8568fa3`): one naive fault-free row in B5. No other batch was hit.
+- The evidence index and its generator (`607b69a`).
+- R1, concurrency under repeated faults (`2a3810b`, `4d27df8`, `ddcd6e6`):
+  - It found 5 false failures in sg_keyed. D15 (`4969b89`) answers an internal error after an
+    unknown attempt "unknown".
+  - On D15, sg_keyed is 18/240 per server, all unresolved, 0 unsafe.
+  - notes (Python) and tsnotes (TypeScript) behave alike.
 
 Next, in order (Session 5, Mon 2026-11-16, is adversarial validation and overhead):
-1. **B5 and S8, if the extra session did not finish them** (plans in
-   `benchmarks/evidence/realhttp/B5`, `realstdio/S8`).
-2. **Adversarial validation, remaining:**
-   - concurrency under repeated faults (several sessions, several faults each);
-   - Python and TypeScript behaviour side by side on the A1/A2 cells (tsnotes is in A2;
-     memory is in A1).
+1. ~~B5 and S8~~ (done in the extra session).
+2. **The attempt budget for keyed calls (D16 candidate):**
+   - The facts: `DEFAULT_MAX_ATTEMPTS` is 2. R1's whole remaining sg_keyed residual is calls
+     faulted on both attempts.
+   - The work: raise it for keyed calls only. In the stdio relay, check
+     `_consider_retry`'s deferred resend first: it assumes only a first attempt is deferred.
+   - Measure with R1's harness as a new part. Then the full suite and the matrices'
+     keyed cells.
+3. **Adversarial validation, remaining:**
+   - repeated faults on stdio (the shim faults once per file today);
+   - Python and TypeScript side by side on the A1 cells (tsnotes is in A2 and R1; memory is
+     in A1).
    - Fix what is found.
-3. **Real capture for incidence** (owner-dependent; see the old queue item 3).
-4. Phase Completion Report (Session 6). Limitations to state:
+4. **Real capture for incidence** (owner-dependent; see the old queue item 3).
+5. Phase Completion Report (Session 6). Limitations to state:
    - the non-idempotent crash windows;
    - G and K outside the measured RFR;
    - schema repair trusts the server's listing (A2 finding);
    - P2b unmeasured (no netem);
-   - no traffic-weighted RFR.
+   - no traffic-weighted RFR;
+   - the attempt budget, if D16 is not done (R1: 7.5% unresolved under a fault on every 3rd
+     request).
 
 ## Session log
 
 One line per session, newest first:
 `YYYY-MM-DD · task · result (tests: N passed / failures) · next`.
 
+- 2026-11-14/15 · Extra session (Fri 17:15–17:53; Sat 20:22–22:40; Sun 01:22–about 02:10 IST,
+  after two interruptions) · A1 and A2 adversarial cells, with D13 and D14; P4 overhead; B5 and
+  S8 on the final code; the harness port race; R1, concurrency under repeated faults, which
+  found D15 (5 false failures in sg_keyed, then 0; sg_keyed 18/240 per server, all unresolved)
+  · pushed, level with origin (tests: Python 3.13 full suite on D15, 6618 passed / 0 failed /
+  0 skipped; earlier in the session, 3.11, 3.12 and 3.14 suites after the two test fixes;
+  TypeScript 74/74, unchanged since; ruff, format, mypy clean) · Session 5: queue item 2,
+  the keyed attempt budget
 - 2026-11-13 · Session 4 (09:00–10:35 IST, hardening) · decision 2: HTTP default deadline 30 s (E4: hung keyed write 12/12 recovered at ~30 s); decision 1: stdio deadline is when to try again (S6: matrix unchanged, old bound cost 12/12 slow writes per server); S7 server-filesystem (sg_keyed 24/132, 0 unsafe); B4 deadline arms = B3 · pushed, level with origin (tests: Python 3.11/3.12/3.13/3.14 6589 passed each, 0 failed / 0 skipped; TypeScript 74/74; ruff, format, mypy clean) · Session 5: queue item 1 (adversarial cells B/H/J/C)
 - 2026-11-11 · Session 3 (09:00–10:15 IST, recovery engineering) · D11 declared-idempotent crash windows recover (S5: memory 24/84 -> 0/84, not exactly-once); HTTP crash cells (C1: 0 unsafe); D12 resend backoff (C1 keyed after_record 5/24 -> 0/24); B3 = B2 cell for cell, every relay row recorded · pushed, level with origin (tests: Python 3.13, 6585 passed / 0 failed / 0 skipped; TypeScript 74/74; ruff, format, mypy clean) · Session 4: founder items 1-2, then queue item 3 (hardening)
 - 2026-11-09 · Session 2, continued with the founder's go-ahead (11:32–11:52 IST) · stdio half of D10 found to be stdio's documented deadline contract (change discarded, decision queued for the founder); E2 (TypeScript keyed, write/slow) and E3 (read/slow) 0/12 with the deadline · pushed, level with origin (tests: Python 3.13, 6575 passed / 0 failed / 0 skipped; TypeScript 73/73; ruff, format, mypy clean) · founder: items 1 and 2; else P2b
