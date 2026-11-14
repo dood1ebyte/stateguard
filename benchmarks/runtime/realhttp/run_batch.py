@@ -161,6 +161,7 @@ def main(argv: list[str]) -> int:
     scorer = {
         "stale_pool.py": "stale_pool_summary.py",
         "../realstdio/per_call.py": "../realstdio/per_call_summary.py",
+        "repeated.py": "repeated_summary.py",
     }.get(args.driver, "summarize.py")
     with (out / f"summary{suffix}.txt").open("w") as summary:
         subprocess.run(
