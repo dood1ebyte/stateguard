@@ -892,3 +892,19 @@ neither is a relay defect.
 - **Fix:** the driver checks that the process it started is the one listening, and takes
   another port before the trial's client starts (after S8; `benchmarks/runtime/` is not
   edited while a batch runs). The same race is the likely cause of the 3.12 test failure above.
+
+### B5: the HTTP matrix on the final Phase 1 code (`benchmarks/evidence/realhttp/B5`, code `47fa17e`)
+
+- **B3's parts:** identical to B3 cell for cell on notes, notes_control, tsnotes_control,
+  everything and everything_control:
+  - notes and tsnotes: raw 168/168, naive 48/168, sg 84/168, sg_keyed 24/168,
+    sg_keyed_deadline 0/168;
+  - everything: raw 72/84, naive 0/84, sg 12/84, sg_deadline 0/84.
+- **The one difference** is tsnotes `naive` `read/none`: 1/12, the harness port race above (no
+  StateGuard in that path).
+- **C1's crash cells** (notes and tsnotes):
+  - keyed `after_record` 0/12;
+  - `after_begin` and `after_effect` 12/12 unresolved (the floor for a non-idempotent tool);
+  - unkeyed arms 12/12 unresolved;
+  - 0 unsafe outcomes in StateGuard arms.
+- All 2,400 relay records agree with ground truth; the harness was clean in every part.
