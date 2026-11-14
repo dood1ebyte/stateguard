@@ -69,13 +69,15 @@ The rules, in order:
    * ``keyed=True``: the call carries an idempotency key its server says it
      honours. The resend is the same request with the same key; the server
      answers it from its own durable record (the recorded result, or "in
-     doubt") and never executes it twice. See ``idempotency``.
+     doubt") and never executes it twice. See ``idempotency``. A keyed call
+     has its own budget, ``KEYED_MAX_ATTEMPTS`` (D16): no resend of it can
+     run twice, so a fault on the resend too is tried again.
 5. From here the attempt failed *knowingly* (a tool error, or a server's
    internal error, after which the call may or may not have taken effect:
    so, as for a tool error, only what is safe to repeat is repeated). The attempt
    budget is spent: deliver the error. A keyed call (see below) is resent
-   once: the server answers a recorded error from its record, and executes
-   only a key it never claimed.
+   while its own budget lasts: the server answers a recorded error from its
+   record, and executes only a key it never claimed.
 6. The effect is not declared READ_ONLY or IDEMPOTENT by the operator:
    deliver the error.
 7. Declared safe to repeat: retry.
@@ -100,6 +102,7 @@ from stateguard.core.trust import TrustDecision
 
 __all__ = [
     "DEFAULT_MAX_ATTEMPTS",
+    "KEYED_MAX_ATTEMPTS",
     "Effect",
     "EffectDeclaration",
     "EffectPolicy",
@@ -110,6 +113,11 @@ __all__ = [
 
 #: Attempts per call, the first included. One retry.
 DEFAULT_MAX_ATTEMPTS = 2
+#: Attempts per keyed call, the first included (D16): two resends. The server answers every
+#: resend from its durable record of the key, so none can run twice; one more covers a fault
+#: on the first resend as well (R1: every remaining keyed failure met a fault on both of its
+#: two attempts). Bounded, so a server that never answers is still escalated.
+KEYED_MAX_ATTEMPTS = 3
 
 #: Annotation keys recorded as hints.
 _HINT_KEYS = ("readOnlyHint", "idempotentHint", "destructiveHint", "openWorldHint")
@@ -268,6 +276,7 @@ def decide_retry(
     connection_available: bool = True,
     reread_unknown: bool = False,
     keyed: bool = False,
+    keyed_max_attempts: int = KEYED_MAX_ATTEMPTS,
 ) -> RetryVerdict:
     """
     Whether to send an attempt again. See the module docstring for the rules.
@@ -279,7 +288,8 @@ def decide_retry(
     ``keyed``: the call carries an idempotency key that its server says it
     honours (``stateguard.adapters.mcp.idempotency``) -- a resend is then
     answered from the server's record and never executed twice, so rule 4's
-    second exception resends it once, with the same key.
+    second exception resends it, with the same key, until *keyed_max_attempts*
+    attempts have been made (*max_attempts* bounds every other call).
     """
     reject, ambiguous, apply = TrustDecision.REJECT, TrustDecision.AMBIGUOUS, TrustDecision.APPLY
     if observed is Observed.SUCCESS:
@@ -294,7 +304,7 @@ def decide_retry(
         return RetryVerdict(reject, "the server rejected the request itself; it would again")
     if observed.outcome_unknown:
         if keyed:
-            if attempts_made >= max_attempts:
+            if attempts_made >= keyed_max_attempts:
                 return RetryVerdict(
                     ambiguous,
                     f"outcome unknown after {attempts_made} keyed attempt(s), the most "
@@ -326,7 +336,7 @@ def decide_retry(
     # From here on the attempt failed *knowingly*: a tool error, or a server's internal error
     # (SERVER_ERROR), after which the call may or may not have taken effect -- so only what
     # is safe to repeat is repeated.
-    if attempts_made >= max_attempts:
+    if attempts_made >= (keyed_max_attempts if keyed else max_attempts):
         return RetryVerdict(reject, f"{attempts_made} attempt(s) made, the most allowed")
     if keyed:
         return RetryVerdict(

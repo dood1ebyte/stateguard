@@ -38,7 +38,8 @@ server's answer is then altered (the body re-sent whole, with a Content-Length):
 
 Repeated faults (``--mode repeat --every K --cycle MODE,MODE,...``): every K-th ``tools/call``
 of --tool that reaches the proxy, from any session (a relay's resends included), gets the next
-mode of the cycle; the others pass. Each fault appends a line to --fault-file:
+mode of the cycle (``none`` in the cycle: that one passes); the others pass. Each fault
+appends a line to --fault-file:
 ``<mode> <the call's arguments as JSON>``. For concurrency under repeated faults (R1).
 
 Each request runs on its own connection (``Connection: close`` both ways), so
@@ -83,7 +84,7 @@ MODES = (
     "repeat",
 )
 #: Modes a repeat cycle may use: one request each, not a listing.
-CYCLABLE = tuple(m for m in MODES if m not in ("none", "stale_listing", "repeat"))
+CYCLABLE = tuple(m for m in MODES if m not in ("stale_listing", "repeat"))  # "none": passes
 #: Modes that alter the server's answer to the faulted call (it runs first).
 ALTERED = ("dup_answer", "garbage_answer", "truncated_answer", "nonconformant_answer")
 
@@ -132,6 +133,8 @@ class Proxy:
         if self.calls % self.every:
             return None
         fault = self.cycle[(self.calls // self.every - 1) % len(self.cycle)]
+        if fault == "none":
+            return None
         if self.fault_file is not None:
             arguments = message["params"].get("arguments")
             with self.fault_file.open("a") as out:

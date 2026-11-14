@@ -27,6 +27,7 @@ from stateguard.adapters.mcp import (
     Observed,
     decide_retry,
 )
+from stateguard.adapters.mcp.effects import DEFAULT_MAX_ATTEMPTS, KEYED_MAX_ATTEMPTS
 from stateguard.core.trust import TrustDecision
 
 T = TrustDecision
@@ -206,8 +207,30 @@ def test_a_server_internal_error_is_retried_at_most_up_to_the_attempt_limit() ->
     read = EffectDeclaration(Effect.READ_ONLY, declared=True)
     assert not decide_retry(Observed.SERVER_ERROR, read, attempts_made=2, max_attempts=2).retry
     assert not decide_retry(
-        Observed.SERVER_ERROR, read, attempts_made=2, max_attempts=2, keyed=True
+        Observed.SERVER_ERROR, read, attempts_made=3, keyed_max_attempts=3, keyed=True
     ).retry
+
+
+@pytest.mark.parametrize(
+    "observed", [Observed.UNKNOWN_TRANSPORT, Observed.UNKNOWN_DEADLINE, Observed.SERVER_ERROR]
+)
+def test_a_keyed_call_has_its_own_larger_budget(observed: Observed) -> None:
+    """D16: a keyed resend never runs twice, so a fault on the first resend is tried again."""
+    effect = EffectDeclaration(Effect.NON_IDEMPOTENT, declared=True)
+    assert KEYED_MAX_ATTEMPTS == 3 and DEFAULT_MAX_ATTEMPTS == 2
+    assert decide_retry(observed, effect, attempts_made=2, keyed=True).retry
+    final = decide_retry(observed, effect, attempts_made=KEYED_MAX_ATTEMPTS, keyed=True)
+    assert not final.retry
+    if observed.outcome_unknown:
+        assert final.decision is TrustDecision.AMBIGUOUS  # escalated, never called a failure
+
+
+def test_an_unkeyed_call_keeps_the_default_budget() -> None:
+    read = EffectDeclaration(Effect.READ_ONLY, declared=True)
+    assert not decide_retry(
+        Observed.UNKNOWN_TRANSPORT, read, attempts_made=2, reread_unknown=True
+    ).retry
+    assert not decide_retry(Observed.SERVER_ERROR, read, attempts_made=2).retry
 
 
 def test_a_protocol_error_is_still_never_retried() -> None:

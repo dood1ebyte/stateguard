@@ -1295,13 +1295,13 @@ def test_an_internal_error_answering_a_resend_after_an_unknown_attempt_is_unknow
     rig: Rig, first: str, deadline: list[str]
 ) -> None:
     """
-    D15 (R1): the first attempt ran and its answer was lost; the keyed resend was answered with
-    an internal error, and no attempt is left. That error answers only the resend: passed on,
+    D15 (R1): the first attempt ran and its answer was lost; the keyed resends were answered
+    with internal errors, and no attempt is left (D16: three attempts for a keyed call). That error answers only the resend: passed on,
     it would tell the client a call that ran had failed. The default deadline (the race) and
     no deadline take different paths.
     """
     rig.server(keyed=True)
-    rig.faults_repeat(1, [first, "rpc_internal_error"])
+    rig.faults_repeat(1, [first, "rpc_internal_error", "rpc_internal_error"])
     rig.relay("--retry", "auto", *deadline)
     answer = _session(rig.relay_url, _add_note())
     assert _state(answer) == "unknown"
@@ -1311,6 +1311,28 @@ def test_an_internal_error_answering_a_resend_after_an_unknown_attempt_is_unknow
     ]
     assert record["resolution"] == "unknown" and "internal_error" in record["faults"]
     assert "internal_error_after_unknown" in rig.events()
+
+
+@pytest.mark.parametrize("deadline", [[], ["--call-deadline", "0"]])
+def test_a_keyed_write_faulted_on_its_first_resend_too_is_resent_again(
+    rig: Rig, deadline: list[str]
+) -> None:
+    """D16 (R1): a keyed call has three attempts; the third is answered from the key's record."""
+    rig.server(keyed=True)
+    rig.faults_repeat(1, ["lost_response", "http_502_after", "none"])
+    rig.relay("--retry", "auto", *deadline)
+    answer = _session(rig.relay_url, _add_note())
+    assert _ok(answer) and (answer.meta or {}).get(OUTCOME) == "replayed"
+    assert rig.notes() == ["a"] and rig.calls_reaching_server() == 3
+
+
+def test_a_keyed_write_faulted_on_every_attempt_is_unknown_after_three(rig: Rig) -> None:
+    rig.server(keyed=True)
+    rig.faults_repeat(1, ["lost_response"])
+    rig.relay("--retry", "auto", "--call-deadline", "0")
+    answer = _session(rig.relay_url, _add_note())
+    assert _state(answer) == "unknown"
+    assert rig.notes() == ["a"] and rig.calls_reaching_server() == 3
 
 
 def test_an_internal_error_on_a_first_attempt_is_still_delivered(rig: Rig) -> None:

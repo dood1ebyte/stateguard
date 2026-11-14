@@ -454,18 +454,47 @@ def test_an_internal_error_answering_a_resend_after_an_unknown_attempt_is_unknow
     tmp_path: Path, first: ServerAction, extra: dict[str, Any]
 ) -> None:
     """
-    The first attempt ran and its answer never came; the keyed resend was answered -32603 by a
-    layer in front of the server's keys (as R1's fault proxy, or a wrapper), and no attempt is
-    left. That error answers only the resend: passed on, it would tell the client
+    The first attempt ran and its answer never came; the keyed resends were answered -32603 by
+    a layer in front of the server's keys (as R1's fault proxy, or a wrapper), and no attempt is
+    left (D16: three for a keyed call). That error answers only the resend: passed on, it would tell the client
     a call that ran had failed.
     """
-    rig = _rig(tmp_path, Plan(first, ServerAction.GATEWAY_ERROR), **extra)
+    rig = _rig(
+        tmp_path, Plan(first, ServerAction.GATEWAY_ERROR, ServerAction.GATEWAY_ERROR), **extra
+    )
     try:
         answers = _answers(rig, _send(rig, "pay"))
         assert len(answers) == 1 and _unknown(answers[0])
         assert answers[0]["error"]["data"]["io.stateguard/reason"] == "in_doubt"
-        assert _executed(rig, "pay") == 1 and len(_sent_calls(rig, "pay")) == 2
+        assert _executed(rig, "pay") == 1 and len(_sent_calls(rig, "pay")) == 3
         assert any(e.get("event") == "internal_error_after_unknown" for e in rig.audit)
+    finally:
+        rig.close()
+
+
+def test_a_keyed_call_lost_with_its_server_twice_is_replayed_by_the_third(tmp_path: Path) -> None:
+    """D16: a deferred resend lost with the restarted server too is deferred again."""
+    rig = _rig(
+        tmp_path,
+        Plan(ServerAction.CLOSE_AFTER_EXECUTE, ServerAction.CLOSE_BEFORE_KEY),
+        max_restarts=3,
+    )
+    try:
+        answers = _answers(rig, _send(rig, "pay"), timeout=20.0)
+        assert len(answers) == 1 and _ok(answers[0])
+        assert _executed(rig, "pay") == 1 and len(rig.servers) == 3
+        sent = _sent_calls(rig, "pay")
+        assert len(sent) == 3 and len({call_key(c) for c in sent}) == 1
+    finally:
+        rig.close()
+
+
+def test_a_keyed_call_failing_on_every_attempt_stops_after_three(tmp_path: Path) -> None:
+    rig = _rig(tmp_path, Plan(*[ServerAction.GATEWAY_ERROR] * 4))
+    try:
+        answers = _answers(rig, _send(rig, "pay"))
+        assert len(answers) == 1 and answers[0]["error"]["code"] == -32603
+        assert _executed(rig, "pay") == 0 and len(_sent_calls(rig, "pay")) == 3
     finally:
         rig.close()
 

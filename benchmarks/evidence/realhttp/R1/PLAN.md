@@ -93,3 +93,20 @@ read, and a request that is not a `tools/call`, still get the error as sent.
 
 The other residual, calls faulted on both of their two allowed attempts, is a matter of the
 attempt budget. It is not changed in this part.
+
+## Part 3: on D16 (written before its rows, after parts `*_d15`)
+
+**D16** (`decide_retry`, both relays): a keyed call gets its own attempt budget,
+`KEYED_MAX_ATTEMPTS` = 3, which means two resends. Every other call keeps 2. A keyed resend is
+answered from the server's record of the key, so it can never run twice.
+
+**Parts `notes_d16` and `tsnotes_d16`:**
+- arm sg_keyed only, 10 trials each, with the same driver and parameters.
+- sg is not re-run: D16 does not change an unkeyed call's budget.
+
+**Prediction:**
+- sg_keyed's residual (18/240 per server on D15, every call faulted on both attempts) drops
+  sharply. What remains: calls faulted on all three attempts, and calls whose third attempt
+  met a `-32603` after an unknown one (D15: unknown).
+- 0 unsafe outcomes, and every trial's relay records agree.
+- More faults per trial than on D15: a third attempt uses up another fault slot.

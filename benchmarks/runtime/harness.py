@@ -82,6 +82,8 @@ class ServerAction(StrEnum):
     # a layer in front of the tool and its keys (a gateway, a wrapper) answers -32603, before
     # any key is looked up; nothing executed (D15)
     GATEWAY_ERROR = "gateway_error"
+    # the process dies before the call reaches the tool or its keys (a crash loop; D16)
+    CLOSE_BEFORE_KEY = "close_before_key"
     DELAYED_RESPONSE = "delayed_response"  # execute, answer correctly after DELAY_SECONDS
     # execute, answer success with structuredContent breaking the tool's
     # outputSchema (the definition's "x-bad-structured")
@@ -318,6 +320,9 @@ class ScriptedServer:
         action = self.faults(call)
         if action is not ServerAction.NORMAL and self.on_fault is not None:
             self.on_fault(call, action)
+        if action is ServerAction.CLOSE_BEFORE_KEY:
+            self.dead = True
+            return False
         if action is ServerAction.GATEWAY_ERROR:
             self._write(
                 writer,

@@ -1721,8 +1721,8 @@ class StdioRelay:
                     reason="the server was lost and no restart will replace it",
                 )
                 return False
-            # Only a first attempt is ever deferred (the budget allows one
-            # more), so the invocation to answer for is the client's own.
+            # Whichever attempt was lost (a keyed call may be deferred again,
+            # D16), the invocation to answer for is the client's own.
             key = _id_key(client_id)
             invocation = self.ledger.get(client_id)
             pending = {"state": "held", "invocation": invocation, "client_id": client_id}
