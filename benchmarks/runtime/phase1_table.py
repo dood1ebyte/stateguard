@@ -33,7 +33,20 @@ UNRESOLVED_KINDS = frozenset({"surfaced_unknown", "no_answer_timeout", "no_answe
 UNRESOLVED_CODES = frozenset({-32010, -32011})
 UNSAFE = ("duplicate_effect", "false_success", "false_failure", "wrong_content")
 ORDER = ["raw", "naive", "sg", "sg_keyed", "sg_resumable", "sg_deadline", "sg_keyed_deadline"]
-FAMILIES = ["fault_free", "transport", "session", "crash", "adversarial", "slow", "drift"]
+FAMILIES = [
+    "fault_free",
+    "transport",
+    "session",
+    "crash",
+    "adversarial",
+    "slow",
+    "drift",
+    "concurrent",
+]
+#: Families whose rows are not paired with raw: in "concurrent" (R1) which call a fault hits
+#: depends on the order requests reach the fault proxy, a relay's resends included, so the same
+#: (session, call) in two arms did not meet the same fault.
+UNPAIRED = ("concurrent",)
 
 #: Injected fault -> failure taxonomy category (TASKMAP.md) and whether it ran before the fault.
 CATEGORY = {
@@ -61,6 +74,7 @@ CATEGORY = {
     "truncated_answer": ("H", "executed; its answer cut off half-way"),
     "nonconformant_answer": ("C", "executed; its answer says jsonrpc 1.0"),
     "slow": ("F", "no fault: the tool is slow; a deadline must not turn it into a failure"),
+    "repeated": ("E/F/I", "every 3rd call across concurrent sessions, resends included, faulted"),
 }
 
 
@@ -120,8 +134,8 @@ def _cell(rows: list[dict[str, Any]], raw: dict[tuple, dict[str, Any]]) -> dict[
         "unsafe": {u: sum(u in r["kinds"] for r in rows) for u in UNSAFE},
         "driver_errors": sum("driver_error" in r["kinds"] for r in rows),
     }
-    if rows and rows[0]["arm"] != "raw":
-        paired = [(r, raw.get(_key(r))) for r in rows]
+    paired = [(r, raw.get(_key(r))) for r in rows]
+    if rows and rows[0]["arm"] != "raw" and any(b is not None for _, b in paired):
         entry["induced_vs_raw"] = sum(
             1 for r, b in paired if b is not None and b["success"] and not r["success"]
         )
@@ -137,12 +151,12 @@ def _key(row: dict[str, Any]) -> tuple:
 
 
 def table(rows: list[dict[str, Any]], by_category: bool = False) -> dict[str, Any]:
-    raw = {_key(r): r for r in rows if r["arm"] == "raw"}
+    raw = {_key(r): r for r in rows if r["arm"] == "raw" and family(r) not in UNPAIRED}
     groups: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
         fam = family(r)
         groups[(r["suite"], r["server"], r["arm"], fam)].append(r)
-        if fam not in ("fault_free", "drift", "slow"):  # every injected fault, together
+        if fam not in ("fault_free", "drift", "slow", *UNPAIRED):  # every injected fault
             groups[(r["suite"], r["server"], r["arm"], "faulted")].append(r)
     out: dict[str, Any] = {}
     for key in sorted(groups, key=_sort):

@@ -194,6 +194,47 @@ def truth_count(base, t):
     return path.read_text().split("\n").count(f"w-{t}") if path.exists() else 0
 
 
+def score(final, count, expected=None):
+    """
+    ``(success, told_ok, kinds)`` for one invocation from what the client was finally told: a
+    read (*count* None) by its content (*expected* in it), a write by its effect (*count*, the
+    times its note is in the notes file).
+    """
+    told_ok = final["status"] == "result" and not final["is_error"]
+    data = final.get("data") or {}
+    unknown = data.get(STATE) == "unknown"
+    not_sent = data.get(STATE) == "not_sent"
+    kinds = []
+    if final["status"] in ("timeout", "crash"):
+        kinds.append("no_answer_" + final["status"])
+    elif unknown:
+        kinds.append("surfaced_unknown")
+    elif not_sent:
+        kinds.append("surfaced_not_sent")
+    elif not told_ok:
+        kinds.append("error_answer")
+    if count is None:
+        right = told_ok and expected in final.get("text", "")
+        if told_ok and not right:
+            kinds.append("wrong_content")
+        return bool(right), told_ok, kinds
+    # write and drift: scored by the effect
+    if count > 1:
+        kinds.append("duplicate_effect")
+    if count == 0 and told_ok:
+        kinds.append("false_success")
+    # A keyed server's "in doubt" / "still running" (-32010 / -32011) claims no failure:
+    # unresolved, as in the stdio driver, never a false failure.
+    if (count >= 1 and final["status"] == "mcp_error" and not unknown
+            and final.get("code") not in (-32010, -32011)):
+        kinds.append("false_failure")
+    if count >= 1 and final["status"] == "result" and final["is_error"]:
+        kinds.append("false_failure")
+    if count == 0:
+        kinds.append("not_executed")
+    return count == 1 and told_ok, told_ok, kinds
+
+
 def run(server, cell, arm, t):
     op, mode = cell.split("/")
     uid = uuid.uuid4().hex[:10]
@@ -279,41 +320,9 @@ def run(server, cell, arm, t):
     finally:
         procs.stop_all()
     final = seen["final"]
-    told_ok = final["status"] == "result" and not final["is_error"]
-    data = final.get("data") or {}
-    unknown = data.get(STATE) == "unknown"
-    not_sent = data.get(STATE) == "not_sent"
     server_outcome = (final.get("meta") or {}).get(OUTCOME) if final["status"] == "result" else None
-    kinds = []
-    if final["status"] in ("timeout", "crash"):
-        kinds.append("no_answer_" + final["status"])
-    elif unknown:
-        kinds.append("surfaced_unknown")
-    elif not_sent:
-        kinds.append("surfaced_not_sent")
-    elif not told_ok:
-        kinds.append("error_answer")
-    if op == "read":
-        right = told_ok and read[2] in final.get("text", "")
-        if told_ok and not right:
-            kinds.append("wrong_content")
-        success, count = bool(right), None
-    else:  # write and drift: scored by the effect
-        count = truth_count(base, t)
-        if count > 1:
-            kinds.append("duplicate_effect")
-        if count == 0 and told_ok:
-            kinds.append("false_success")
-        # A keyed server's "in doubt" / "still running" (-32010 / -32011) claims no failure:
-        # unresolved, as in the stdio driver, never a false failure.
-        if (count >= 1 and final["status"] == "mcp_error" and not unknown
-                and final.get("code") not in (-32010, -32011)):
-            kinds.append("false_failure")
-        if count >= 1 and final["status"] == "result" and final["is_error"]:
-            kinds.append("false_failure")
-        if count == 0:
-            kinds.append("not_executed")
-        success = count == 1 and told_ok
+    count = None if op == "read" else truth_count(base, t)
+    success, told_ok, kinds = score(final, count, read[2] if op == "read" else None)
     audit = []
     if (base / "audit.jsonl").exists():
         audit = [json.loads(line) for line in (base / "audit.jsonl").read_text().splitlines() if line.strip()]

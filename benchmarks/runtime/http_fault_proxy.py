@@ -36,6 +36,11 @@ server's answer is then altered (the body re-sent whole, with a Content-Length):
                          capitalised, a schema the server has since changed (B); later
                          listings, the relay's refresh included, are true
 
+Repeated faults (``--mode repeat --every K --cycle MODE,MODE,...``): every K-th ``tools/call``
+of --tool that reaches the proxy, from any session (a relay's resends included), gets the next
+mode of the cycle; the others pass. Each fault appends a line to --fault-file:
+``<mode> <the call's arguments as JSON>``. For concurrency under repeated faults (R1).
+
 Each request runs on its own connection (``Connection: close`` both ways), so
 a fault ends exactly one exchange. The server's answer is read by its own
 framing (``Content-Length`` or chunks) and passed on with its ``Connection``
@@ -75,7 +80,10 @@ MODES = (
     "truncated_answer",
     "nonconformant_answer",
     "stale_listing",
+    "repeat",
 )
+#: Modes a repeat cycle may use: one request each, not a listing.
+CYCLABLE = tuple(m for m in MODES if m not in ("none", "stale_listing", "repeat"))
 #: Modes that alter the server's answer to the faulted call (it runs first).
 ALTERED = ("dup_answer", "garbage_answer", "truncated_answer", "nonconformant_answer")
 
@@ -89,6 +97,9 @@ class Proxy:
         self.fault_file = Path(args.fault_file) if args.fault_file else None
         self.log_file = Path(args.log) if args.log else None
         self.listings = 0  # tools/list requests seen (stale_listing)
+        self.every: int = getattr(args, "every", 0) or 0
+        self.cycle: list[str] = [m for m in (getattr(args, "cycle", "") or "").split(",") if m]
+        self.calls = 0  # tools/call requests of --tool seen (repeat)
 
     def log(self, line: str) -> None:
         if self.log_file is not None:
@@ -98,15 +109,34 @@ class Proxy:
     def fires(self, message: Any) -> bool:
         if self.mode == "none" or self.fault_file is None or self.fault_file.exists():
             return False
-        params = message.get("params") if isinstance(message, dict) else None
-        if not (
-            isinstance(params, dict)
-            and message.get("method") == "tools/call"
-            and params.get("name") == self.tool
-        ):
+        if not self._targets(message):
             return False
         self.fault_file.write_text(self.mode)
         return True
+
+    def _targets(self, message: Any) -> bool:
+        params = message.get("params") if isinstance(message, dict) else None
+        return (
+            isinstance(params, dict)
+            and message.get("method") == "tools/call"
+            and params.get("name") == self.tool
+        )
+
+    def pick(self, message: Any) -> str | None:
+        """The fault for this POST: in repeat mode the cycle's next one on every K-th call."""
+        if self.mode != "repeat":
+            return self.mode if self.fires(message) else None
+        if not self._targets(message):
+            return None
+        self.calls += 1
+        if self.calls % self.every:
+            return None
+        fault = self.cycle[(self.calls // self.every - 1) % len(self.cycle)]
+        if self.fault_file is not None:
+            arguments = message["params"].get("arguments")
+            with self.fault_file.open("a") as out:
+                out.write(f"{fault} {json.dumps(arguments, sort_keys=True)}\n")
+        return fault
 
     async def handle(self, client_r: asyncio.StreamReader, client_w: asyncio.StreamWriter) -> None:
         try:
@@ -134,7 +164,7 @@ class Proxy:
         method = message.get("method") if isinstance(message, dict) else None
         params = message.get("params") if isinstance(message, dict) else None
         tool = params.get("name") if isinstance(params, dict) else None
-        fault = self.mode if request_line.startswith("POST") and self.fires(message) else None
+        fault = self.pick(message) if request_line.startswith("POST") else None
         stale = False
         if self.mode == "stale_listing" and method == "tools/list":
             self.listings += 1
@@ -394,7 +424,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tool", default="")
     parser.add_argument("--fault-file")
     parser.add_argument("--log")
+    parser.add_argument("--every", type=int, default=0, help="repeat: fault every K-th call")
+    parser.add_argument("--cycle", default="", help="repeat: the modes, comma-separated")
     args = parser.parse_args(argv)
+    if args.mode == "repeat":
+        cycle = [m for m in args.cycle.split(",") if m]
+        if args.every < 1 or not cycle or any(m not in CYCLABLE for m in cycle):
+            parser.error(f"repeat needs --every >= 1 and --cycle of {', '.join(CYCLABLE)}")
     asyncio.run(serve(args))
     return 0
 
