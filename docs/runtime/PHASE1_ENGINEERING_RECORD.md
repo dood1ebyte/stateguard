@@ -889,9 +889,13 @@ neither is a relay defect.
   its own seed or note missing, so it fails, visibly. Every earlier batch's fault-free cells
   are 0, so no earlier result was hit this way.
 - **The row stays in the data**, explained here.
-- **Fix:** the driver checks that the process it started is the one listening, and takes
-  another port before the trial's client starts (after S8; `benchmarks/runtime/` is not
-  edited while a batch runs). The same race is the likely cause of the 3.12 test failure above.
+- **Fix (`8568fa3`, after S8; `benchmarks/runtime/` is not edited while a batch runs):** each
+  batch takes ports from one shared, locked sequence starting at a random offset, so two
+  parallel trials are never handed the same port. The same race is the likely cause of the
+  3.12 test failure above.
+- **Scan of every failing-run archive** (`benchmarks/evidence/realhttp/*/failing*.tar.gz`,
+  every server log searched for `EADDRINUSE`): the only hit is B5's
+  `tsnotes-read-none-naive-11`. No earlier batch, and no StateGuard row anywhere, was hit.
 
 ### B5: the HTTP matrix on the final Phase 1 code (`benchmarks/evidence/realhttp/B5`, code `47fa17e`)
 
