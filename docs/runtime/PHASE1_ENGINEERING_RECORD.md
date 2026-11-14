@@ -1,7 +1,8 @@
 # StateGuard Phase 1: engineering record
 
 The running record of Phase 1 (2026-11-06 to 11-18). Execution state lives in `NEXT.md`. The
-final account is `PHASE1_COMPLETION_REPORT.md`, written in Session 6.
+final account is `PHASE1_COMPLETION_REPORT.md`, written at the end of Session 5
+(held early on 2026-11-15), which went on to Session 6's agenda on the founder's instruction.
 
 **Every result here is controlled fault injection on named, pinned servers.** None is a
 production rate, and none supports a sub-1% claim. Each batch has a plan written before its
@@ -1060,3 +1061,80 @@ only):
     replayed, executed once.
   - The resend held past its deadline (`SLOW_GATEWAY`): its late answer is delivered, exactly
     one answer.
+
+### R2: repeated faults on stdio, calls in flight together (`benchmarks/evidence/realstdio/R2`, code `ab4f93d`: D15–D17)
+
+**Setup.**
+- One stdio session per trial makes 12 writes, up to 4 in flight at once.
+- memory runs one at a time: server-memory's `add_observations` loads, changes and saves its
+  file with no lock, so concurrent calls can lose each other's writes with no fault. That is a
+  third-party property, noted and avoided here.
+- The shim faults every 3rd write that reaches it, resends included, cycling through all
+  eight stdio modes.
+- A server killed by one call's fault takes every call in flight with it, so raw fails far
+  more calls than it has faults. On sqlite: 80/96 failed from 24 faults.
+- 8 trials per arm per server.
+
+| Arm (96 calls per server) | sqlite (Python) | memory (TypeScript) | filesystem (TypeScript) |
+|---|---|---|---|
+| raw | 80 (83.3%), **27 false failures** | 40 (41.7%), **8 false failures** | 79 (82.3%), **15 false failures** |
+| naive | 48 (50.0%), **16 duplicates**, 10 false failures | 16 (16.7%), 8 false failures | 50 (52.1%), 20 false failures |
+| sg | 68 (70.8%), all unresolved, **0 unsafe** | 32 (33.3%), 24 unresolved, **0 unsafe** | 58 (60.4%), all unresolved, **0 unsafe** |
+| **sg_keyed** | **9 (9.4%, 5.0–16.9%)**, all unresolved, **0 unsafe** | **0 (≤ 3.9%)** | **11 (11.5%, 6.5–19.4%)**, all unresolved, **0 unsafe** |
+
+- **Safety holds under concurrency and repeated faults.** No StateGuard arm, on any server,
+  duplicated a write, reported success for a call that did not run, or reported failure for a
+  call that ran. Every trial's relay records agree with ground truth.
+- **sg** is mostly unresolved. An unknown outcome of a non-idempotent call is never resent,
+  and with calls in flight together, one server loss leaves every one of them unknown. That
+  is correct, and the reason the keyed arm matters.
+- **sg_keyed's residual**, call by call:
+  - **The crash window** (`idempotency_in_doubt`; sqlite 4, filesystem 7). A server was
+    killed after the call's effect and before its key's record. It was often killed by
+    *another* call's fault while this call was in flight. This is the documented floor for a
+    non-idempotent tool, and concurrency makes it more frequent.
+  - **Three faulted attempts** (sqlite 5, answered "unknown" by D15 after a `-32603`;
+    filesystem 4, the client's own 8 s limit reached first). Here, too, other calls' faults
+    killing the shared server account for some of the lost attempts.
+  - memory has 0/96: one call at a time, so no losses from other calls.
+- **Found and fixed on the way:** D17 (above), from the smoke run.
+- **Python and TypeScript side by side:** the relay behaves the same on all three. The
+  differences are the servers' own: filesystem's `move_file` cannot be repeated, so the blind
+  resend turns into false failures there rather than duplicates.
+
+### B6 and S9: the matrices' keyed arms on the final code (`benchmarks/evidence/realhttp/B6`, `realstdio/S9`)
+
+**Code:** B6 and S9 ran `d72755a`, P5 ran `60ad165`. Both carry the same product code as
+`93addf9` (D17); every later commit is evidence or documentation.
+
+- **B6** (HTTP, arms sg_keyed and sg_keyed_deadline, notes and tsnotes, B5's cells and crash
+  cells, 12 trials): **identical to B5, cell for cell** (76 cells, 0 differ).
+  - sg_keyed 48/204 faulted per server: its 24 `hang_after` rows, plus the 24 crash-window
+    rows.
+  - sg_keyed_deadline 24/204: the crash windows only.
+  - Fault-free 0/96; 0 unsafe; all 912 relay records agree with ground truth.
+- **S9** (stdio, sg_keyed on sqlite, memory and filesystem, plus memory's
+  sg_keyed_idempotent, 12 trials): **identical to S8, cell for cell** (47 cells, 0 differ).
+  - sg_keyed 24/132 per server: the two crash windows.
+  - sg_keyed_idempotent 0/84.
+  - New `write/slow` cells (the answer 5 s late, 2 s deadline): 0/12 on each server. D17 does
+    not turn a slow keyed call into a failure.
+  - Fault-free 0/84; 0 unsafe; all 600 relay records agree.
+- **So D15, D16 and D17 change nothing where a call meets a single fault.** They act where
+  R1 and R2 put them: on a second and a third.
+
+### P5: overhead on the final code (`benchmarks/evidence/{realhttp,realstdio}/P5`, code `60ad165`)
+
+P4's commands, one worker, idle machine.
+
+| Measure | P4 (`16e26b9`) | P5 (final) |
+|---|---|---|
+| HTTP, per session, notes and tsnotes (sg, sg_keyed_default) | +0.009 to +0.058 s | **+0.011 to +0.056 s** |
+| HTTP, per session, everything (sg) | +0.021 s | +0.041 s (0.018–0.065) |
+| stdio, per warm call, sg | +0.51 to +0.95 ms | **+0.41 to +0.88 ms** |
+| stdio, per warm call, sg_keyed reads | +0.63 to +1.18 ms | +0.63 to +1.11 ms |
+| stdio, per warm call, sg_keyed writes | +4.53, +4.99 ms | **+4.10 (sqlite), +4.62 ms (memory)** |
+
+- 0 failures in 280 HTTP sessions and 6,000 stdio calls.
+- Within P4's range and the plan's bounds (≤ 0.07 s per HTTP session). Differences between
+  P4 and P5 are run-to-run variance, not an improvement to claim.

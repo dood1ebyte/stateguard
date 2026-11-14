@@ -13,6 +13,7 @@ servers, never production traffic.
 | realhttp | B3 | B3: the HTTP matrix again, on the Session 2–3 code (written before any row) | 51f6fdf | 6 | 3744 |
 | realhttp | B4 | B4: the deadline arms on the full HTTP matrix, after decision 2 (written before any row) | f5af9a8 | 3 | 480 |
 | realhttp | B5 | B5: the HTTP matrix on the final Phase 1 code (written before any row) | 47fa17e | 8 | 4104 |
+| realhttp | B6 | B6: the HTTP matrix's keyed arms on the final code (written before any row) | d72755a | 4 | 912 |
 | realhttp | C1 | C1: server crashes under the HTTP relay (written before any row) | 51f6fdf, 9692d4d | 4 | 720 |
 | realhttp | D1 | D1: schema drift, category A (written before any row) | 7b3c4d2 | 2 | 600 |
 | realhttp | E1 | E1: a slow keyed call under a deadline, before and after D10 (written before any row) | 1852365, 68b5594 | 3 | 84 |
@@ -23,12 +24,15 @@ servers, never production traffic.
 | realhttp | P1 | P1: HTTP relay overhead, paired and uncontended (written before any row) | 1852365 | 3 | 300 |
 | realhttp | P2 | P2: the cost of event-stream answers on the relay's upstream connections (before any row) | 1852365 | 2 | 122 |
 | realhttp | P4 | P4: HTTP relay overhead on the final Phase 1 code, paired and uncontended (written before any row) | 16e26b9 | 3 | 280 |
-| realhttp | R1 | R1: concurrency under repeated faults (written before any row) | 4969b89, 4d27df8 | 4 | 2880 |
+| realhttp | P5 | P5: HTTP relay overhead on the code after D15 and D16, paired and uncontended (written before any row) | 60ad165 | 3 | 280 |
+| realhttp | R1 | R1: concurrency under repeated faults (written before any row) | 4969b89, 4d27df8, 4e859c1 | 6 | 3360 |
 | realhttp | S1 | S1: the stale pooled connection race, relay to server (written before any row) | 8de3735 | 4 | 244 |
 | realstdio | A1 | A1: adversarial cells for categories J, H, C and B (written before any row) | 87f43d4, c255b44 | 6 | 1320 |
 | realstdio | P1 | P1 (stdio): relay overhead, paired and uncontended (written before any row) | 1852365 | 2 | 240 |
 | realstdio | P3 | P3 (stdio): per-call overhead of a running relay (written before any row) | 0cee55c | 2 | 6000 |
 | realstdio | P4 | P4 (stdio): per-call overhead of a running relay on the final Phase 1 code (written before any row) | 16e26b9 | 2 | 6000 |
+| realstdio | P5 | P5 (stdio): per-call overhead of a running relay after D15–D17 (written before any row) | 60ad165 | 2 | 6000 |
+| realstdio | R2 | R2: repeated faults on stdio, calls in flight together (written before any row) | ab4f93d | 3 | 1152 |
 | realstdio | S2 | S2: stdio baseline versus StateGuard on pinned real servers (written before any row) | 6181cc2 | 4 | 2208 |
 | realstdio | S3 | S3: retrying a JSON-RPC -32603 where it is safe (written before any row) | a8ed63d | 2 | 192 |
 | realstdio | S4 | S4: the stdio matrix in one batch on the current commit (written before any row) | 180fae6 | 4 | 2208 |
@@ -36,3 +40,4 @@ servers, never production traffic.
 | realstdio | S6 | S6: the stdio matrix on the new deadline default, and slow answers (written before any row) | ba310ac | 4 | 1176 |
 | realstdio | S7 | S7: the stdio matrix on a third pinned server, server-filesystem (written before any row) | 8469759 | 1 | 624 |
 | realstdio | S8 | S8: the stdio matrix on the final Phase 1 code, three servers (written before any row) | 47fa17e | 4 | 1968 |
+| realstdio | S9 | S9: the stdio matrix's keyed arm on the final code (written before any row) | d72755a | 7 | 600 |
