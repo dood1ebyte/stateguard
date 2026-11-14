@@ -845,3 +845,34 @@ notes and tsnotes, 12 trials.
 - **The keyed writes are lower than P3's +6.3 to +6.9 ms, although the keyed path did not
   change.** This is run-to-run variance of the machine (another day, another VM boot), not an
   improvement to claim. The cost of a keyed write is about 4.5–7 ms on this machine.
+
+### Regression on the final code, Python 3.11–3.14 (local; code `16e26b9`, test fixes `47fa17e`)
+
+| Python | Full suite | After the test fixes (`test_http_proxy.py`) |
+|---|---|---|
+| 3.13.18 | 6,608 passed | — |
+| 3.11.18 | 6,607 passed, **1 failed** | 63/63 |
+| 3.12.3 | 6,607 passed, **1 failed** | 63/63 |
+| 3.14.6 | 6,608 passed | 63/63 |
+
+Ruff, format, mypy and TypeScript (74/74) are clean. Both failures are intermittent HTTP tests;
+neither is a relay defect.
+
+**`test_concurrent_sessions_across_a_server_crash` (3.11): a race in the test.**
+- The test killed the server once the early calls reached it, without waiting for the late
+  sessions' handshake, although its docstring says they had finished it.
+- One late session's own `tools/list` was still in flight. The relay resent it once after the
+  backoff, the server was still down (and the test's fault proxy turns "refused" into "lost"),
+  so the client got "unknown" before it made its call.
+- The relay's records are consistent: 3 late calls recovered, the fourth never sent, no
+  duplicate.
+- The test now waits for every late session's handshake before the kill (5/5 on 3.11 after the
+  fix).
+
+**`test_an_internal_error_on_a_declared_read_is_requested_again` (3.12): cause not proven.**
+- The read was answered correctly, but no call passed through the test's fault proxy. That is
+  consistent with the proxy's port being taken by another process before the proxy bound it.
+- It passed 10/10 in isolation, and the failing run's files were rotated away before they
+  could be read.
+- The rig now checks that the process it spawned is the one listening on each port, so this
+  becomes a clear error.
