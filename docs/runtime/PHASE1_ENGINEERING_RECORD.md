@@ -998,3 +998,65 @@ neither is a relay defect.
 **Python and TypeScript side by side:** under concurrency and repeated faults, notes (Python)
 and tsnotes (TypeScript) behave alike in every arm. On D15 their sg_keyed residuals are equal
 (18/240 each).
+
+## Session 5 (held early, Sun 2026-11-15 from 04:15 IST, on the founder's instruction)
+
+### D16: a keyed call has its own attempt budget, 3
+
+- **The change.** `decide_retry` takes `keyed_max_attempts`, by default
+  `KEYED_MAX_ATTEMPTS` = 3: two resends. It applies in both relays, and every other call keeps
+  `DEFAULT_MAX_ATTEMPTS` = 2.
+- **Why it is safe.** A keyed resend is answered from the server's durable record of the key,
+  so no resend can run twice. One more attempt covers a fault on the first resend as well.
+  R1 showed that every remaining keyed failure met a fault on both of its two attempts.
+- **Still bounded.** A call faulted on all three attempts is escalated "unknown", never
+  reported as a failure.
+- **The stdio relay's deferred resend.** A call lost with its server waits for the restarted
+  server; with D16 it can be deferred again if the restarted server is lost too. It still
+  answers for the client's own invocation, looked up by the client's id.
+  `CLOSE_BEFORE_KEY`, a scripted server dying before the call reaches its keys, as a crash
+  loop does, tests it: three servers, three attempts, executed once.
+- **Tests:**
+  - effects: the keyed budget for unknown and internal-error outcomes; the unkeyed budget
+    unchanged.
+  - HTTP: two faulted attempts, then a replay (default deadline and no deadline); all three
+    faulted, unknown after three.
+  - stdio: two server losses, then a replay; a `-32603` on every attempt stops after three.
+  - Without D16, all 5 new relay tests fail.
+  - The D15 tests now exhaust the larger budget (two `-32603`s after the lost attempt).
+- The fault proxy's `repeat` cycle accepts `none`: that request passes.
+
+**R1 part 3, on D16** (`benchmarks/evidence/realhttp/R1`, parts `*_d16`, code `4e859c1`; sg_keyed
+only):
+
+| | on D15 | on D16 |
+|---|---|---|
+| notes sg_keyed | 18/240 (7.5%) | **1/240 (0.4%, 0.1–2.3%)** |
+| tsnotes sg_keyed | 18/240 (7.5%) | **4/240 (1.7%, 0.7–4.2%)** |
+
+- Every remaining call is unresolved; there are 0 unsafe outcomes, and every trial's relay
+  records agree.
+- These parts record `harness_dirty: true`. The uncommitted files were the stdio harness's
+  (`realstdio/driver.py`, `shim.py`, `multi_client.py`, `repeated.py`, R2's work in
+  progress), which R1's HTTP driver does not use. The R1 harness was the committed one.
+
+### D17: on stdio, a keyed resend with attempts left is tried again at its own deadline
+
+- **What R2's smoke run showed.** A keyed call's first answer was replaced by garbage, and its
+  resend's answer was truncated. Neither line can be matched to a request. The stdio relay's
+  default scope (`recoverable`) applied the deadline only to a call's first attempt, by
+  design: "the deadline is when to try again, and the call has been tried again". So the call
+  waited until the client gave up at 8 s, and the third attempt D16 allows was never sent.
+- **D17.**
+  - In `recoverable` scope, a keyed resend whose call has attempts left is also expired at
+    its deadline, and the call is tried again.
+  - If the call is still running, the server answers "in progress" from its record and the
+    relay waits, as before. If the answer was lost, the server replays the result.
+  - A resend's success that arrives after its own deadline, while the client is still
+    waiting, is delivered (`late_answer_delivered`). Before, it would have been dropped as
+    late.
+- **Tests:** two new stdio tests, both failing without the fix.
+  - The first answer lost and the resend swallowed (`DROP_BEFORE_KEY`): the third attempt is
+    replayed, executed once.
+  - The resend held past its deadline (`SLOW_GATEWAY`): its late answer is delivered, exactly
+    one answer.

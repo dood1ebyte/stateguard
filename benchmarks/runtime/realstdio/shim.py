@@ -22,6 +22,11 @@ Adversarial modes (the failure taxonomy's J, H, C and B; the call always runs):
                 capitalised -- a schema the server no longer serves (B: a stale listing). With
                 a relay those are its own listing and the client's; later listings are true.
 
+Repeated faults (``--mode repeat --every K --cycle MODE,MODE,...``; R2): every K-th ``tools/call``
+of --tool that reaches the shim, a relay's resends included, gets the cycle's next mode (``none``:
+it passes). The count is kept in ``<fault-file>.count`` across restarts; each fault appends
+``<mode> <the call's arguments as JSON>`` to --fault-file.
+
 ``--log`` gets ``call <tool>`` for each call that reached the server, and ``fault <mode>``.
 
     shim.py --mode M --tool T --fault-file F [--log L] -- SERVER ARGV...
@@ -53,6 +58,8 @@ def main() -> int:
     parser.add_argument("--fault-file")
     parser.add_argument("--log")
     parser.add_argument("--slow", type=float, default=5.0)
+    parser.add_argument("--every", type=int, default=0)
+    parser.add_argument("--cycle", default="")
     args = parser.parse_args(sys.argv[1:split])
     server_argv = sys.argv[split + 1 :]
     log = Path(args.log) if args.log else None
@@ -60,7 +67,7 @@ def main() -> int:
     child = subprocess.Popen(server_argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     assert child.stdin is not None and child.stdout is not None
     out_lock = threading.Lock()
-    watched: set[str] = set()
+    watched: dict[str, str] = {}  # request id -> the fault its answer meets
     stale: set[str] = set()  # ids of tools/list requests answered with the stale schema
     listings = [0]
     # Once per fault file: a restarted shim (the file exists) serves true listings.
@@ -89,6 +96,29 @@ def main() -> int:
         _log(log, f"fault {args.mode}")
         return True
 
+    cycle = [m for m in args.cycle.split(",") if m]
+    counter = Path(f"{flag}.count") if flag is not None else None
+
+    def pick(message: Any) -> str | None:
+        """The fault for this tools/call: once per fault file, or (repeat) every K-th call."""
+        if args.mode != "repeat":
+            return args.mode if fires(message) else None
+        params = message.get("params") if isinstance(message, dict) else None
+        if not (isinstance(params, dict) and params.get("name") == args.tool):
+            return None
+        assert counter is not None and flag is not None and args.every > 0 and cycle
+        count = int(counter.read_text()) + 1 if counter.exists() else 1
+        counter.write_text(str(count))
+        if count % args.every:
+            return None
+        mode = cycle[(count // args.every - 1) % len(cycle)]
+        if mode == "none":
+            return None
+        with flag.open("a") as out:
+            out.write(f"{mode} {json.dumps(params.get('arguments'), sort_keys=True)}\n")
+        _log(log, f"fault {mode}")
+        return mode
+
     def from_server() -> None:
         assert child.stdout is not None
         for line in child.stdout:
@@ -102,19 +132,19 @@ def main() -> int:
                 write(sys.stdout.buffer, json.dumps(_stale(message, args.tool)).encode())
                 continue
             if key is not None and key in watched and "method" not in message:
-                watched.discard(key)
-                if args.mode == "lost_exit":
+                mode = watched.pop(key)
+                if mode == "lost_exit":
                     die()
-                if args.mode == "slow":
+                if mode == "slow":
                     threading.Timer(args.slow, write, (sys.stdout.buffer, line)).start()
-                if args.mode == "duplicate":
+                if mode == "duplicate":
                     write(sys.stdout.buffer, line)
                     write(sys.stdout.buffer, line)
-                if args.mode == "garbage":
+                if mode == "garbage":
                     write(sys.stdout.buffer, b"<<TEST-ONLY: an answer that is not JSON>>")
-                if args.mode == "truncated":
+                if mode == "truncated":
                     write(sys.stdout.buffer, line.rstrip(b"\n")[: max(1, len(line) // 2)])
-                if args.mode == "nonconformant":
+                if mode == "nonconformant":
                     write(sys.stdout.buffer, json.dumps({**message, "jsonrpc": "1.0"}).encode())
                 continue  # hang: the answer is dropped, and nothing more is said about it
             write(sys.stdout.buffer, line)
@@ -134,10 +164,11 @@ def main() -> int:
                 stale.add(json.dumps(message.get("id")))
                 flag.write_text("stale_listing")
                 _log(log, "fault stale_listing")
-        if is_call and fires(message):
-            if args.mode == "kill_before":
+        fault = pick(message) if is_call else None
+        if fault is not None:
+            if fault == "kill_before":
                 die()
-            if args.mode == "transient":
+            if fault == "transient":
                 error = {"code": -32603, "message": "transient failure (TEST-ONLY fault)"}
                 write(
                     sys.stdout.buffer,
@@ -146,7 +177,7 @@ def main() -> int:
                     ).encode(),
                 )
                 continue
-            watched.add(json.dumps(message.get("id")))
+            watched[json.dumps(message.get("id"))] = fault
         if is_call:
             _log(log, f"call {name}")
         write(child.stdin, line)

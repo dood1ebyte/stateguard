@@ -153,6 +153,41 @@ def truth_count(server: str, base: Path, marker: str) -> int:
     return text.count(json.dumps(marker))
 
 
+def score(final: dict, count: int | None, expected: str | None = None) -> tuple:
+    """
+    ``(success, told_ok, kinds)`` for one invocation from what the client was finally told: a
+    read (*count* None) by its content (*expected* in it), a write by its effect (*count*).
+    """
+    told_ok = final["status"] == "result" and not final["is_error"]
+    data = final.get("data") or {}
+    unknown = data.get(STATE) == "unknown"
+    kinds = []
+    if final["status"] in ("timeout", "crash"):
+        kinds.append("no_answer_" + final["status"])
+    elif unknown:
+        kinds.append("surfaced_unknown")
+    elif data.get(STATE) == "not_sent":
+        kinds.append("surfaced_not_sent")
+    elif not told_ok:
+        kinds.append("error_answer")
+    if count is None:
+        right = told_ok and expected in final.get("text", "")
+        if told_ok and not right:
+            kinds.append("wrong_content")
+        return bool(right), told_ok, kinds
+    if count > 1:
+        kinds.append("duplicate_effect")
+    if count == 0 and told_ok:
+        kinds.append("false_success")
+    if count >= 1 and not told_ok and not unknown and final["status"] != "timeout" and not (
+        final["status"] == "mcp_error" and final.get("code") in (-32010, -32011)
+    ):
+        kinds.append("false_failure")
+    if count == 0:
+        kinds.append("not_executed")
+    return count == 1 and told_ok, told_ok, kinds
+
+
 def run(server: str, cell: str, arm: str, t: int) -> dict:
     op, mode = cell.split("/")
     base = RUNS / f"{server}-{op}-{mode}-{arm}-{t}-{uuid.uuid4().hex[:10]}"
@@ -187,36 +222,8 @@ def run(server: str, cell: str, arm: str, t: int) -> dict:
     latency = time.monotonic() - t0
     seen = json.loads(done.stdout.decode().strip().splitlines()[-1])
     final = seen["final"]
-    told_ok = final["status"] == "result" and not final["is_error"]
-    data = final.get("data") or {}
-    unknown = data.get(STATE) == "unknown"
-    kinds = []
-    if final["status"] in ("timeout", "crash"):
-        kinds.append("no_answer_" + final["status"])
-    elif unknown:
-        kinds.append("surfaced_unknown")
-    elif data.get(STATE) == "not_sent":
-        kinds.append("surfaced_not_sent")
-    elif not told_ok:
-        kinds.append("error_answer")
-    if op == "read":
-        right = told_ok and read[2] in final.get("text", "")
-        if told_ok and not right:
-            kinds.append("wrong_content")
-        success, count = bool(right), None
-    else:
-        count = truth_count(server, base, marker)
-        if count > 1:
-            kinds.append("duplicate_effect")
-        if count == 0 and told_ok:
-            kinds.append("false_success")
-        if count >= 1 and not told_ok and not unknown and final["status"] != "timeout" and not (
-            final["status"] == "mcp_error" and final.get("code") in (-32010, -32011)
-        ):
-            kinds.append("false_failure")
-        if count == 0:
-            kinds.append("not_executed")
-        success = count == 1 and told_ok
+    count = None if op == "read" else truth_count(server, base, marker)
+    success, told_ok, kinds = score(final, count, read[2] if op == "read" else None)
     audit = []
     if (base / "audit.jsonl").exists():
         audit = [json.loads(x) for x in (base / "audit.jsonl").read_text().splitlines() if x.strip()]
