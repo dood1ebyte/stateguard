@@ -73,8 +73,38 @@ allowed. Early completion or idle capacity never advances the schedule.
     It was cut off again at about 22:40 IST (the founder's usage limit; R1's harness and plan
     were pushed, its scorer uncommitted). On the founder's "Please continue from where you left
     off" (Sun 11-15, 01:22 IST), it resumed with the time it lost: to 03:20 IST, no new task
-    after 02:50.
+    after 02:50. It closed at 01:54 IST.
+  - **Session 5, held early** (the founder, Sun 11-15: "complete the next session now itself
+    and advance as per schedule in the following sessions after that … can advance to next
+    sessions if you are done early … unless i tell you, you will not be allowed to work
+    outside the schedule"): Sun 11-15, 04:15–09:15 IST, run under Session 5's stored prompt.
+    It finished Session 5's agenda, then went on to Session 6's: the Phase Completion Report.
+  - **Phase 1 is complete** (`PHASE1_COMPLETION_REPORT.md`), and the founder was notified at
+    the end of Session 5.
+  - **The Monday and Wednesday scheduled tasks still fire** (`trig_01JK1QRZxsKzfao7RfLfLDVA`,
+    `trig_01JBfioVdCgAAaNB85oA8n9C`). Scheduled tasks are not changed from a session. When one
+    fires, unless the founder has said otherwise in this conversation:
+    - do no engineering (mandate §10: "Do not manufacture additional work … Do not
+      automatically begin Phase 2");
+    - add one line to the session log ("Phase 1 complete; awaiting the founder's Phase 2
+      authorization");
+    - commit, push and stop.
+    - If the founder has given instructions since the report, follow them, within the
+      window.
 - **The 14:00 IST end** is enforced by each session's own clock checks, not by the platform.
+
+## Handoff (end of Session 5, Sun 2026-11-15; Phase 1 complete)
+
+- **Pushed:** everything up to the commit that adds this section; `origin` and the local branch
+  are level. **Uncommitted:** nothing. **Running:** nothing.
+- **Behaviour changes in Session 5:**
+  - D16: keyed calls get 3 attempts;
+  - D17: on stdio, a keyed resend with attempts left meets its own deadline.
+  - Other defaults are unchanged.
+- **Phase 1 is complete:** `docs/runtime/PHASE1_COMPLETION_REPORT.md`. Product code is final
+  at `93addf9`; later commits are evidence and documentation.
+- **Exact next action:** none in Phase 1. Wait for the founder's Phase 2 authorization (see
+  Schedule, on the scheduled tasks that still fire).
 
 ## Handoff (end of the extra session, Sun 2026-11-15 early morning IST)
 
@@ -182,7 +212,22 @@ Done in the extra session (Fri 2026-11-13 17:15–17:53, resumed Sat 11-14 20:22
   - On D15, sg_keyed is 18/240 per server, all unresolved, 0 unsafe.
   - notes (Python) and tsnotes (TypeScript) behave alike.
 
-Next, in order (Session 5, Mon 2026-11-16, is adversarial validation and overhead):
+Done in Session 5 (held early, Sun 2026-11-15, on the founder's instruction):
+- D16, keyed calls get 3 attempts (`4e859c1`). R1 on D16: sg_keyed 18/240 → 1/240 and
+  4/240, 0 unsafe.
+- R2, repeated faults on stdio with calls in flight (`d72755a`). 0 unsafe in StateGuard arms
+  on sqlite, memory and filesystem. sg_keyed 9/96, 0/96 and 11/96, all unresolved: crash
+  windows and calls with three faulted attempts.
+- D17, found by R2's smoke run (`93addf9`): on stdio, a keyed resend with attempts left is
+  tried again at its own deadline.
+- B6 and S9, the matrices' keyed arms on the final code (`60ad165`): identical to B5 and S8,
+  cell for cell. Slow keyed writes on stdio are 0/12 per server.
+- P5, overhead on the final code (`8368dfa`): within P4's range.
+- The final regression on Python 3.11–3.14 and TypeScript (session log).
+- **Session 6's agenda, done early: `PHASE1_COMPLETION_REPORT.md`.** Phase 1 is complete;
+  waiting for the founder's Phase 2 authorization.
+
+The queue as it stood before Session 5 (done: items 1–3, and 5):
 1. ~~B5 and S8~~ (done in the extra session).
 2. **The attempt budget for keyed calls (D16 candidate):**
    - The facts: `DEFAULT_MAX_ATTEMPTS` is 2. R1's whole remaining sg_keyed residual is calls
@@ -196,7 +241,8 @@ Next, in order (Session 5, Mon 2026-11-16, is adversarial validation and overhea
    - Python and TypeScript side by side on the A1 cells (tsnotes is in A2 and R1; memory is
      in A1).
    - Fix what is found.
-4. **Real capture for incidence** (owner-dependent; see the old queue item 3).
+4. **Real capture for incidence** (owner-dependent; see the old queue item 3). Not done:
+   Phase 2 priority 1 in the report.
 5. Phase Completion Report (Session 6). Limitations to state:
    - the non-idempotent crash windows;
    - G and K outside the measured RFR;
@@ -211,6 +257,7 @@ Next, in order (Session 5, Mon 2026-11-16, is adversarial validation and overhea
 One line per session, newest first:
 `YYYY-MM-DD · task · result (tests: N passed / failures) · next`.
 
+- 2026-11-15 · Session 5, held early on the founder's instruction (04:15–06:00 IST), then Session 6's agenda · D16 keyed attempt budget 3 (R1: sg_keyed 18/240 → 1/240 and 4/240); R2 repeated faults on stdio, 0 unsafe; D17 keyed resend meets its own deadline (stdio); B6 and S9 identical to B5 and S8 cell for cell; P5 overhead within P4's range; PHASE1_COMPLETION_REPORT.md written, Phase 1 complete · pushed, level with origin (tests: Python 3.11.18 / 3.12.3 / 3.13.18 / 3.14.6 each 6629 passed / 0 failed / 0 skipped; TypeScript tsc clean, 74/74; ruff, format, mypy clean) · wait for the founder's Phase 2 authorization
 - 2026-11-14/15 · Extra session (Fri 17:15–17:53; Sat 20:22–22:40; Sun 01:22–about 02:10 IST,
   after two interruptions) · A1 and A2 adversarial cells, with D13 and D14; P4 overhead; B5 and
   S8 on the final code; the harness port race; R1, concurrency under repeated faults, which

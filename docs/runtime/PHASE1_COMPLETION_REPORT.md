@@ -66,8 +66,10 @@ evidence in the repository: 34 batches and 53,906 rows (section 11). The consequ
 
 ## 2. Repository and branch state
 
-- **Branch:** `claude/serene-bohr-o28snr`, head ⟪TBD:head⟫ at the time of writing, level with
-  `origin`. History is linear; no rebase, force-push or reset was done.
+- **Branch:** `claude/serene-bohr-o28snr`, level with `origin`.
+  - Head: the commit that adds this report's final version, after `8368dfa`.
+  - The product code is final at `93addf9`.
+  - History is linear; no rebase, force-push or reset was done.
 - **`main`:** untouched. No merge, no PR opened in Phase 1 (opening one needs the founder). The
   branch heads earlier PRs #14–#18.
 - **CI:** GitHub Actions has not run on this branch since `ec339ab` (no PR). Every test result
@@ -296,10 +298,10 @@ All local, in this container. CI has not run on this branch since `ec339ab`.
 
 | Check | Result |
 |---|---|
-| Python 3.13 full suite (final code) | ⟪TBD:py313⟫ |
-| Python 3.11 full suite (final code) | ⟪TBD:py311⟫ |
-| Python 3.12 full suite (final code) | ⟪TBD:py312⟫ |
-| Python 3.14 full suite (final code) | ⟪TBD:py314⟫ |
+| Python 3.13 full suite (final code) | 3.13.18: **6,629 passed, 0 failed, 0 skipped** |
+| Python 3.11 full suite (final code) | 3.11.18: **6,629 passed, 0 failed, 0 skipped** |
+| Python 3.12 full suite (final code) | 3.12.3: **6,629 passed, 0 failed, 0 skipped** |
+| Python 3.14 full suite (final code) | 3.14.6 (installed world-readable, as CI's setup-python is): **6,629 passed, 0 failed, 0 skipped** |
 | TypeScript adapter: `tsc`, `npm test` | `tsc --noEmit` clean; `npm test` 74/74 passed |
 | `ruff check`, `ruff format --check` (src, tests), `mypy src/` | clean (ruff: all checks passed, 213 files formatted; mypy: no issues in 73 files) |
 
