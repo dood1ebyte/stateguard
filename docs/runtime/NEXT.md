@@ -5,6 +5,101 @@ handoff; `TASKMAP.md` is the durable record and
 `KEY_INJECTION_AND_HTTP_RELAY.md` holds the latest results. Code and tests are
 ground truth. Labels: VERIFIED / INFERRED / UNVERIFIED.
 
+## Phase 2 (2026-11-18 to 12-07): approved by the founder on 2026-11-17
+
+**Source of truth:** `docs/runtime/PHASE2_PLAN.md`. It holds:
+- the plan, and each session's deliverables, acceptance and fallbacks;
+- the deferral list;
+- clarifications A–D;
+- the fixed S6 protocol;
+- approvals A1–A7 and the consent process.
+
+Where it differs from the Phase 1 rules below, it wins. Each session runs from its scheduled
+task's prompt plus that file.
+
+**Schedule** (09:00–14:00 IST, five hours at most; do not move, extend or compress). Every task
+fires into this conversation (`session_01NykZHSv2cJyQrzsT2GQbv8`), on the repository
+`dood1ebyte/stateguard`, branch `claude/serene-bohr-o28snr`. Verified with `list_triggers` on
+2026-11-17.
+
+| Session | Date (IST) | Fires (UTC) | Scheduled task |
+|---|---|---|---|
+| S1 | Wed 2026-11-18 | 03:30 | `trig_01JBfioVdCgAAaNB85oA8n9C` (the Phase 1 Session 6 task, repurposed: same ID, new name and prompt) |
+| S2 | Fri 2026-11-20 | 03:30 | `trig_013DogfP9exuQ7k4LauoKrtC` |
+| S3 | Mon 2026-11-23 | 03:30 | `trig_0157stVvT3YaY66MTtGw8zSD` |
+| S4 | Wed 2026-11-25 | 03:30 | `trig_01B3yXNEdKm8VqBNTLZdNYv7` |
+| S5 | Fri 2026-11-27 | 03:30 | `trig_01JNxhLzF7ggD1XhnTbXavY3` |
+| S6 | Wed 2026-12-02 | 03:30 | `trig_01TffaUVKQLkTE3TVX1cxePN` |
+| S7 | Mon 2026-12-07 | 03:30 | `trig_01GtcNizdnuWpP4CyzBgk2km` |
+
+**Not part of Phase 2, left untouched:** "StateGuard outreach: daily reply check"
+(`trig_013ZparK8VtEKmw6YVh4ZRtR`) and every Venture Lab task.
+
+**Draft PR #19** (https://github.com/dood1ebyte/stateguard/pull/19), opened 2026-11-17 under A2,
+for CI only.
+- Never merge it, and never mark it ready, without the founder's separate approval.
+- Every push to the branch updates it.
+- First CI run (head `eb8da57`, run 43955222895), as it stood at setup:
+  - lint, import isolation and mypy passed;
+  - the Ubuntu test jobs for 3.11, 3.12 and 3.13 **failed within 40 s**;
+  - macOS 3.11–3.14 and Ubuntu 3.14 were still running.
+  - Not investigated at setup: that is S1.3.
+
+**Approvals:**
+- A1, A2, A3, A4 and A6: approved.
+- **A5: no publishing.**
+- **A7: no credentials.**
+
+### S1 starting checklist (Wed 2026-11-18, 09:00 IST)
+
+1. Run `TZ=Asia/Kolkata date` and confirm the time is inside 09:00–14:00. Note the start time.
+2. Check git:
+   - `git status`, the branch, `git log -3`;
+   - `git fetch origin claude/serene-bohr-o28snr`;
+   - `git rev-list --left-right --count HEAD...origin/claude/serene-bohr-o28snr` must be `0 0`.
+3. Check the toolchain. On 2026-11-17 it was present:
+   - `.venv` and `/tmp/mcp1` (3.13.18; mcp 2.3.0; mcp 1.9.4 with mcp-server-sqlite 2025.4.25);
+   - `/tmp/venv311` (3.11.18), `/tmp/venv312` (3.12.3), `/tmp/venv314b` (3.14.6);
+   - node v22.23.4;
+   - `/opt/sg-servers/{everything,memory,filesystem}`;
+   - `adapters/typescript/node_modules`.
+   If the container was replaced, rebuild it per "Environment" below.
+4. CI: read PR #19's check runs and the failed jobs' logs (`mcp__github__get_job_logs`). List
+   each failure for S1.3.
+5. Start the Python 3.13 suite in the background as a baseline before any change (about 10
+   minutes).
+6. **S1.1**, the relays as package commands:
+   - move the relays into the package;
+   - add a `relay` subcommand to `stateguard` (`src/stateguard/cli.py`);
+   - make `examples/mcp/stdio_proxy.py` and `http_proxy.py` thin wrappers;
+   - check which optional dependencies the HTTP relay needs (extras in `pyproject.toml`).
+7. **S1.2**, `--keys auto`:
+   - a Python server (`python`, `python -m`, `uv`/`uvx`) runs as
+     `python -m stateguard.adapters.mcp.inject …`;
+   - a Node server (`node`/`npx`) runs with `--import <preload>`, and the preload must be
+     reachable from an installed wheel;
+   - choose a default key-store path, and which tools are keyed (non-read tools), and record
+     both decisions;
+   - otherwise run unkeyed, and log why.
+8. **Acceptance tests:**
+   - a new end-to-end test:
+     - build the wheel (`pip wheel . --no-deps`);
+     - install it into a fresh virtual environment;
+     - run `stateguard relay stdio --keys auto -- <pinned server-memory>`, with
+       `STATEGUARD_FAULT=after_record` on `add_observations`;
+     - assert the write tool is keyed, executed once and replayed once;
+   - the HTTP and stdio keyed and unkeyed matrices on the S1 commit through the new commands
+     (new batches, plans written before any rows), compared cell by cell with B5/B6 and
+     S8/S9;
+   - Python 3.11–3.14 suites, TypeScript `tsc` and `npm test`, ruff, format, mypy.
+9. **S1.3:** fix or root-cause each CI failure, time-boxed to 1 hour.
+10. Commit and push each finished piece (about every 60 minutes). No new task after 13:30. By
+    14:00:
+    - stop background processes;
+    - update NEXT.md;
+    - push and confirm `0 0`;
+    - give the short report.
+
 ## Rules for scheduled sessions (owner, 2026-11-05)
 
 - Branch `claude/serene-bohr-o28snr` (the head of PRs #14–#18; VERIFIED
@@ -81,17 +176,23 @@ allowed. Early completion or idle capacity never advances the schedule.
     It finished Session 5's agenda, then went on to Session 6's: the Phase Completion Report.
   - **Phase 1 is complete** (`PHASE1_COMPLETION_REPORT.md`), and the founder was notified at
     the end of Session 5.
-  - **The Monday and Wednesday scheduled tasks still fire** (`trig_01JK1QRZxsKzfao7RfLfLDVA`,
-    `trig_01JBfioVdCgAAaNB85oA8n9C`). Scheduled tasks are not changed from a session. When one
-    fires, unless the founder has said otherwise in this conversation:
-    - do no engineering (mandate §10: "Do not manufacture additional work … Do not
-      automatically begin Phase 2");
-    - add one line to the session log ("Phase 1 complete; awaiting the founder's Phase 2
-      authorization");
-    - commit, push and stop.
-    - If the founder has given instructions since the report, follow them, within the
-      window.
+  - **Superseded on 2026-11-17.**
+    - The Monday task (`trig_01JK1QRZxsKzfao7RfLfLDVA`) fired on 11-16 and only logged a line.
+    - The Wednesday task (`trig_01JBfioVdCgAAaNB85oA8n9C`) was repurposed, on the founder's
+      instruction, as Phase 2 S1 (see "Phase 2" above).
+    - Phase 2 is authorised and runs from `PHASE2_PLAN.md`.
 - **The 14:00 IST end** is enforced by each session's own clock checks, not by the platform.
+
+## Handoff (Phase 2 setup, Tue 2026-11-17 02:25–02:40 IST; no engineering)
+
+- **Done:**
+  - the approved plan committed (`PHASE2_PLAN.md`, `eb8da57`);
+  - draft PR #19 opened;
+  - seven scheduled tasks configured and verified: the Phase 2 table above, with S1 repurposed
+    from the Phase 1 Session 6 task.
+- **Pushed:** everything; origin and local are level. **Uncommitted:** nothing.
+  **Running:** nothing locally.
+- **Exact next action:** S1, Wed 2026-11-18, 09:00 IST: the S1 starting checklist above.
 
 ## Handoff (end of Session 5, Sun 2026-11-15; Phase 1 complete)
 
@@ -257,6 +358,7 @@ The queue as it stood before Session 5 (done: items 1–3, and 5):
 One line per session, newest first:
 `YYYY-MM-DD · task · result (tests: N passed / failures) · next`.
 
+- 2026-11-17 · Phase 2 setup on the founder's final authorisation (02:25–02:40 IST, no engineering) · PHASE2_PLAN.md committed; draft PR #19 opened (CI: lint, isolation, mypy passed; Ubuntu 3.11–3.13 test jobs failed fast, not investigated; macOS running); S1 task repurposed, S2–S7 created, all verified · pushed, level with origin (tests: none run) · S1 Wed 18 Nov 09:00 IST
 - 2026-11-16 · Session 5's scheduled task (`trig_01JK1QRZxsKzfao7RfLfLDVA`, delivered 09:01 IST) · Phase 1 complete (2026-11-15); awaiting the founder's Phase 2 authorization. No founder instruction since the report, so no engineering (mandate §10) · pushed, level with origin (tests: none run) · wait for the founder
 - 2026-11-15 · Session 5, held early on the founder's instruction (04:15–06:00 IST), then Session 6's agenda · D16 keyed attempt budget 3 (R1: sg_keyed 18/240 → 1/240 and 4/240); R2 repeated faults on stdio, 0 unsafe; D17 keyed resend meets its own deadline (stdio); B6 and S9 identical to B5 and S8 cell for cell; P5 overhead within P4's range; PHASE1_COMPLETION_REPORT.md written, Phase 1 complete · pushed, level with origin (tests: Python 3.11.18 / 3.12.3 / 3.13.18 / 3.14.6 each 6629 passed / 0 failed / 0 skipped; TypeScript tsc clean, 74/74; ruff, format, mypy clean) · wait for the founder's Phase 2 authorization
 - 2026-11-14/15 · Extra session (Fri 17:15–17:53; Sat 20:22–22:40; Sun 01:22–about 02:10 IST,
