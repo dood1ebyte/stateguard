@@ -1,16 +1,37 @@
 # StateGuard Phase 2: the approved plan
 
 **Status:** approved by the founder on 2026-11-17 (final authorisation, after review with
-ChatGPT). This file is the source of truth for Phase 2 execution. `NEXT.md` holds execution
-state; scheduled tasks point here.
+ChatGPT). **Amended on 2026-11-17:** the founder changed the validation strategy.
+- External developer recruitment is removed.
+- Public failure intelligence (Track B, section 10) replaces external developer validation.
+- The schedule, the scheduled tasks, S1–S4, the safety gates and the statistical protocol are
+  unchanged.
+
+This file is the source of truth for Phase 2 execution. `NEXT.md` holds execution state;
+scheduled tasks point here.
 
 **Strategic objective:** StateGuard as commercially viable AI runtime reliability
 infrastructure, MCP first.
 
 **Engineering north star:** below 1% residual MCP invocation failure rate on clearly defined,
-representative, supported workloads, with safe execution and UNKNOWN never hidden. Synthetic
-improvements alone are not enough: developer adoption and real-world evidence are part of the
-goal.
+representative, supported workloads, with safe execution and UNKNOWN never hidden.
+
+**Validation, on two tracks:**
+- **Track A, controlled engineering validation:**
+  - reproducible MCP workloads;
+  - fault injection across the supported transports and servers;
+  - recovery, retry and ambiguous-completion testing;
+  - concurrency and session correctness;
+  - the fixed S6 statistical protocol;
+  - regression, compatibility and overhead.
+  **It is the only basis for measured reliability claims.**
+- **Track B, public failure intelligence** (section 10): what developers publicly report about
+  MCP failures. It is used for problem discovery, prioritisation and generating test cases,
+  never for measuring reliability (section 11).
+
+**Phase 2 does not depend on external developers.** There is no recruitment, no external
+contact and no external data sharing (founder decision, 2026-11-17). The absence of outside
+testers is not a blocker and not an open founder action.
 
 ---
 
@@ -30,7 +51,8 @@ the branch `claude/serene-bohr-o28snr`.
 | S6 | Wed 2026-12-02 | 09:00–14:00 | see `NEXT.md` |
 | S7 | Mon 2026-12-07 | 09:00–14:00 | see `NEXT.md` |
 
-S7 is ten days after S5, giving outside developers time to use the kit.
+S7 is ten days after S5. The dates are fixed by the founder and are unchanged by the 2026-11-17
+amendment.
 
 ---
 
@@ -79,7 +101,9 @@ S7 is ten days after S5, giving outside developers time to use the kit.
 **Never:**
 - publish packages (A5 is not approved);
 - merge the draft PR or mark it ready;
-- contact people or share data outside the consent process (A4, A6);
+- contact external developers, recruit testers, or share data externally (section 8);
+- use non-public information, or bypass authentication, access controls or rate limits, in
+  Track B research (section 10);
 - use credentials that were not supplied (A7);
 - create, change or delete scheduled tasks;
 - expose private outreach or research documents;
@@ -232,28 +256,41 @@ documented limitation).
 
 **Never cut:** S4.1, zero unsafe outcomes across the attempted matrix.
 
-### S5: developer kit and hand-off (Fri 27 Nov)
+### S5: trial kit, reproducible benchmark materials, release candidates, Track B workflow (Fri 27 Nov)
 
-**Depends on:** S1, S2; A4 and A6 (the consent process).
+**Depends on:** S1, S2.
 
 | ID | Deliverable | Hours |
 |---|---|---|
-| S5.1 | `stateguard trial`: runs a developer's own server in shadow, then in auto, and produces a before/after report and a redacted bundle. Optional fault injection runs only against a sandbox copy or a fixture. | 2.0 |
+| S5.1 | `stateguard trial`: runs a server in shadow, then in auto, and produces a before/after report and a redacted bundle (kept locally). Optional fault injection runs only against a sandbox copy or a fixture. | 2.0 |
 | S5.2 | Onboarding: `mcpServers` snippets for Claude Desktop, Cursor and Claude Code; `stateguard doctor`; a scripted clean-machine timing from install to first protected call. | 1.0 |
 | S5.3 | Release candidates (wheel, sdist, npm tarball, CHANGELOG), built and verified. **Not published (A5 is not approved).** | 0.5 |
-| S5.4 | The developer hand-off pack and the consent and data-handling process (section 8). **The recommended configuration is frozen at this commit; S6 tests exactly this.** | 0.5 |
-| — | Reserve, also for friction found by the clean-machine run | 1.0 |
+| S5.4 | **Reproducible benchmark materials:** one documented set of commands (with a README) that rebuilds the environment from a clean checkout and re-runs the Phase 1/2 matrices and R1/R2. **The recommended configuration is frozen at this commit; S6 tests exactly this.** | 0.5 |
+| S5.5 | **The Track B workflow** (section 10): the record schema and its validator, the dedup tool, the documented search queries per source, the source access log, and a first GitHub collection-and-classification pass. | 1.0 |
+| — | Reserve, also for friction found by the clean-machine run | 0.5 |
 
 **Acceptance:**
 - `stateguard trial` produces a before/after report on 3 real servers, scripted.
 - Clean-machine time from install to first protected call is **5 minutes or less**, scripted.
-- Release candidates install cleanly.
+- Release candidates install cleanly. Nothing is published.
+- The benchmark materials reproduce at least one matrix part, cell for cell, from a clean
+  checkout using only the documented commands.
 - The recommended configuration is written down and frozen.
-- The hand-off pack is ready for the founder to send. **Claude contacts no one.**
+- **Track B:**
+  - the validator rejects a record missing a required field, and accepts an explicit "not
+    available";
+  - the dedup tool is tested;
+  - the first GitHub pass is logged with its queries, date range, and the counts reviewed, kept
+    and rejected (by classification);
+  - every kept record passes the validator.
+- **No external developer recruitment, contact or data sharing.**
 
-**Fallback:** `doctor` (the snippets stay).
+**Fallback, in order:**
+1. `doctor` (the snippets stay).
+2. The Track B first pass is limited to GitHub, and the other sources move to S7.1.
 
-**Never cut:** S5.1, the frozen configuration, no publishing.
+**Never cut:** S5.1, the frozen configuration, no publishing, the Track B schema and the
+first GitHub pass.
 
 ### S6: validation under the fixed statistical protocol (Wed 2 Dec)
 
@@ -276,24 +313,36 @@ documented limitation).
 
 **Never cut:** the committed protocol, the fixed order, reporting every completed run.
 
-### S7: real-user data, fixes, final validation and the Phase 2 report (Mon 7 Dec)
+**Track B does not enter S6.**
+- Public failure reports are never a substitute for controlled statistical evidence.
+- They are never used to choose or weight the fault mix, the workloads, the sample sizes or the
+  claim rule.
+- S6 does no Track B work.
 
-**Depends on:** S5's hand-off, then the developers' calendar time.
+### S7: public failure intelligence analysis, reproductions, final validation, Phase 2 report (Mon 7 Dec)
+
+**Depends on:** S5.5 (the Track B workflow) and S6.
 
 | ID | Deliverable | Hours |
 |---|---|---|
-| S7.1 | Analyse the outside developers' redacted bundles and before/after reports. Every figure is labelled with its source and sample size. | 1.5 |
-| S7.2 | Fix the defects and friction developers hit, with tests. | 1.5 |
-| S7.3 | Final regression: Python 3.11–3.14, TypeScript, the matrices, CI (background). | 0.5 |
-| S7.4 | The Phase 2 report (section 9). | 0.5 |
-| — | Reserve | 1.0 |
+| S7.1 | Collection top-up (section 10): refresh GitHub since S5, then Reddit, Hacker News, Indie Hackers and other public developer platforms, as far as they are accessible. | 0.75 |
+| S7.2 | **Analysis:**<br>- deduplicate;<br>- separate confirmed technical failures from feature requests, speculation, opinions and unrelated reports;<br>- find recurring and high-severity patterns;<br>- map each failure to the taxonomy and to StateGuard's capability (prevent, detect, recover, cannot handle);<br>- list failures the test suite does not cover. | 1.0 |
+| S7.3 | **Reproductions:** reproduce high-value failures in the controlled environment where technically possible. Validated reproductions go into the benchmark corpus as raw-versus-StateGuard cells, and into the regression suite where StateGuard's correct behaviour is established. A StateGuard defect a reproduction exposes is fixed if it is in scope (safety first). | 1.25 |
+| S7.4 | Final regression: Python 3.11–3.14, TypeScript, the matrices, CI (background). | 0.5 |
+| S7.5 | **The Phase 2 report** (section 9): Track A and Track B in separate parts, plus the prioritised engineering-gap list (severity, recurrence, reproducibility, StateGuard's ability to address it). | 0.75 |
+| — | Reserve | 0.75 |
 
-**If no outside data arrived:**
-- Product validation is reported **incomplete**. Nothing is substituted for it.
-- S7.1–S7.2 time goes to deferred items, in list order (section 4).
-- S7.3 and S7.4 are unchanged.
+**Acceptance:**
+- Section 9's criteria.
+- Every high-value failure is either reproduced and added, or documented with the reason it
+  could not be reproduced.
+- **No rate, percentage or reliability figure is derived from Track B** (section 11).
 
-**Never cut:** S7.3, S7.4, honest labels.
+**Fallback, in order:**
+1. Non-GitHub sources beyond one search pass each.
+2. Reproductions beyond the three highest-priority failures.
+
+**Never cut:** S7.4, S7.5, the separation of evidence (section 11), honest labels.
 
 ---
 
@@ -311,12 +360,14 @@ documented limitation).
 **Deferred first to last:**
 1. Event-stream draining and the netem measurement (S4.4).
 2. SDK version checks beyond the pinned versions.
-3. Compatibility servers beyond the first 6.
-4. The TypeScript atomic helper (S3.3); the TypeScript recovery-check hook stays.
-5. Per-tool serialisation (S4.3).
-6. HTTP `--record` (S2.3); HTTP evidence falls back to incidence records.
-7. `stateguard doctor`.
-8. S6's secondary per-fault statistics.
+3. Track B: non-GitHub sources beyond one search pass each.
+4. Compatibility servers beyond the first 6.
+5. The TypeScript atomic helper (S3.3); the TypeScript recovery-check hook stays.
+6. Per-tool serialisation (S4.3).
+7. HTTP `--record` (S2.3); HTTP evidence falls back to incidence records.
+8. `stateguard doctor`.
+9. Track B: reproductions beyond the three highest-priority failures.
+10. S6's secondary per-fault statistics.
 
 **Never cut:**
 - the safety requirements (zero unsafe outcomes, the S4.1 repair fallback, the S3 replay rule);
@@ -324,18 +375,21 @@ documented limitation).
 - capture and reporting;
 - the Python cooperating server's crash-window closure;
 - fixed-protocol validation;
+- the Track B workflow, a GitHub collection pass, and the S7 analysis;
+- the separation of controlled evidence from public intelligence (section 11);
 - the final regression and completion reporting.
 
 ---
 
 ## 5. Dependencies and parallel work
 
-- **Order:** S1 → S2 → S5 → (a wait of at least 7 days; 10 as scheduled) → S7.
+- **Order:** S1 → S2 → S5 → S6 → S7, on the scheduled dates.
 - **S3 and S4** depend only on S1. S3 comes first because S6 needs it.
-- **S6** needs S3 and S5, and falls inside the wait before S7.
+- **S6** needs S3 and S5.
+- **S7** needs S5.5 (the Track B workflow) and S6.
 - **Background in every session:** the suites (about 40 minutes for four Pythons, back to
   back), the matrices, the capture runs, the compatibility runs, and S6's compute.
-- **The founder's track** (recruitment and consent, A6) runs alongside S1–S5.
+- **No founder-side dependency:** recruitment was withdrawn on 2026-11-17.
 
 ---
 
@@ -388,8 +442,9 @@ alongside the original.
    - *q* ∈ {1%, 5%, 20%}. **All three are run and all three are reported.**
    - Seeds: the run index.
    - The uniform mix is **an assumption, not an observation**.
-   - If real captures contain at least 30 observed faults, one extra "observed mix" run is
-     added and reported **alongside** the others. Otherwise it is not run.
+   - If S2's real-server captures contain at least 30 observed faults, one extra "observed
+     mix" run is added and reported **alongside** the others. Otherwise it is not run.
+   - **Public failure reports (Track B) are never used to choose or weight the fault mix.**
    - Nothing is re-weighted after results are seen.
 5. **Sample size, fixed.**
    - 1,200 calls per (workload, server, configuration, *q*) for StateGuard.
@@ -456,40 +511,36 @@ no accounts and the core does not need them.
 
 ---
 
-## 8. Founder approvals (2026-11-17) and the consent process
+## 8. Founder approvals (2026-11-17, amended the same day) and external contact
 
 | # | Decision | Status |
 |---|---|---|
 | A1 | The final seven-session plan and schedule | **Approved** |
 | A2 | Open a draft PR so CI can run. **Never merge** without separate approval. | **Approved** |
 | A3 | Install pinned public MCP servers from npm and PyPI (no credentials) | **Approved** |
-| A4 | Redacted developer data kept **outside the repository**; only aggregate figures committed; consent, privacy and access controls enforced | **Approved** |
+| A4 | Redacted developer data kept **outside the repository**; only aggregate figures committed; consent, privacy and access controls enforced | **Approved** (boundary kept). With recruitment withdrawn, no developer data is expected in Phase 2. |
 | A5 | PyPI and npm publishing | **Not approved.** Build and verify release candidates only. |
-| A6 | Prepare recruitment and hand-off for three outside developers. External contact and data sharing follow the consent process. | **Approved** (preparation) |
+| A6 | ~~Prepare recruitment and hand-off for three outside developers~~ | **Withdrawn on 2026-11-17 by the founder.** No recruitment, no external contact, no external data sharing in Phase 2. |
 | A7 | Credentialed test accounts | **Not provided; not required for core work** |
 
 None of these is permission to publish packages, merge the PR, contact anyone, or use
 credentials that were not supplied.
 
-**Consent process (A4, A6), prepared in S5:**
-- The founder makes every external contact. Claude prepares the pack and contacts no one.
-- **Before any data is shared, the developer gets a written description of:**
-  - what the bundle contains: redacted recordings, incidence records, the trial report;
-  - what is masked;
-  - where it is kept: outside the repository, with access limited to the founder;
-  - that sharing is opt-in.
-- Bundles are produced locally by `stateguard capture` / `trial`, redacted with mask mode.
-  The developer reviews a bundle before sending it.
-- Only aggregate figures are committed, labelled with source and sample size. No bundle, raw
-  recording or identifying detail goes into the repository.
-- A developer can withdraw their data. Withdrawn data is deleted, and its aggregates are
-  removed at the next report.
+**External contact and data in Phase 2: none.** This section replaces the former "consent
+process", which was withdrawn with A6. The S1–S4 scheduled tasks still mention "the consent
+process"; that reference now means this section.
+- No external developer is recruited or contacted, and no tester is recruited.
+- No data is shared externally.
+- The trial kit's redacted bundles stay local.
+- The absence of outside testers is not a blocker, and not an open founder action.
+- Track B reads **public** information only (section 10). Reading public pages is not contact:
+  Track B never posts, comments, messages or opens anything on any platform.
 
 ---
 
-## 9. Completion: engineering and product validation, judged separately
+## 9. Completion: Track A (engineering) and Track B (public failure intelligence), judged separately
 
-**Engineering completion:**
+**Track A, engineering completion:**
 1. Packaged relays and `--keys auto`, proven by the clean-machine end-to-end test.
 2. CI green on Ubuntu and macOS, or every remaining failure root-caused.
 3. Capture and report work; at least 1,000 real-server calls under the acceptance in S2; the
@@ -501,25 +552,130 @@ credentials that were not supplied.
 7. S6 run under the fixed protocol, with every result reported on both dimensions.
 8. Final regression passes; overhead re-measured; every deferral and limitation listed.
 
-**Product validation** (reported separately; may be incomplete without blocking engineering):
-1. Outside developers who installed StateGuard and ran `stateguard trial` (target 3, minimum 1).
-2. Before/after reports received, with sample sizes.
-3. Onboarding friction measured with real users: time to first protected call, issues hit.
-4. Real-world captured call counts, by source.
-5. Real recoveries or prevented failures, **only if actually observed**.
-6. Feedback and what it means for the product.
+**Track B, public failure intelligence** (reported separately; its breadth can be limited,
+for example by a platform that cannot be accessed, without blocking engineering completion):
+1. A committed, repeatable workflow: schema, validator, dedup, documented queries, source
+   access log.
+2. GitHub collected over the documented queries (S5 pass and S7 refresh); every other source
+   attempted, with its accessibility recorded.
+3. The corpus deduplicated and classified. Confirmed technical failures are separated from
+   feature requests, speculation, opinions and unrelated reports. Counts are given by
+   classification, category, severity and StateGuard capability, as counts of reports, never
+   as rates.
+4. Recurring and high-severity patterns identified, mapped against StateGuard's capabilities
+   and limitations, and the test suite's gaps listed.
+5. High-value failures reproduced where technically possible, with validated reproductions
+   added to the benchmark or regression corpus. Non-reproducible ones are documented with the
+   reason.
+6. A prioritised engineering-gap list.
+7. The report keeps Tracks A and B apart (section 11).
 
-**The Phase 2 report** (S7) separates the two and covers:
-- productisation and installation;
-- runtime and recovery changes;
-- safety results;
-- the compatibility matrix;
-- capture and measurement;
-- statistical validation;
-- performance overhead;
-- regression and CI;
-- deferred work and remaining limitations;
-- then the product-validation items above.
+**The Phase 2 report** (S7, `docs/runtime/PHASE2_COMPLETION_REPORT.md`) has two separate parts.
+- **Track A, controlled experimental results:**
+  - productisation and installation;
+  - runtime and recovery changes;
+  - safety results;
+  - the compatibility matrix;
+  - capture and measurement;
+  - statistical validation;
+  - performance overhead;
+  - regression and CI;
+  - deferred work and remaining limitations.
+- **Track B, public failure intelligence:** the items above, with sources, date ranges and
+  counts, plus the prioritised gap list.
 
-It never claims production-wide sub-1% reliability from synthetic workloads or a small pilot.
-A later field-validation phase is needed for any production claim.
+The report never claims production-wide or real-world sub-1% reliability: not from synthetic
+workloads, and not from public reports. A later field-validation phase is needed for any
+production claim.
+
+---
+
+## 10. Track B: public failure intelligence (method)
+
+**Purpose:** problem discovery, prioritisation and test-case generation. **Not a reliability
+measurement** (section 11).
+
+**Sources, in priority order:**
+1. **GitHub, the primary source:** Issues, Discussions and pull requests in the MCP SDKs, the
+   reference servers, major MCP clients and agent frameworks, popular third-party servers, and
+   other relevant repositories.
+2. Reddit: relevant MCP, AI engineering and developer communities.
+3. Hacker News.
+4. Indie Hackers.
+5. Other public developer platforms where useful.
+
+**Access rules:**
+- Publicly accessible information only.
+- No login, no bypassing authentication, access controls, paywalls or bot protection.
+- Respect each platform's terms and rate limits. Use official public endpoints where they
+  exist (for example, unauthenticated public search APIs), within their published limits, at a
+  low request rate.
+- If a platform blocks or limits access, record it as "not accessible" in the source access
+  log and move on. Never work around a block.
+- This session's GitHub tools are scoped to `dood1ebyte/stateguard` and are not used to read
+  other repositories. Public pages are read through public web access.
+- Track B never posts, comments, reacts, messages, or opens issues or pull requests anywhere.
+
+**One record per signal** (fields may be "not available", never guessed):
+- an id;
+- the source platform and URL(s);
+- the report date and the last activity date;
+- the affected project, server or client, with its version if stated;
+- the failure description (our own short paraphrase);
+- reproduction details as reported (available: yes, no or partial);
+- the failure category (`TASKMAP.md` A–K, Z, or "outside the taxonomy");
+- the status: open, resolved, recurring or unclear;
+- the severity (rubric below) and the developer impact;
+- StateGuard's capability: prevents, detects, recovers, cannot handle or unclear, with the
+  mechanism or limitation it rests on;
+- whether a controlled reproduction is possible (yes, no or unknown, with a note);
+- the classification: confirmed technical failure, likely technical failure, feature request,
+  speculation, opinion or unrelated;
+- the confidence that it is a genuine technical failure (high, medium or low, with the reason);
+- duplicate_of;
+- the collection date, and the query that found it.
+
+**Severity rubric:**
+- **Critical:** a silent wrong effect (a duplicate side effect, a false success, data loss or
+  corruption) or a security impact.
+- **High:** a lost or unknown outcome, a hang, or a crash that blocks use.
+- **Medium:** a recoverable error with a workaround.
+- **Low:** cosmetic or minor.
+
+**Deduplication:**
+- Reports of the same root issue (cross-posts, issues closed as duplicates, or the same error
+  signature in the same project and version) become one record with every URL.
+- Recurrence is the count of independent reports. It is reported as a count, with its date
+  range and search method, never as a rate.
+
+**Storage:**
+- Location: `research/pfi/` (corpus JSONL, source access log, queries, README), plus the tools
+  (validator, dedup, counts).
+- **The repository is public.** Records hold URLs, our own short paraphrases and
+  classifications. No copied bulk content. No personal data: no usernames, emails or profiles
+  beyond what a URL itself contains.
+- This corpus is not the private `PUBLIC_FAILURE_EVIDENCE_RESEARCH.md` from before Phase 1. That
+  file stays uncommitted, and is never recreated or merged into the corpus.
+
+---
+
+## 11. Evidence integrity (mandatory)
+
+- **A. Controlled experimental evidence (Track A):** what StateGuard demonstrably handles under
+  defined test conditions. It is the only basis for measured reliability claims.
+- **B. Public failure intelligence (Track B):** what developers publicly report experiencing,
+  including recurring problems and unmet needs. It is used for problem discovery,
+  prioritisation and test-case generation.
+- **Never:**
+  - use public issue counts, Reddit posts, Hacker News discussions or other anecdotal reports
+    to compute StateGuard's failure reduction, a real-world failure rate, or any percentage
+    about StateGuard;
+  - use them as a denominator or as a fault incidence;
+  - claim production-wide or real-world sub-1% reliability from this research;
+  - let Track B change the S6 protocol.
+- **Allowed:**
+  - "N independent public reports, found by the documented queries between dates D1 and D2,
+    describe failure X." A count, labelled as such.
+  - "StateGuard handles X under conditions Y in controlled reproduction Z."
+- Tracks A and B meet **only through a named controlled reproduction**.
+- Every report keeps the two in separate sections.

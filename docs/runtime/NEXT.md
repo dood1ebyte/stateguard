@@ -12,7 +12,20 @@ ground truth. Labels: VERIFIED / INFERRED / UNVERIFIED.
 - the deferral list;
 - clarifications A–D;
 - the fixed S6 protocol;
-- approvals A1–A7 and the consent process.
+- approvals A1–A7 (A6, recruitment, withdrawn) and the rule that there is no external contact
+  or data sharing (section 8);
+- the two validation tracks (section 10, Track B method; section 11, evidence integrity).
+
+**Validation strategy, amended by the founder on 2026-11-17:**
+- **No external developer recruitment, contact or data sharing.** Phase 2 does not depend on
+  outside developers, and their absence is not a blocker.
+- **Track A:** controlled engineering validation, unchanged, including the fixed S6 protocol.
+  It is the only basis for measured reliability claims.
+- **Track B:** public failure intelligence. MCP failure reports are collected from GitHub
+  first, then Reddit, Hacker News, Indie Hackers and others; public information only.
+  - Its workflow is built in S5 (S5.5), and its analysis and reproductions are done in S7.
+  - It is never used for reliability rates, failure-reduction percentages, a sub-1% claim, or
+    the S6 fault mix.
 
 Where it differs from the Phase 1 rules below, it wins. Each session runs from its scheduled
 task's prompt plus that file.
@@ -46,7 +59,8 @@ for CI only.
   - Not investigated at setup: that is S1.3.
 
 **Approvals:**
-- A1, A2, A3, A4 and A6: approved.
+- A1, A2, A3 and A4: approved (A4's boundary is kept; no developer data is expected).
+- **A6 (recruitment): withdrawn on 2026-11-17.**
 - **A5: no publishing.**
 - **A7: no credentials.**
 
@@ -182,6 +196,18 @@ allowed. Early completion or idle capacity never advances the schedule.
       instruction, as Phase 2 S1 (see "Phase 2" above).
     - Phase 2 is authorised and runs from `PHASE2_PLAN.md`.
 - **The 14:00 IST end** is enforced by each session's own clock checks, not by the platform.
+
+## Handoff (validation-strategy amendment, Tue 2026-11-17 04:18 IST; no engineering)
+
+- **Changed:**
+  - `PHASE2_PLAN.md` (recruitment removed; Track B in sections 10 and 11; S5, S6 and S7
+    revised; completion criteria split into Track A and Track B);
+  - this file;
+  - the S5, S6 and S7 scheduled-task instructions (same IDs, same times).
+- **Unchanged:** S1–S4, their instructions and tasks, every engineering deliverable, the
+  safety gates, and the statistical protocol (one clarification added: public reports never
+  weight the fault mix).
+- **Exact next action:** S1, Wed 2026-11-18, 09:00 IST: the S1 starting checklist above.
 
 ## Handoff (Phase 2 setup, Tue 2026-11-17 02:25–02:40 IST; no engineering)
 
@@ -358,6 +384,7 @@ The queue as it stood before Session 5 (done: items 1–3, and 5):
 One line per session, newest first:
 `YYYY-MM-DD · task · result (tests: N passed / failures) · next`.
 
+- 2026-11-17 · Validation-strategy amendment (founder; 04:18 IST, no engineering) · recruitment removed; Track B (public failure intelligence) added; S5–S7 instructions updated, same IDs and times; S1–S4 unchanged · pushed, level with origin (tests: none run) · S1 Wed 18 Nov 09:00 IST
 - 2026-11-17 · Phase 2 setup on the founder's final authorisation (02:25–02:40 IST, no engineering) · PHASE2_PLAN.md committed; draft PR #19 opened (CI: lint, isolation, mypy passed; Ubuntu 3.11–3.13 test jobs failed fast, not investigated; macOS running); S1 task repurposed, S2–S7 created, all verified · pushed, level with origin (tests: none run) · S1 Wed 18 Nov 09:00 IST
 - 2026-11-16 · Session 5's scheduled task (`trig_01JK1QRZxsKzfao7RfLfLDVA`, delivered 09:01 IST) · Phase 1 complete (2026-11-15); awaiting the founder's Phase 2 authorization. No founder instruction since the report, so no engineering (mandate §10) · pushed, level with origin (tests: none run) · wait for the founder
 - 2026-11-15 · Session 5, held early on the founder's instruction (04:15–06:00 IST), then Session 6's agenda · D16 keyed attempt budget 3 (R1: sg_keyed 18/240 → 1/240 and 4/240); R2 repeated faults on stdio, 0 unsafe; D17 keyed resend meets its own deadline (stdio); B6 and S9 identical to B5 and S8 cell for cell; P5 overhead within P4's range; PHASE1_COMPLETION_REPORT.md written, Phase 1 complete · pushed, level with origin (tests: Python 3.11.18 / 3.12.3 / 3.13.18 / 3.14.6 each 6629 passed / 0 failed / 0 skipped; TypeScript tsc clean, 74/74; ruff, format, mypy clean) · wait for the founder's Phase 2 authorization
