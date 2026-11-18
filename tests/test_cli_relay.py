@@ -83,7 +83,11 @@ def test_relay_http_without_the_mcp_extra_says_so(
             raise ModuleNotFoundError("No module named 'httpx2'", name="httpx2")
         return real_import(name, *args, **kwargs)
 
+    import stateguard.relay
+
+    # Imported earlier in this process, the package attribute would answer the import.
     monkeypatch.delitem(sys.modules, "stateguard.relay.http", raising=False)
+    monkeypatch.delattr(stateguard.relay, "http", raising=False)
     monkeypatch.setattr(builtins, "__import__", no_httpx2)
     with pytest.raises(SystemExit) as exit_info:
         cli.main(["relay", "http", "--upstream", "http://127.0.0.1:1/mcp"])

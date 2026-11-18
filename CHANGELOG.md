@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The relays are package commands.** `stateguard relay stdio [opts] -- <server>`
+  (`stateguard.relay.stdio`) and `stateguard relay http --upstream URL [opts]`
+  (`stateguard.relay.http`, needs the `mcp` extra); `python -m stateguard` runs the CLI.
+  `examples/mcp/stdio_proxy.py` and `http_proxy.py` remain as thin wrappers (imported,
+  they are the package modules themselves).
+- **`stateguard relay stdio --keys auto`** (default off) starts a Python server under
+  the injector and a Node server with the TypeScript preload, detected from the server
+  command, so the keyed tools (`--keyed-tools`, plus tools declared `non_idempotent` or
+  `idempotent` in `--effects`) honour idempotency keys. A command it cannot read with
+  certainty runs unkeyed and the relay says why. The wheel ships the preload
+  (`stateguard/relay/ts/`).
+
 ### Changed
 - **Three exact-but-wrong casts are held for confirmation instead of applied.**
   `TypeCoercionStrategy` records a semantic objection (`evidence.contradiction`,
