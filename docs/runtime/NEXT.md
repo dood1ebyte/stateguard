@@ -70,7 +70,7 @@ for CI only.
 - **A5: no publishing.**
 - **A7: no credentials.**
 
-### S1 result (Wed 2026-11-18, 09:02 IST to about 11:00 IST): all deliverables done
+### S1 result (Wed 2026-11-18, 09:02–11:15 IST): all deliverables done
 
 - **S1.1, done** (`0e606f3`, test fix `85f5c97`):
   - the relays are package modules, `stateguard.relay.stdio` and `stateguard.relay.http`;
@@ -133,8 +133,12 @@ for CI only.
   - **Comparison tool:** `benchmarks/runtime/compare_cells.py`. The per-part results are in
     `summary_*.compare.txt`.
   - **CI:** green on `def9cc6` (run 53, all 11 jobs).
-  - **Suites, TypeScript, lint:** see the session log below. TypeScript: `tsc` clean, tests
-    74/74. ruff, format and mypy (both configurations): clean.
+  - **Suites, final code:** Python 3.11.18, 3.12.3, 3.13.18 and 3.14.6 each 6662 passed,
+    0 failed, 0 skipped, with `STATEGUARD_MCP1_PYTHON` set. The first 3.14 run had 2
+    errors: the end-to-end fixture called the interpreter's pip, and that venv has none. The
+    fixture now uses the fresh venv's own pip (`e6bdd18`); the re-run was clean.
+  - **TypeScript:** `tsc` clean, tests 74/74.
+  - **Lint:** ruff, format and mypy (both configurations) clean.
 - **Deferred or not attempted in S1:** nothing from the S1 agenda.
   - Out of scope and noted for later sessions: `npx`/`uvx` keying, a keyed-tools wildcard
     in the adapters, and `--keys auto` for the HTTP relay (it connects to a URL; it starts
@@ -255,6 +259,20 @@ allowed. Early completion or idle capacity never advances the schedule.
       instruction, as Phase 2 S1 (see "Phase 2" above).
     - Phase 2 is authorised and runs from `PHASE2_PLAN.md`.
 - **The 14:00 IST end** is enforced by each session's own clock checks, not by the platform.
+
+## Handoff (end of S1, Wed 2026-11-18 11:15 IST)
+
+- **Done:** S1.1, S1.2 and S1.3, with every acceptance item (see "S1 result" above).
+  - Code: `d486a58` (CI fixes), `0e606f3` (packaged relays, `--keys auto`), `85f5c97` (a CLI
+    test that would hang), `def9cc6` (`--keys auto` requires `--retry auto`), `e6bdd18` (the
+    end-to-end fixture's pip).
+  - Evidence: B7 and S10, cell for cell against B5/B6 and S8/S9, all StateGuard cells equal.
+- **Unfinished:** none of the S1 agenda. The agenda finished early. No earlier session has
+  deferred items, so none were taken, and S2's agenda was not started.
+- **Blockers:** none.
+- **Pushed:** everything; origin and local are level. **Uncommitted:** nothing.
+  **Running:** nothing (batches, suites and monitors all stopped).
+- **Exact next action:** S2, Fri 2026-11-20, 09:00 IST: the S2 starting checklist above.
 
 ## Handoff (validation-strategy amendment, Tue 2026-11-17 04:18 IST; no engineering)
 
@@ -443,6 +461,7 @@ The queue as it stood before Session 5 (done: items 1–3, and 5):
 One line per session, newest first:
 `YYYY-MM-DD · task · result (tests: N passed / failures) · next`.
 
+- 2026-11-18 · Phase 2 S1 (09:02–11:15 IST) · relays packaged (`stateguard relay stdio|http`); `--keys auto` (injector for Python, preload for Node, unkeyed with a reason otherwise); end-to-end from the wheel (keyed write, after_record crash replayed once); B7 (HTTP) and S10 (stdio) equal to B5/B6 and S8/S9 in every StateGuard cell; sg_keys_auto equal to sg_keyed on 3 servers; CI green on `def9cc6` (S1.3: 3 failures fixed; 1 hanging test fixed) · pushed, level with origin (tests: Python 3.11.18 / 3.12.3 / 3.13.18 / 3.14.6 each 6662 passed / 0 failed / 0 skipped; TypeScript tsc clean, 74/74; ruff, format, mypy clean) · S2 Fri 20 Nov 09:00 IST
 - 2026-11-17 · Validation-strategy amendment (founder; 04:18 IST, no engineering) · recruitment removed; Track B (public failure intelligence) added; S5–S7 instructions updated, same IDs and times; S1–S4 unchanged · pushed, level with origin (tests: none run) · S1 Wed 18 Nov 09:00 IST
 - 2026-11-17 · Phase 2 setup on the founder's final authorisation (02:25–02:40 IST, no engineering) · PHASE2_PLAN.md committed; draft PR #19 opened (CI: lint, isolation, mypy passed; Ubuntu 3.11–3.13 test jobs failed fast, not investigated; macOS running); S1 task repurposed, S2–S7 created, all verified · pushed, level with origin (tests: none run) · S1 Wed 18 Nov 09:00 IST
 - 2026-11-16 · Session 5's scheduled task (`trig_01JK1QRZxsKzfao7RfLfLDVA`, delivered 09:01 IST) · Phase 1 complete (2026-11-15); awaiting the founder's Phase 2 authorization. No founder instruction since the report, so no engineering (mandate §10) · pushed, level with origin (tests: none run) · wait for the founder
