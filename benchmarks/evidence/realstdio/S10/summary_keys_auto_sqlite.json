@@ -1,0 +1,105 @@
+{
+ "n_rows": 48,
+ "driver_errors": 0,
+ "servers": {
+  "sqlite": {
+   "sg_keys_auto": {
+    "fault_free": {
+     "fail": 0,
+     "n": 12,
+     "rifr": 0.0,
+     "ci95": [
+      0.0,
+      0.2425
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 24,
+     "n": 36,
+     "rifr": 0.6667,
+     "ci95": [
+      0.5033,
+      0.7979
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 24,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 0,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {
+     "surfaced_unknown": 24,
+     "not_executed": 12
+    },
+    "server_outcomes": {
+     "executed": 12,
+     "replayed": 12
+    },
+    "invocation_records": 48,
+    "invocation_record_mismatch": 0,
+    "invocation_record_mismatch_runs": [],
+    "latency_fault_free": {
+     "n": 12,
+     "mean": 2.243,
+     "median": 2.239,
+     "p95": 2.395
+    },
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 0,
+    "cells": {
+     "write/after_begin": [
+      12,
+      12
+     ],
+     "write/after_effect": [
+      12,
+      12
+     ],
+     "write/after_record": [
+      0,
+      12
+     ],
+     "write/none": [
+      0,
+      12
+     ]
+    }
+   }
+  }
+ }
+}
