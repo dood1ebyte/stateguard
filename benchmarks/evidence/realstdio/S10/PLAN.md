@@ -41,3 +41,13 @@ and naive arms never run the relay, so a difference there is reported as run-to-
 of the baseline, never hidden. keys_auto is compared with S10's own sg_keyed cells.
 
 Synthetic fault injection on three pinned servers; not production traffic.
+
+---
+
+**Run log (added after rows; the plan above is unchanged).**
+- 2026-11-18 about 10:10 IST: the container restarted during part `filesystem`, after 240 of
+  its 624 rows. They are kept as `rows_filesystem_interrupted.jsonl` and `.err`, with no
+  codestate or summary, and are not counted. In those 240 rows: 0 driver errors, 0 unsafe
+  outcomes in StateGuard arms. The part is re-run complete, same command and TRIAL_OFFSET, as
+  `filesystem_r2`; that run is the one compared. The remaining parts run after it,
+  unchanged.
