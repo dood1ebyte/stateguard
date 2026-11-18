@@ -70,55 +70,108 @@ for CI only.
 - **A5: no publishing.**
 - **A7: no credentials.**
 
-### S1 starting checklist (Wed 2026-11-18, 09:00 IST)
+### S1 result (Wed 2026-11-18, 09:02 IST to about 11:00 IST): all deliverables done
 
-1. Run `TZ=Asia/Kolkata date` and confirm the time is inside 09:00–14:00. Note the start time.
+- **S1.1, done** (`0e606f3`, test fix `85f5c97`):
+  - the relays are package modules, `stateguard.relay.stdio` and `stateguard.relay.http`;
+  - they run as `stateguard relay stdio [opts] -- <server>` and
+    `stateguard relay http --upstream URL [opts]`, or as `python -m stateguard relay ...`;
+  - `examples/mcp/stdio_proxy.py` and `http_proxy.py` are thin wrappers. Imported, they are
+    the package modules themselves (a `sys.modules` alias), so every existing test, driver
+    and monkeypatch works unchanged;
+  - `stateguard relay http` without the `mcp` extra exits 2 and names the extra.
+- **S1.2, done** (`0e606f3`, plus `def9cc6`: `--keys auto` requires `--retry auto`):
+  - `--keys auto` (default off) starts:
+    - a Python server (`python SCRIPT`, `python -m MODULE`, a console script whose `#!` names
+      Python) under the injector;
+    - a Node server (`node ENTRY`, or an npm bin with `#!/usr/bin/env node`) with the preload.
+  - Everything else runs unkeyed, with the reason on stderr and in
+    `relay_started.keys.unkeyed_reason`; that covers `npx`, `uvx`, `docker`, shell
+    wrappers, binaries, and `python` with an option before the script.
+  - The decisions are recorded in `KEY_INJECTION_AND_HTTP_RELAY.md` section 9:
+    - keyed tools = `--keyed-tools` plus the tools declared `non_idempotent` or `idempotent`
+      in `--effects` (no implicit "every non-read tool"; a wildcard in the adapters is
+      deferred);
+    - the store is `~/.stateguard/keys.db`, with a scope per server command;
+    - the Python server imports stateguard from a directory that holds only it;
+    - the preload ships in the wheel (`stateguard/relay/ts/`);
+    - the advertisement is verified after each listing (`keys_advertised` /
+      `keys_not_advertised`);
+    - npx and uvx support was not attempted.
+- **Acceptance:**
+  - **End-to-end test, from the wheel** (`tests/examples/test_relay_keys_auto_e2e.py`):
+    - builds the wheel and installs it alone in a fresh virtual environment;
+    - runs `stateguard relay stdio --keys auto -- node <pinned server-memory>`;
+    - `add_observations` is keyed;
+    - a TEST-ONLY `after_record` crash is answered `replayed`, with one answer and one
+      effect. **Passes locally.** In CI it skips, because the pinned Node server is not
+      installed there.
+  - **B7, the HTTP matrix through `stateguard relay http`:** every StateGuard cell of all 8
+    parts equals B5/B6:
+    - notes and tsnotes: sg 84/192, sg_keyed 24/192, sg_keyed_deadline 0/192;
+    - everything: sg 12/96, sg_deadline 0/96;
+    - crash cells: keyed 24/36, with `after_record` 0/12;
+    - controls: 0;
+    - 0 unsafe outcomes and 0 relay-record mismatches.
+    The only difference anywhere is a baseline arm, which runs no relay: tsnotes naive
+    `read/none` 0/12, against 1/12 in B5. The plan named that in advance.
+  - **S10, the stdio matrix through `stateguard relay stdio`:** every StateGuard cell equals
+    S8/S9:
+    - sqlite, memory and filesystem: sg 84/156, sg_keyed 24/156;
+    - memory_idempotent: 0/96;
+    - slow: 0/12 per server;
+    - 0 unsafe outcomes and 0 relay-record mismatches; the baselines were identical too.
+  - **New `sg_keys_auto` arm**, where the relay wraps the plain server command itself:
+    identical to sg_keyed on its 4 cells on all three servers:
+    - `write/none` executed;
+    - `after_record` replayed;
+    - `after_begin` and `after_effect` surfaced as unknown, never success or failure;
+    - 0 unsafe.
+  - **Interruption:** a container restart cut S10 `filesystem` short at 240/624 rows. Those
+    rows are kept as `rows_filesystem_interrupted.*` and are not counted. The part was re-run
+    complete as `filesystem_r2` (run log in S10's `PLAN.md`).
+  - **Comparison tool:** `benchmarks/runtime/compare_cells.py`. The per-part results are in
+    `summary_*.compare.txt`.
+  - **CI:** green on `def9cc6` (run 53, all 11 jobs).
+  - **Suites, TypeScript, lint:** see the session log below. TypeScript: `tsc` clean, tests
+    74/74. ruff, format and mypy (both configurations): clean.
+- **Deferred or not attempted in S1:** nothing from the S1 agenda.
+  - Out of scope and noted for later sessions: `npx`/`uvx` keying, a keyed-tools wildcard
+    in the adapters, and `--keys auto` for the HTTP relay (it connects to a URL; it starts
+    no server).
+  - The deferral list (`PHASE2_PLAN.md` section 4) is unchanged; no earlier session had
+    deferred anything yet.
+
+### S2 starting checklist (Fri 2026-11-20, 09:00 IST)
+
+1. Run `TZ=Asia/Kolkata date` and confirm the time is inside 09:00–14:00.
 2. Check git:
-   - `git status`, the branch, `git log -3`;
+   - `git status` and the branch;
    - `git fetch origin claude/serene-bohr-o28snr`;
    - `git rev-list --left-right --count HEAD...origin/claude/serene-bohr-o28snr` must be `0 0`.
-3. Check the toolchain. On 2026-11-17 it was present:
-   - `.venv` and `/tmp/mcp1` (3.13.18; mcp 2.3.0; mcp 1.9.4 with mcp-server-sqlite 2025.4.25);
-   - `/tmp/venv311` (3.11.18), `/tmp/venv312` (3.12.3), `/tmp/venv314b` (3.14.6);
+3. Check the toolchain; it was present on 2026-11-18:
+   - `.venv` (3.13.18);
+   - `/tmp/mcp1` (mcp 1.9.4 with mcp-server-sqlite 2025.4.25);
+   - `/tmp/venv311`, `/tmp/venv312`, `/tmp/venv314b`;
    - node v22.23.4;
    - `/opt/sg-servers/{everything,memory,filesystem}`;
    - `adapters/typescript/node_modules`.
-   If the container was replaced, rebuild it per "Environment" below.
-4. CI: read PR #19's check runs and the failed jobs' logs (`mcp__github__get_job_logs`). List
-   each failure for S1.3.
-5. Start the Python 3.13 suite in the background as a baseline before any change (about 10
-   minutes).
-6. **S1.1**, the relays as package commands:
-   - move the relays into the package;
-   - add a `relay` subcommand to `stateguard` (`src/stateguard/cli.py`);
-   - make `examples/mcp/stdio_proxy.py` and `http_proxy.py` thin wrappers;
-   - check which optional dependencies the HTTP relay needs (extras in `pyproject.toml`).
-7. **S1.2**, `--keys auto`:
-   - a Python server (`python`, `python -m`, `uv`/`uvx`) runs as
-     `python -m stateguard.adapters.mcp.inject …`;
-   - a Node server (`node`/`npx`) runs with `--import <preload>`, and the preload must be
-     reachable from an installed wheel;
-   - choose a default key-store path, and which tools are keyed (non-read tools), and record
-     both decisions;
-   - otherwise run unkeyed, and log why.
-8. **Acceptance tests:**
-   - a new end-to-end test:
-     - build the wheel (`pip wheel . --no-deps`);
-     - install it into a fresh virtual environment;
-     - run `stateguard relay stdio --keys auto -- <pinned server-memory>`, with
-       `STATEGUARD_FAULT=after_record` on `add_observations`;
-     - assert the write tool is keyed, executed once and replayed once;
-   - the HTTP and stdio keyed and unkeyed matrices on the S1 commit through the new commands
-     (new batches, plans written before any rows), compared cell by cell with B5/B6 and
-     S8/S9;
-   - Python 3.11–3.14 suites, TypeScript `tsc` and `npm test`, ruff, format, mypy.
-9. **S1.3:** fix or root-cause each CI failure, time-boxed to 1 hour.
-10. Commit and push each finished piece (about every 60 minutes). No new task after 13:30. By
-    14:00:
-    - stop background processes;
-    - update NEXT.md;
-    - push and confirm `0 0`;
-    - give the short report.
+   The container can restart mid-session (it did on 2026-11-18): commit each finished batch
+   part as it lands.
+4. CI: confirm the last run on PR #19 is green.
+5. Start the Python 3.13 suite in the background as a baseline.
+6. Do S2 per `PHASE2_PLAN.md` (it depends on S1.1, done):
+   - S2.1: `stateguard capture` and `stateguard report`;
+   - S2.2: denominator integrity, and duplicate detection from the key store;
+   - S2.3: HTTP `--record`, in shadow mode;
+   - S2.4: real servers driven by scripted workloads, labelled "real server, scripted
+     workload".
+   The capture acceptance (clarification C): at least 1,000 calls across at least 3 real
+   servers, shadow and auto paired where possible, every denominator reported.
+7. Batch evidence:
+   - the plan is written before any row, through `run_batch.py`;
+   - evidence-only commits carry `[skip ci]`;
+   - the last commit of the session runs full CI.
 
 ## Rules for scheduled sessions (owner, 2026-11-05)
 
