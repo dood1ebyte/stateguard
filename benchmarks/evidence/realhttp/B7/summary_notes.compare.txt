@@ -1,0 +1,5 @@
+MATCH notes       naive                baseline   new 48/192  ref(B5) 48/192  cells 16  unsafe 48
+MATCH notes       raw                  baseline   new 168/192  ref(B5) 168/192  cells 16  unsafe 24
+MATCH notes       sg                   stateguard new 84/192  ref(B5) 84/192  cells 16  unsafe 0
+MATCH notes       sg_keyed             stateguard new 24/192  ref(B6) 24/192  cells 16  unsafe 0
+MATCH notes       sg_keyed_deadline    stateguard new 0/192  ref(B6) 0/192  cells 16  unsafe 0
