@@ -52,11 +52,17 @@ fires into this conversation (`session_01NykZHSv2cJyQrzsT2GQbv8`), on the reposi
 for CI only.
 - Never merge it, and never mark it ready, without the founder's separate approval.
 - Every push to the branch updates it.
-- First CI run (head `eb8da57`, run 43955222895), as it stood at setup:
-  - lint, import isolation and mypy passed;
-  - the Ubuntu test jobs for 3.11, 3.12 and 3.13 **failed within 40 s**;
-  - macOS 3.11–3.14 and Ubuntu 3.14 were still running.
-  - Not investigated at setup: that is S1.3.
+- **CI is green on the S1 code.** Run 53 (head `def9cc6`) passed all 11 jobs: Ubuntu and
+  macOS × Python 3.11–3.14, mypy (both configurations), ruff, and import isolation.
+  - S1.3 root-caused and fixed the three failures of the first runs (`d486a58`):
+    - an unreadable `/root` path in a test's probe;
+    - `prctl`, which is Linux-only;
+    - a macOS 3.11 timing margin.
+    Run 50 on `d486a58` was green.
+  - Run 51 (`0e606f3`) hung in a new CLI test, which started a real HTTP relay (fixed in
+    `85f5c97`). I cancelled it, and also run 52, which run 53 superseded.
+- **Evidence-only commits carry `[skip ci]`**, so data commits do not each queue the macOS
+  matrix. Every code commit, and the session's last commit, runs full CI.
 
 **Approvals:**
 - A1, A2, A3 and A4: approved (A4's boundary is kept; no developer data is expected).
