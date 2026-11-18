@@ -84,15 +84,19 @@ def installed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A fresh virtual environment with only the freshly built wheel in it."""
     base = tmp_path_factory.mktemp("wheel-e2e")
     wheels = base / "dist"
-    subprocess.run(
-        [sys.executable, "-m", "pip", "wheel", str(ROOT), "--no-deps", "-q", "-w", str(wheels)],
-        check=True,
-        timeout=600,
-    )
-    (wheel,) = wheels.glob("sguard-*.whl")
     venv = base / "venv"
+    # The venv's own pip (ensurepip) builds the wheel: the test interpreter's environment
+    # may have no pip at all (a uv-made venv). The build is isolated, so the venv still
+    # holds only pip until the wheel is installed.
     subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, timeout=300)
     python = venv / "bin" / "python"
+    subprocess.run(
+        [str(python), "-m", "pip", "wheel", str(ROOT), "--no-deps", "-q", "-w", str(wheels)],
+        check=True,
+        timeout=600,
+        env=_clean_env(base),
+    )
+    (wheel,) = wheels.glob("sguard-*.whl")
     subprocess.run(
         [str(python), "-m", "pip", "install", "-q", "--no-deps", "--no-index", str(wheel)],
         check=True,
