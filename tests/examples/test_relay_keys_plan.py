@@ -194,7 +194,11 @@ def test_keyed_tools_are_deduplicated_in_order(tmp_path: Path) -> None:
 
 
 def test_the_relay_refuses_contradictory_key_options(tmp_path: Path) -> None:
-    for extra in (["--keyed-tools", "w"], ["--keys", "auto", "--no-idempotency-keys"]):
+    for extra in (
+        ["--keyed-tools", "w"],
+        ["--retry", "auto", "--keys", "auto", "--no-idempotency-keys"],
+        ["--keys", "auto", "--keyed-tools", "w"],  # no --retry auto
+    ):
         done = subprocess.run(
             [sys.executable, str(RELAY), *extra, "--", sys.executable, "s.py"],
             capture_output=True,

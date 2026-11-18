@@ -2,11 +2,15 @@
 Compare two recorded batches cell by cell (TEST-ONLY harness).
 
     python benchmarks/runtime/compare_cells.py NEW.json REF.json [REF2.json ...] [--json OUT]
+        [--arm-map NEW_ARM=REF_ARM ...] [--new-cells-only]
 
 Each file is a ``summary*.json`` written by ``realhttp/summarize.py`` (both suites use it).
 For every (server, arm, cell) in NEW, the reference is the *last* REF file that has that
 server and arm (so ``B5 B6`` compares keyed arms with B6 and the others with B5). A cell is
 ``[failures, trials]``. Output: one line per difference, then the totals per arm; exit 0.
+
+``--arm-map sg_keys_auto=sg_keyed`` compares an arm with a differently named reference arm;
+``--new-cells-only`` ignores reference cells the new batch did not run (a subset of cells).
 
 Baseline arms (raw, naive) never run the relay; a difference there is labelled ``baseline``
 so it is reported, never hidden, and never mistaken for a relay change.
@@ -39,15 +43,21 @@ def _unsafe(summary: dict[str, Any]) -> dict[tuple[str, str], dict[str, int]]:
     }
 
 
-def compare(new: Path, refs: list[Path]) -> dict[str, Any]:
+def compare(
+    new: Path,
+    refs: list[Path],
+    arm_map: dict[str, str] | None = None,
+    new_cells_only: bool = False,
+) -> dict[str, Any]:
     new_summary = json.loads(new.read_text())
     ref_summaries = [(r, json.loads(r.read_text())) for r in refs]
     new_cells = _cells(new_summary)
     report: dict[str, Any] = {"new": str(new), "refs": [str(r) for r in refs], "arms": []}
     for (server, arm), cells in sorted(new_cells.items()):
         ref_name, ref_cells = None, None
+        ref_arm = (arm_map or {}).get(arm, arm)
         for path, summary in ref_summaries:
-            found = _cells(summary).get((server, arm))
+            found = _cells(summary).get((server, ref_arm))
             if found is not None:
                 ref_name, ref_cells = path, found
         entry: dict[str, Any] = {
@@ -55,10 +65,13 @@ def compare(new: Path, refs: list[Path]) -> dict[str, Any]:
             "arm": arm,
             "kind": "baseline" if arm in BASELINE else "stateguard",
             "ref": str(ref_name) if ref_name else None,
+            "ref_arm": ref_arm,
             "cells": len(cells),
             "differences": [],
             "unsafe": _unsafe(new_summary)[(server, arm)],
         }
+        if ref_cells is not None and new_cells_only:
+            ref_cells = {c: v for c, v in ref_cells.items() if c in cells}
         if ref_cells is None:
             entry["differences"].append({"cell": "*", "new": None, "ref": "no reference"})
         else:
@@ -82,11 +95,18 @@ def main(argv: list[str]) -> int:
     parser.add_argument("new")
     parser.add_argument("refs", nargs="+")
     parser.add_argument("--json")
+    parser.add_argument("--arm-map", action="append", default=[], metavar="NEW=REF")
+    parser.add_argument("--new-cells-only", action="store_true")
     args = parser.parse_args(argv)
-    report = compare(Path(args.new), [Path(r) for r in args.refs])
+    arm_map = dict(item.split("=", 1) for item in args.arm_map)
+    report = compare(
+        Path(args.new), [Path(r) for r in args.refs], arm_map, args.new_cells_only
+    )
     for entry in report["arms"]:
         status = "MATCH" if not entry["differences"] else "DIFF"
         ref = Path(entry["ref"]).parent.name if entry["ref"] else "-"
+        if entry["ref_arm"] != entry["arm"]:
+            ref += f":{entry['ref_arm']}"
         unsafe = sum(entry["unsafe"].values())
         print(
             f"{status:5} {entry['server']:11} {entry['arm']:20} {entry['kind']:10} "

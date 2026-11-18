@@ -447,3 +447,86 @@ The report says so in its output.
     without re-read (`unknown`).
 
 **Not yet:** no real capture has been run, so no real incidence is known yet.
+
+## 9. Change 4 (Phase 2 S1, 2026-11-18): packaged relays and `--keys auto`
+
+**Code:** `0e606f3` (with a usage check added after it: `--keys auto` requires `--retry
+auto`).
+
+**Packaged relays.**
+- The relays are `stateguard.relay.stdio` and `stateguard.relay.http`, run as
+  `stateguard relay stdio [opts] -- <server>` and `stateguard relay http --upstream URL
+  [opts]` (or `python -m stateguard relay ...`).
+- `examples/mcp/stdio_proxy.py` and `http_proxy.py` are thin wrappers. Run as scripts, they
+  are the relays. Imported, they replace themselves in `sys.modules` with the package module,
+  so code that patches the relay module patches the one that runs.
+- `stateguard relay http` without the `mcp` extra exits 2 and names the missing module and
+  the extra.
+
+**`--keys auto` (stdio relay; default off).** The relay starts the server under one of the
+two existing adapters, chosen from the server command (`stateguard.relay.keys.plan`):
+
+| Server command | Started as | Checked first |
+|---|---|---|
+| `python[3[.N]] SCRIPT ...` or `python -m MODULE ...` | `python -m stateguard.adapters.mcp.inject SCRIPT/-m MODULE ...` | the interpreter runs Python 3.11+ and imports `mcp` and the injector |
+| a console script whose `#!` names Python (directly or `/usr/bin/env python3`) | its interpreter `-m stateguard.adapters.mcp.inject <script> ...` | as above |
+| `node [opts] ENTRY.js ...`, or an npm-installed bin (`#!/usr/bin/env node`) | `node --import <preload.ts> ...` | Node 22.18 or later (type stripping) |
+| `npx`, `uvx`, `pipx`, `docker`, `podman`, `bunx`, `bun`, `deno` | unchanged, **unkeyed** | — |
+| `python` with another option before the script; any other script or binary | unchanged, **unkeyed** | — |
+
+**Decisions, recorded:**
+1. **Off by default.** With `--keys` off nothing changes, so every Phase 1 matrix stands. S5
+   freezes the recommended configuration.
+2. **Which tools are keyed:** those named with `--keyed-tools`, plus those the operator
+   declared `non_idempotent` or `idempotent` in `--effects`. There is no implicit "every
+   non-read tool": both adapters take an explicit list (`STATEGUARD_KEYED_TOOLS`), and a
+   wildcard in the adapters is deferred. With nothing to key, the server runs unkeyed and the
+   relay says so.
+3. **Key store:** `~/.stateguard/keys.db` (`--keys-db`); scope `sg-` plus 12 hex digits of
+   the SHA-256 of the server command (`--keys-scope`), so keys never cross servers.
+4. **Python servers import stateguard from a directory holding only it.** That directory is
+   a symlink next to the key store (`pythonpath/<hash>/stateguard`), put first on the
+   server's `PYTHONPATH`. The relay's own environment (its `mcp` 2.x, for example) never
+   shadows the server's (`mcp` 1.x).
+5. **`npx` and `uvx` run unkeyed.** They start the server from a cache, in an environment the
+   relay does not control:
+   - `uvx`: stateguard is not installed in that environment;
+   - `npx`: `NODE_OPTIONS=--import` would also load the preload into npm's own process.
+   The reason tells the operator to run the server's own entry point. Supporting them is not
+   attempted in S1.
+6. **No guessing.** A command that cannot be read with certainty runs as given, unkeyed. The
+   reason goes to stderr and to `relay_started.keys.unkeyed_reason` in the audit log.
+7. **A keyed launch is verified, not assumed.** After each listing, the relay logs
+   `keys_advertised` or `keys_not_advertised` for each keyed tool. The second means the server
+   registered the tool outside the SDK the adapter wraps, so its calls go unkeyed. A keyed
+   tool missing from the listing is logged as `keyed_tools_not_listed`.
+8. **A configuration made by hand wins.** If `STATEGUARD_IDEMPOTENCY_DB` or
+   `STATEGUARD_KEYED_TOOLS` is already set, `--keys auto` changes nothing and says so.
+9. **The wheel ships the preload** (`stateguard/relay/ts/`, from `adapters/typescript/src`
+   at build time, with a `package.json` declaring ES modules). A checkout uses
+   `adapters/typescript/src/preload.ts`, and `STATEGUARD_PRELOAD` overrides both.
+
+**What it does not change:** the crash windows. As before, keyed tools are two-phase with no
+recovery check:
+- a crash after the key's record is answered from the record on the resend;
+- a crash between claiming the key and recording it stays **unknown**, never success or
+  failure.
+Closing that window needs a cooperating server that commits the key with the effect (Phase 2
+S3).
+
+**Evidence:**
+- `tests/examples/test_relay_keys_auto_e2e.py`:
+  - builds the wheel and installs it alone in a fresh virtual environment, with no
+    `PYTHONPATH`; the relay's stateguard is asserted to be the installed one;
+  - runs `stateguard relay stdio --keys auto -- node <pinned server-memory>`;
+  - `add_observations` is advertised as keyed and `search_nodes` is not;
+  - a TEST-ONLY `after_record` crash is answered `replayed`, with one answer to the client
+    and the observation in the memory file once;
+  - a shell-wrapper command runs unkeyed, with the reason.
+- `tests/examples/test_relay_keys_plan.py`: the detection rules; also the pinned mcp 1.x
+  `mcp-server-sqlite` console script started keyed through the relay.
+- Matrices through the new commands: B7 (HTTP) and S10 (stdio, including an `sg_keys_auto`
+  arm on the fault-free and crash cells of all three servers). Their results are in
+  `NEXT.md`.
+
+All of it is synthetic fault injection on pinned servers; none of it is production traffic.

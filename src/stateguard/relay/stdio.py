@@ -3233,6 +3233,11 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             "--keys auto starts the server with keys; --no-idempotency-keys never uses "
             "them: choose one"
         )
+    if args.keys == "auto" and args.retry != "auto":
+        parser.error(
+            "--keys auto needs --retry auto: the relay sends keys only when it may resend a "
+            "call, so without it the server would be keyed for nothing"
+        )
     reconcile: ReconcilePolicy | None = None
     if args.effects and effects is not None:
         # Checked before the server starts: an unsafe probe configuration runs nothing.
