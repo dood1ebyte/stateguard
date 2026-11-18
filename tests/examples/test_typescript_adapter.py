@@ -55,7 +55,16 @@ def _pinned(env: str, *candidates: str) -> Path:
     if os.environ.get(env):
         return Path(os.environ[env])
     paths = [Path(c) for c in candidates]
-    return next((p for p in paths if p.exists()), paths[0])
+    return next((p for p in paths if _exists(p)), paths[0])
+
+
+def _exists(path: Path) -> bool:
+    """Path.exists, but a path the runner may not stat (under /root on CI) is not there.
+    Before Python 3.14 Path.exists raises PermissionError there instead of returning False."""
+    try:
+        return path.exists()
+    except OSError:
+        return False
 
 
 FS_SERVER = _pinned(

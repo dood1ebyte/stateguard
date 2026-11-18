@@ -499,6 +499,10 @@ def _confine_server(libc: Any) -> str | None:
     working directory, and inherits its resource limits. See
     ``docs/runtime/WEEK4B_EXECUTOR_SECURITY_AUDIT.md``.
     """
+    # prctl is Linux-only. The scope is refused off Linux before this runs, but a
+    # missing prctl must still fail closed with a reason, never raise in the child.
+    if getattr(libc, "prctl", None) is None:
+        return "prctl is not available on this platform; the boundary cannot be established"
     # Ambient capabilities are a deliberate grant (the non-root path that gives
     # the relay CAP_SYS_ADMIN). Cleared, a non-root server execs with none.
     if libc.prctl(_PR_CAP_AMBIENT, _PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0:

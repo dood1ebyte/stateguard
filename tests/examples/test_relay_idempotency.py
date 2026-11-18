@@ -380,16 +380,24 @@ def test_a_hung_keyed_call_still_running_is_unknown_after_the_answer_timeout(
         rig.close()
 
 
-@pytest.mark.parametrize(("scope", "answered"), [("recoverable", True), ("all", False)])
-def test_a_slow_keyed_call_past_its_deadline(tmp_path: Path, scope: str, answered: bool) -> None:
+@pytest.mark.parametrize(
+    ("scope", "answered", "deadline"), [("recoverable", True, 0.1), ("all", False, 0.05)]
+)
+def test_a_slow_keyed_call_past_its_deadline(
+    tmp_path: Path, scope: str, answered: bool, deadline: float
+) -> None:
     """
     recoverable (the default): the deadline is when to try again -- a keyed call slower than two
     deadlines gets its answer, executed once. all: the deadline is a hard bound -- unknown.
+
+    Under ``all`` a keyed call has up to three attempts (D16), so the bound is about three
+    deadlines: 0.15 s, well before the 0.45 s answer (with 0.1 s the margin was 0.15 s, and a
+    slow CI runner crossed it: the late answer won, a real success, but not this case).
     """
     rig = _rig(
         tmp_path,
         Plan(ServerAction.DELAYED_RESPONSE),
-        call_deadline=0.1,
+        call_deadline=deadline,
         deadline_scope=scope,
     )
     try:

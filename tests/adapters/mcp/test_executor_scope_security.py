@@ -170,7 +170,20 @@ def test_confine_propagates_a_verification_gap_so_the_server_never_execs(
     reason = os.read(read_fd, 200).decode()
     os.close(read_fd)
     os.waitpid(pid, 0)
-    assert reason == "simulated gap"
+    if sys.platform.startswith("linux"):
+        assert reason == "simulated gap"
+    else:  # no prctl: it fails closed before verifying, with its own reason
+        assert reason.startswith("prctl is not available")
+
+
+def test_confine_fails_closed_without_prctl() -> None:
+    """A libc without prctl (any non-Linux platform) yields a reason, never an exception."""
+
+    class NoPrctl:
+        pass
+
+    reason = _confine_server(NoPrctl())
+    assert reason is not None and reason.startswith("prctl is not available")
 
 
 # ---------------------------------------------------------------------------
