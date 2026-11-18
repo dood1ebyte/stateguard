@@ -60,8 +60,7 @@ def _command(server: str, arm: str, base: Path, cmd: list[str]) -> list[str]:
             )
         )
         command = [
-            PY,
-            RELAY,
+            *RELAY,
             "--retry",
             "auto",
             "--restart",

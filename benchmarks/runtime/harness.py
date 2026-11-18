@@ -1,7 +1,7 @@
 """
 An in-process rig for driving the stdio relay against a scripted MCP server.
 
-    client (this module)  ->  StdioRelay (examples/mcp/stdio_proxy.py)  ->  ScriptedServer
+    client (this module)  ->  StdioRelay (stateguard.relay.stdio)  ->  ScriptedServer
                           <-                                             <-
 
 Everything runs in one process over OS pipes, on threads, so a test or a
@@ -27,11 +27,9 @@ are supplied by the caller (see ``faults.py`` for the seeded ones).
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import json
 import os
 import queue
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -47,16 +45,11 @@ META = {"io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION}
 
 
 def load_relay_module() -> Any:
-    """Import ``examples/mcp/stdio_proxy.py`` (it is a script, not a package)."""
-    name = "stateguard_stdio_proxy"
-    if name in sys.modules:
-        return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, RELAY_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    """The stdio relay module, :mod:`stateguard.relay.stdio` (``examples/mcp/stdio_proxy.py``
+    is a thin wrapper around the same module)."""
+    from stateguard.relay import stdio
+
+    return stdio
 
 
 # ---------------------------------------------------------------------------

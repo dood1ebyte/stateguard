@@ -8,10 +8,10 @@ opposite: the faults real traffic meets, counted per invocation. A relay already
 fault on its hop to the server, so each relay writes one ``invocation`` record per client
 request to its audit log, and this module turns those records into rates:
 
-* the HTTP relay (``examples/mcp/http_proxy.py``): faults ``connect_retry``, ``not_sent``,
+* the HTTP relay (``stateguard.relay.http``): faults ``connect_retry``, ``not_sent``,
   ``transport_lost``, ``server_error``, ``internal_error``, ``session_lost``, ``stream_cut``,
   ``deadline``;
-* the stdio relay (``examples/mcp/stdio_proxy.py``), from its ``InvocationLedger``: why the
+* the stdio relay (``stateguard.relay.stdio``), from its ``InvocationLedger``: why the
   request went UNKNOWN, if it did (``transport_closed``, ``send_failed``, ``deadline``,
   ``not_sent_unconfirmed``, ...), or ``resent`` if it was sent again for another reason.
 

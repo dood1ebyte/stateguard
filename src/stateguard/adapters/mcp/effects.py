@@ -233,6 +233,10 @@ class EffectPolicy:
     def __len__(self) -> int:
         return len(self._declared)
 
+    def tools_declared(self, *effects: Effect) -> list[str]:
+        """The names of the tools declared with one of *effects* (for any server), sorted."""
+        return sorted({name for (name, _), effect in self._declared.items() if effect in effects})
+
 
 class Observed(StrEnum):
     """What happened to one attempt, as the proxy saw it."""

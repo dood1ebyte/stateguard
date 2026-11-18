@@ -66,7 +66,8 @@ FS_JS = os.environ.get(
     "FS_JS",
     "/opt/sg-servers/filesystem/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
 )
-RELAY = str(CODE / "examples/mcp/stdio_proxy.py")
+#: The relay, as the package command (Phase 2 S1): ``stateguard relay stdio``.
+RELAY = [PY, "-m", "stateguard", "relay", "stdio"]
 SHIM = str(HERE / "shim.py")
 PRELOAD = str(CODE / "adapters/typescript/src/preload.ts")
 CLIENT = str(HERE / "client.py")
@@ -94,6 +95,9 @@ def setup(server: str, base: Path, t: int, arm: str, op: str, mode: str) -> tupl
     env = {**os.environ, "PYTHONPATH": str(CODE / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
     marker = f"w-{t}-{uuid.uuid4().hex[:6]}"
     keyed = arm in ("sg_keyed", "sg_keyed_idempotent", "sg_keyed_bound")
+    # sg_keys_auto: the relay starts the server with keys itself (--keys auto, Phase 2 S1), so
+    # the server command here is the plain one: no adapter variables, no preload, no injector.
+    wrap = (keyed or mode in CRASH) and arm != "sg_keys_auto"
     if keyed:
         env.update(STATEGUARD_IDEMPOTENCY_DB=str(base / "keys.db"),
                    STATEGUARD_IDEMPOTENCY_SCOPE=server, STATEGUARD_KEYED_TOOLS=WRITE_TOOL[server])
@@ -110,7 +114,7 @@ def setup(server: str, base: Path, t: int, arm: str, op: str, mode: str) -> tupl
             conn.execute("CREATE TABLE notes (text TEXT)")
             conn.execute("INSERT INTO notes VALUES (?)", (f"seed-{t}",))
         inner = ["mcp-server-sqlite", "--db-path", str(db)]
-        if keyed or mode in CRASH:
+        if wrap:
             cmd = [MCP1, "-m", "stateguard.adapters.mcp.inject", *inner]
         else:
             cmd = [str(Path(MCP1).parent / "mcp-server-sqlite"), "--db-path", str(db)]
@@ -122,7 +126,7 @@ def setup(server: str, base: Path, t: int, arm: str, op: str, mode: str) -> tupl
         (root / "seed.txt").write_text(f"seed-{t}\n")
         (root / f"src-{t}.txt").write_text(f"{marker}\n")
         cmd = [NODE, "--no-warnings"]
-        if keyed or mode in CRASH:
+        if wrap:
             cmd += ["--import", PRELOAD]
         cmd += [FS_JS, str(root)]
         read = ("read_text_file", {"path": str(root / "seed.txt")}, f"seed-{t}")
@@ -134,7 +138,7 @@ def setup(server: str, base: Path, t: int, arm: str, op: str, mode: str) -> tupl
                                       "observations": [f"seed-{t}"]}) + "\n")
         env["MEMORY_FILE_PATH"] = str(memory)
         cmd = [NODE, "--no-warnings"]
-        if keyed or mode in CRASH:
+        if wrap:
             cmd += ["--import", PRELOAD]
         cmd.append(MEMORY_JS)
         read = ("search_nodes", {"query": "seed"}, f"seed-{t}")
@@ -197,6 +201,15 @@ def run(server: str, cell: str, arm: str, t: int) -> dict:
     shim_mode = mode if mode in TRANSPORT or mode in ADVERSARIAL or mode == "slow" else "none"
     command = [PY, SHIM, "--mode", shim_mode, "--tool", name, "--fault-file",
                str(base / "fault_flag"), "--log", str(base / "shim.log"), "--", *cmd]
+    keys_auto = []
+    if arm == "sg_keys_auto":
+        # --keys auto reads the server command: with the fault shim in front it would see the
+        # shim (a Python script, not an MCP server). So this arm runs only the cells without a
+        # shim fault (fault-free and the server-side crash points), with no shim at all.
+        if shim_mode != "none":
+            raise ValueError(f"sg_keys_auto runs only cells without a shim fault, not {cell}")
+        command = cmd
+        keys_auto = ["--keys", "auto", "--keys-db", str(base / "keys.db"), "--keys-scope", server]
     if arm.startswith("sg"):
         effects = base / "effects.json"
         # As an operator declares them: the stdio relay re-requests only a declared read (a
@@ -208,10 +221,10 @@ def run(server: str, cell: str, arm: str, t: int) -> dict:
         bound = ["--deadline-scope", "all"] if arm.endswith("_bound") else []
         if arm.endswith("_norefresh"):  # act on the last listing seen (the stale one, for B)
             bound.append("--no-listing-refresh")
-        command = [PY, RELAY, "--retry", "auto", "--restart", "2", "--restart-policy",
+        command = [*RELAY, "--retry", "auto", "--restart", "2", "--restart-policy",
                    "after-unknown", "--effects", str(effects), "--trust-read-only-hints",
-                   "--call-deadline", "2", *bound, "--audit", str(base / "audit.jsonl"), "--",
-                   *command]
+                   "--call-deadline", "2", *bound, *keys_auto, "--audit",
+                   str(base / "audit.jsonl"), "--", *command]
     client = [PY, CLIENT, json.dumps(command), name, json.dumps(args), "--wait", str(CLIENT_WAIT)]
     if arm == "naive":
         client.append("--naive")

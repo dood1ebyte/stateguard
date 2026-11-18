@@ -28,6 +28,11 @@ Replay recorded calls against a tool list -- what would StateGuard do?::
 
     stateguard replay --tools tools.json --calls calls.jsonl [--shadow]
 
+Run a relay in front of an MCP server (the options are the relay's own; ``-h`` lists them)::
+
+    stateguard relay stdio [--retry auto --keys auto ...] -- <server command>
+    stateguard relay http --upstream http://127.0.0.1:3000/mcp [--retry auto ...]
+
 JSON output (for piping into other tools)::
 
     stateguard check --schema contract.json --payload payload.json --json
@@ -840,7 +845,53 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", default=False, help="Emit the machine-readable summary."
     )
 
+    # -- relay ---------------------------------------------------------------
+    # Listed here for --help; main() hands everything after the transport to the
+    # relay's own parser (see _cmd_relay), so the relay options are never parsed twice.
+    sub.add_parser(
+        "relay",
+        help="Run a relay in front of an MCP server (stdio or http).",
+        description=_RELAY_USAGE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
     return parser
+
+
+_RELAY_USAGE = """\
+usage: stateguard relay stdio [options] -- <server command>
+       stateguard relay http --upstream URL [options]
+
+Run StateGuard's relay in front of an MCP server. Every option after the transport is
+the relay's own; 'stateguard relay stdio -h' and 'stateguard relay http -h' list them.
+The http relay needs the MCP extra: pip install 'sguard[mcp]'."""
+
+
+def _cmd_relay(argv: list[str]) -> int:
+    """``stateguard relay stdio|http ...``: run the relay with the rest of ``argv``."""
+    transport, rest = (argv[0], argv[1:]) if argv else (None, [])
+    if transport == "stdio":
+        from stateguard.relay import stdio  # noqa: PLC0415 -- only when asked
+
+        stdio.run(rest, prog="stateguard relay stdio")
+    if transport == "http":
+        try:
+            from stateguard.relay import http  # noqa: PLC0415 -- optional dependencies
+        except ImportError as exc:
+            print(
+                f"stateguard relay http: a dependency is missing ({exc.name or exc}). "
+                "The HTTP relay needs the MCP extra: pip install 'sguard[mcp]'",
+                file=sys.stderr,
+            )
+            return _EXIT_FAILED
+        return http.main(rest, prog="stateguard relay http")
+    if transport in ("-h", "--help"):
+        print(_RELAY_USAGE)
+        return _EXIT_OK
+    print(_RELAY_USAGE, file=sys.stderr)
+    if transport is not None:
+        print(f"\nstateguard relay: unknown transport {transport!r}", file=sys.stderr)
+    return _EXIT_FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -866,6 +917,12 @@ def main(argv: list[str] | None = None) -> None:
         if reconfigure is not None:
             with contextlib.suppress(ValueError, OSError):
                 reconfigure(encoding="utf-8")
+
+    raw = sys.argv[1:] if argv is None else argv
+    if raw[:1] == ["relay"]:
+        # Before argparse: the relay's options (and the server command after '--')
+        # belong to the relay's own parser.
+        sys.exit(_cmd_relay(raw[1:]))
 
     parser = _build_parser()
     args = parser.parse_args(argv)

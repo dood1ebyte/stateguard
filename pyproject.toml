@@ -60,6 +60,11 @@ all = ["sguard[pydantic,mcp,dev]"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/stateguard"]
 
+# The TypeScript preload, for ``stateguard relay stdio --keys auto`` with a Node server
+# (stateguard/relay/keys.py finds it here; a checkout uses adapters/typescript/src directly).
+[tool.hatch.build.targets.wheel.force-include]
+"adapters/typescript/src" = "stateguard/relay/ts"
+
 # ---------------------------------------------------------------------------
 # Pytest
 # ---------------------------------------------------------------------------

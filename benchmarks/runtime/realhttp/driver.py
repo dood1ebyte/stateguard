@@ -56,7 +56,8 @@ HERE = Path(__file__).resolve().parent
 CODE = Path(os.environ.get("STATEGUARD_CODE", str(HERE.parents[2]))).resolve()
 PY = os.environ.get("STATEGUARD_PYTHON", sys.executable)
 NODE = os.environ.get("NODE") or shutil.which("node") or "/opt/node22/bin/node"
-RELAY = str(CODE / "examples/mcp/http_proxy.py")
+#: The relay, as the package command (Phase 2 S1): ``stateguard relay http``.
+RELAY = [PY, "-m", "stateguard", "relay", "http"]
 FAULTS = str(CODE / "benchmarks/runtime/http_fault_proxy.py")
 NOTES_SERVER = str(CODE / "tests/examples/http_notes_server.py")
 TS_SERVER = str(CODE / "adapters/typescript/test/fixtures/http_notes_server.ts")
@@ -278,9 +279,9 @@ def run(server, cell, arm, t):
                 deadline = []
             if arm.endswith("_norefresh"):  # act on the last listing seen (the stale one, for B)
                 deadline.append("--no-listing-refresh")
-            procs.start("relay", [PY, RELAY, "--listen", f"127.0.0.1:{relay_port}", "--retry", "auto",
+            procs.start("relay", [*RELAY, "--listen", f"127.0.0.1:{relay_port}", "--retry", "auto",
                                   "--trust-read-only-hints", "--effects", str(effects), *deadline,
-                                  "--audit", str(base / "audit.jsonl"), "--",
+                                  "--audit", str(base / "audit.jsonl"), "--upstream",
                                   f"http://127.0.0.1:{proxy_port}/mcp"], server_env)
             if not wait_port(relay_port):
                 raise RuntimeError("relay did not listen")

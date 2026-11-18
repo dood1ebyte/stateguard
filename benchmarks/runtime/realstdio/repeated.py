@@ -79,7 +79,7 @@ def run(server, arm, t):
             {"name": tool, "effect": "non_idempotent"},
             {"name": READ_TOOL[server], "effect": "read_only"},
         ]}))
-        command = [PY, RELAY, "--retry", "auto", "--restart", RESTARTS, "--restart-policy",
+        command = [*RELAY, "--retry", "auto", "--restart", RESTARTS, "--restart-policy",
                    "after-unknown", "--effects", str(effects), "--trust-read-only-hints",
                    "--call-deadline", "2", "--audit", str(base / "audit.jsonl"), "--", *command]
     client = [PY, CLIENT, json.dumps(command), tool, json.dumps([a for _, a in calls]),

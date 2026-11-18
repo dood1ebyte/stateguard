@@ -84,10 +84,10 @@ def run(server, arm, t):
             effects.write_text(json.dumps({"tools": [{"name": "add_note",
                                                       "effect": "non_idempotent"}]}))
             relay_port = free_port()
-            procs.start("relay", [PY, RELAY, "--listen", f"127.0.0.1:{relay_port}", "--retry",
+            procs.start("relay", [*RELAY, "--listen", f"127.0.0.1:{relay_port}", "--retry",
                                   "auto", "--trust-read-only-hints", "--effects", str(effects),
                                   "--call-deadline", "0", "--audit", str(base / "audit.jsonl"),
-                                  "--", f"http://127.0.0.1:{proxy_port}/mcp"], env)
+                                  "--upstream", f"http://127.0.0.1:{proxy_port}/mcp"], env)
             if not wait_port(relay_port):
                 raise RuntimeError("relay did not listen")
             url = f"http://127.0.0.1:{relay_port}/mcp"

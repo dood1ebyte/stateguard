@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "description": "StateGuard's TypeScript preload, shipped in the wheel for `stateguard relay stdio --keys auto`. The .ts files are copied here from adapters/typescript/src at build time.",
+  "type": "module",
+  "engines": { "node": ">=22.18" }
+}

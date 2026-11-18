@@ -440,14 +440,9 @@ def test_a_blind_resend_without_a_key_duplicates_the_effect(rig: Rig) -> None:
 
 
 def _relay_module() -> Any:
-    import importlib.util
+    from stateguard.relay import http
 
-    spec = importlib.util.spec_from_file_location("http_proxy_under_test", RELAY)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return http
 
 
 @pytest.mark.parametrize(
