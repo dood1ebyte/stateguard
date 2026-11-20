@@ -63,6 +63,12 @@ for CI only.
     `85f5c97`). I cancelled it, and also run 52, which run 53 superseded.
 - **Evidence-only commits carry `[skip ci]`**, so data commits do not each queue the macOS
   matrix. Every code commit, and the session's last commit, runs full CI.
+- **S2 (2026-11-20):**
+  - run 55's macOS auth flake was root-caused and fixed (`ca30096`);
+  - run 57 (S2.1) was green;
+  - run 59 (S2.3) passed 10 of 11 jobs. macOS 3.13 died in the runner's action download, with
+    no step of ours run, and was re-run once;
+  - see "S2 result".
 
 **Approvals:**
 - A1, A2, A3 and A4: approved (A4's boundary is kept; no developer data is expected).
@@ -146,36 +152,101 @@ for CI only.
   - The deferral list (`PHASE2_PLAN.md` section 4) is unchanged; no earlier session had
     deferred anything yet.
 
-### S2 starting checklist (Fri 2026-11-20, 09:00 IST)
+### S2 result (Fri 2026-11-20, 09:01–10:20 IST): all deliverables done
 
-1. Run `TZ=Asia/Kolkata date` and confirm the time is inside 09:00–14:00.
-2. Check git:
-   - `git status` and the branch;
-   - `git fetch origin claude/serene-bohr-o28snr`;
-   - `git rev-list --left-right --count HEAD...origin/claude/serene-bohr-o28snr` must be `0 0`.
-3. Check the toolchain; it was present on 2026-11-18:
-   - `.venv` (3.13.18);
-   - `/tmp/mcp1` (mcp 1.9.4 with mcp-server-sqlite 2025.4.25);
-   - `/tmp/venv311`, `/tmp/venv312`, `/tmp/venv314b`;
-   - node v22.23.4;
-   - `/opt/sg-servers/{everything,memory,filesystem}`;
-   - `adapters/typescript/node_modules`.
-   The container can restart mid-session (it did on 2026-11-18): commit each finished batch
-   part as it lands.
-4. CI: confirm the last run on PR #19 is green.
-5. Start the Python 3.13 suite in the background as a baseline.
-6. Do S2 per `PHASE2_PLAN.md` (it depends on S1.1, done):
-   - S2.1: `stateguard capture` and `stateguard report`;
-   - S2.2: denominator integrity, and duplicate detection from the key store;
-   - S2.3: HTTP `--record`, in shadow mode;
-   - S2.4: real servers driven by scripted workloads, labelled "real server, scripted
-     workload".
-   The capture acceptance (clarification C): at least 1,000 calls across at least 3 real
-   servers, shadow and auto paired where possible, every denominator reported.
-7. Batch evidence:
-   - the plan is written before any row, through `run_batch.py`;
+- **Before S2's agenda:** run 55's macOS 3.13 failure was root-caused and fixed (`ca30096`). The
+  auth test's late answer at 0.45 s raced the 0.3 s deadline: the relay acts on the deadline
+  when its deadline thread next wakes. Reproduced: with a coarse tick, 0.45 s gave
+  authentication 20/20 and 0.9 s gave unknown 20/20, and in both 0 calls were told success
+  and 0 retried. The late cases now answer at 0.9 s. No safety issue.
+- **S2.1, done** (`ddf8b9c`): `stateguard capture stdio|http --dir DIR [--label]` and
+  `stateguard report [--check] BUNDLE`.
+  - The bundle holds:
+    - the mask-redacted recording, with numbers masked (`--record-mask-numbers`, new on both
+      relays);
+    - the invocation records, through an allowlist with no ids and no text;
+    - key-store counts;
+    - a manifest with SHA-256s;
+    - the report.
+  - The report rebuilds from the bundle alone. It covers:
+    - outcomes per call (succeeded, tool error, failed, UNKNOWN, not successful), with Wilson
+      intervals;
+    - retries, and would-retry in shadow;
+    - latency and relay-overhead percentiles.
+  - The raw audit log and the key store never enter a bundle.
+  - Documented in `REAL_CAPTURE.md`.
+- **S2.2, done** (`7edf71c`):
+  - **Denominator checks:** client calls = records, unfinished counted, answers = finished,
+    none answered twice, recording complete.
+  - **Key-store duplicate detection:** identical calls executed under more than one key, counts
+    only. Verified on a deliberately duplicated keyed call:
+    - at the store level;
+    - end to end on the pinned server-memory with `--keys auto`: 5 executions, 1 repeated, and
+      the server said "executed" five times. The file shows the marker once, because the
+      server skips an observation it already holds.
+- **S2.3, done** (`b291562`): `stateguard relay http --record`, shadow only.
+  - It refuses `--passthrough` and `--retry auto`.
+  - It has the same recorder and redactor as stdio, with taps in all four directions, JSON and
+    event stream.
+  - `stateguard capture http` writes the bundle when the relay is stopped.
+  - The HTTP relay's `main()` now returns after a graceful SIGINT/SIGTERM (uvicorn raises the
+    signal again).
+- **S2.4, done: C1** (`benchmarks/evidence/capture/C1/`, plan before rows, code `9de0a26`).
+  Labelled **real server, scripted workload**:
+  - **Servers:** git 2026.8.18, server-filesystem 2026.8.31, and fetch 2026.10.10 against a
+    local site.
+  - **Size:** **1,200 tool calls**: 200 per server and arm, shadow and auto, paired by seed.
+  - **Results:**
+    - every denominator check holds;
+    - 0 failed, 0 UNKNOWN;
+    - tool errors (git 8, filesystem 7, fetch 8 per arm) are the deliberate misses, equal in
+      all 12 pairs;
+    - all 24 reports rebuild from their bundles (re-verified from the tarballs);
+    - no typed value is in any bundle;
+    - overhead p50 1.0–1.3 ms.
+  - **A missed prediction, recorded in RESULTS.md:** auto resent the 23 tool errors, all on
+    declared reads, by the retry rule. Each resend got the same answer.
+- **Tests:**
+  - Python 3.11.18, 3.12.3, 3.13.18 and 3.14.6: each 6677 passed, 0 failed, 0 skipped.
+  - TypeScript: `tsc` clean, tests 74/74.
+  - ruff, format and mypy: clean.
+- **CI:** green on S2.1's code (run 57). On S2.3's code (run 59), 10 of 11 jobs passed. macOS
+  3.13 failed in the runner's "Prepare all required actions": it could not parse its downloaded
+  `actions/checkout` `action.yml`, and no step of ours ran. That job was re-run once. The
+  session's last commit runs full CI.
+- **Deferred or not attempted:** none of the S2 agenda.
+  - **Noted, not fixed:** on HTTP, per-call overhead is not matched (upstream ids are the
+    relay's own), and the report says so.
+  - The deferral list is unchanged. No earlier session had deferred items, so none were taken,
+    and S3 was not started.
+
+### S3 starting checklist (Mon 2026-11-23, 09:00 IST)
+
+1. Run `TZ=Asia/Kolkata date`; check git is `0 0` with origin; check the toolchain. On
+   2026-11-20 these were present: `.venv`, `/tmp/mcp1`, `/tmp/venv311`, `/tmp/venv312`,
+   `/tmp/venv314b`, node v22.23.4, `/opt/sg-servers/*`, `adapters/typescript/node_modules`,
+   and `/tmp/sgpy` (git and fetch servers).
+2. CI: confirm the last run on PR #19 is green. Re-run once only if a job died before any test
+   body ran.
+3. Start the Python 3.13 baseline suite in the background.
+4. Do S3 per `PHASE2_PLAN.md` (it depends on S1.2, done):
+   - **S3.1:** a Python helper that commits the key's record in the same SQLite transaction as
+     the effect, and a cooperating reference server with notes in SQLite.
+   - **S3.2:** the recovery-check hook (`STATEGUARD_RECOVERY_CHECK`) under the replay rule.
+   - **S3.3:** the TypeScript atomic helper and its server.
+   - **S3.4:** the crash cells, and `SERVER_IDEMPOTENCY_CONTRACT.md`.
+5. **The acceptance:**
+   - on cooperating servers only: `after_begin`, `after_effect` and `after_record`, × 12 each,
+     0/36 unresolved with 0 duplicates;
+   - non-cooperating servers unchanged from Phase 1;
+   - late-attempt and fencing tests;
+   - every new test fails without its change.
+   Fallback: S3.3.
+6. **Batch evidence:**
+   - the plan is written before any row;
+   - `run_batch.py` takes `--suite capture` and the capture driver;
    - evidence-only commits carry `[skip ci]`;
-   - the last commit of the session runs full CI.
+   - the last commit runs full CI.
 
 ## Rules for scheduled sessions (owner, 2026-11-05)
 
@@ -259,6 +330,18 @@ allowed. Early completion or idle capacity never advances the schedule.
       instruction, as Phase 2 S1 (see "Phase 2" above).
     - Phase 2 is authorised and runs from `PHASE2_PLAN.md`.
 - **The 14:00 IST end** is enforced by each session's own clock checks, not by the platform.
+
+## Handoff (end of S2, Fri 2026-11-20 about 10:20 IST)
+
+- **Done:** S2.1–S2.4 (see "S2 result" above), and the root cause and fix of run 55's auth
+  flake.
+  - Commits: `ca30096`, `ddf8b9c`, `7edf71c`, `9de0a26`, C1 evidence, `b291562`, docs.
+- **Unfinished:** nothing on the S2 agenda.
+- **Blockers:** none.
+- **Pushed:** everything; origin and local are level. **Uncommitted:** nothing.
+  **Running:** nothing locally. CI's re-run of the macOS 3.13 job, and the last commit's run,
+  are on GitHub.
+- **Exact next action:** S3, Mon 2026-11-23, 09:00 IST: the S3 starting checklist above.
 
 ## Handoff (end of S1, Wed 2026-11-18 11:15 IST)
 
@@ -461,6 +544,7 @@ The queue as it stood before Session 5 (done: items 1–3, and 5):
 One line per session, newest first:
 `YYYY-MM-DD · task · result (tests: N passed / failures) · next`.
 
+- 2026-11-20 · Phase 2 S2 (09:01–about 10:20 IST) · run 55 auth flake root-caused and fixed (deadline-thread race, reproduced); `stateguard capture stdio|http` and `stateguard report` (masked bundle, allowlisted invocations, rebuilt from the bundle alone); denominator checks; key-store duplicate detection (verified on a deliberate duplicate); HTTP relay `--record` (shadow only); C1: 1,200 calls on 3 real servers, scripted workloads, shadow and auto paired, every check holding, 0 failed and 0 UNKNOWN, 23 designed resends of tool errors on declared reads · pushed, level with origin (tests: Python 3.11.18 / 3.12.3 / 3.13.18 / 3.14.6 each 6677 passed / 0 failed / 0 skipped; TypeScript tsc clean, 74/74; ruff, format, mypy clean; CI 10/11 on `b291562` plus a runner action-download failure re-run) · S3 Mon 23 Nov 09:00 IST
 - 2026-11-18 · Phase 2 S1 (09:02–11:15 IST) · relays packaged (`stateguard relay stdio|http`); `--keys auto` (injector for Python, preload for Node, unkeyed with a reason otherwise); end-to-end from the wheel (keyed write, after_record crash replayed once); B7 (HTTP) and S10 (stdio) equal to B5/B6 and S8/S9 in every StateGuard cell; sg_keys_auto equal to sg_keyed on 3 servers; CI green on `def9cc6` (S1.3: 3 failures fixed; 1 hanging test fixed) · pushed, level with origin (tests: Python 3.11.18 / 3.12.3 / 3.13.18 / 3.14.6 each 6662 passed / 0 failed / 0 skipped; TypeScript tsc clean, 74/74; ruff, format, mypy clean) · S2 Fri 20 Nov 09:00 IST
 - 2026-11-17 · Validation-strategy amendment (founder; 04:18 IST, no engineering) · recruitment removed; Track B (public failure intelligence) added; S5–S7 instructions updated, same IDs and times; S1–S4 unchanged · pushed, level with origin (tests: none run) · S1 Wed 18 Nov 09:00 IST
 - 2026-11-17 · Phase 2 setup on the founder's final authorisation (02:25–02:40 IST, no engineering) · PHASE2_PLAN.md committed; draft PR #19 opened (CI: lint, isolation, mypy passed; Ubuntu 3.11–3.13 test jobs failed fast, not investigated; macOS running); S1 task repurposed, S2–S7 created, all verified · pushed, level with origin (tests: none run) · S1 Wed 18 Nov 09:00 IST
