@@ -28,6 +28,12 @@ Replay recorded calls against a tool list -- what would StateGuard do?::
 
     stateguard replay --tools tools.json --calls calls.jsonl [--shadow]
 
+Capture a relay session into a shareable, redacted bundle, and report on it::
+
+    stateguard capture stdio --dir ./cap1 --label "real server, scripted workload" \
+        [relay opts] -- <server command>
+    stateguard report ./cap1/bundle [--check] [--json]
+
 Run a relay in front of an MCP server (the options are the relay's own; ``-h`` lists them)::
 
     stateguard relay stdio [--retry auto --keys auto ...] -- <server command>
@@ -845,6 +851,34 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", default=False, help="Emit the machine-readable summary."
     )
 
+    # -- report --------------------------------------------------------------
+    report = sub.add_parser(
+        "report",
+        help="Report on a capture bundle (rebuilt from the bundle alone).",
+        description=(
+            "Read a bundle written by 'stateguard capture', check its files against its "
+            "manifest, rebuild the report from its recording and invocation records alone, "
+            "and print it. --check exits 1 unless the rebuilt report equals the stored one and "
+            "the denominator checks hold."
+        ),
+    )
+    report.add_argument("bundle", metavar="BUNDLE", help="A capture bundle directory.")
+    report.add_argument("--json", action="store_true", default=False, help="Print JSON.")
+    report.add_argument(
+        "--check",
+        action="store_true",
+        default=False,
+        help="Exit 1 unless the report rebuilds identically and the denominators agree.",
+    )
+
+    # -- capture -------------------------------------------------------------
+    sub.add_parser(
+        "capture",
+        help="Run a relay and write a redacted, shareable bundle (stdio or http).",
+        description=_CAPTURE_USAGE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
     # -- relay ---------------------------------------------------------------
     # Listed here for --help; main() hands everything after the transport to the
     # relay's own parser (see _cmd_relay), so the relay options are never parsed twice.
@@ -865,6 +899,106 @@ usage: stateguard relay stdio [options] -- <server command>
 Run StateGuard's relay in front of an MCP server. Every option after the transport is
 the relay's own; 'stateguard relay stdio -h' and 'stateguard relay http -h' list them.
 The http relay needs the MCP extra: pip install 'sguard[mcp]'."""
+
+
+_CAPTURE_USAGE = """\
+usage: stateguard capture stdio --dir DIR [--label TEXT] [--provenance P] [relay options]
+                                -- <server command>
+
+Run the stdio relay with a recording and an audit log written to DIR/raw/ (private), and when
+it stops write DIR/bundle/: the mask-redacted recording (numbers masked), the invocation
+records projected through an allowlist (no ids, no text), a manifest and the report. The raw
+audit log is not redacted and never enters the bundle. Every relay option is accepted (see
+'stateguard relay stdio -h') except the recording and audit options, which capture sets.
+--provenance defaults to real_capture with --shadow, else local_development; a scripted
+workload is local_development, and --label says what it is. DIR must not hold a capture."""
+
+_CAPTURE_OWNED = (
+    "--record",
+    "--audit",
+    "--record-redaction",
+    "--record-provenance",
+    "--record-mask-numbers",
+)
+
+
+def _cmd_capture(argv: list[str]) -> int:
+    """``stateguard capture stdio ...``: a relay session, recorded, and its bundle."""
+    transport, rest = (argv[0], argv[1:]) if argv else (None, [])
+    if transport in (None, "-h", "--help"):
+        print(_CAPTURE_USAGE, file=sys.stdout if transport else sys.stderr)
+        return _EXIT_OK if transport else _EXIT_FAILED
+    if transport != "stdio":
+        print(_CAPTURE_USAGE, file=sys.stderr)
+        print(f"\nstateguard capture: unknown transport {transport!r}", file=sys.stderr)
+        return _EXIT_FAILED
+    split = rest.index("--") if "--" in rest else len(rest)
+    head, tail = rest[:split], rest[split:]
+    parser = argparse.ArgumentParser(prog="stateguard capture stdio", allow_abbrev=False)
+    parser.add_argument("--dir", required=True, help="The capture directory (must be new).")
+    parser.add_argument("--label", help="What this capture is (for the report).")
+    parser.add_argument("--provenance", choices=["real_capture", "local_development"])
+    own, relay_options = parser.parse_known_args(head)
+    for option in relay_options:
+        if option.split("=", 1)[0] in _CAPTURE_OWNED:
+            parser.error(f"{option.split('=', 1)[0]} is set by capture; remove it")
+    capture_dir = Path(own.dir)
+    if capture_dir.exists() and any(capture_dir.iterdir()):
+        parser.error(f"--dir {capture_dir}: not empty; a capture is never overwritten")
+    raw = capture_dir / "raw"
+    raw.mkdir(parents=True, mode=0o700)
+    os.chmod(raw, 0o700)
+    provenance = own.provenance or (
+        "real_capture" if "--shadow" in relay_options else "local_development"
+    )
+    record = [
+        "--record", str(raw / "recording.jsonl"),
+        "--record-redaction", "mask",
+        "--record-mask-numbers",
+        "--record-provenance", provenance,
+        "--audit", str(raw / "audit.jsonl"),
+    ]  # fmt: skip
+
+    def bundle(code: int) -> int:
+        from stateguard.capture import BundleError, build_bundle  # noqa: PLC0415
+
+        try:
+            report = build_bundle(raw, capture_dir / "bundle", label=own.label)
+        except (BundleError, OSError, ValueError) as exc:
+            print(f"stateguard capture: no bundle written: {exc}", file=sys.stderr)
+            return code or 1
+        d = report["denominators"]
+        print(
+            f"stateguard capture: bundle {capture_dir / 'bundle'}: "
+            f"{d['client_tool_calls']} tool calls, {d['tool_call_records']} records, "
+            f"checks {'hold' if d['checks_hold'] else 'FAIL'}",
+            file=sys.stderr,
+        )
+        return code
+
+    from stateguard.relay import stdio  # noqa: PLC0415 -- only when asked
+
+    stdio.run([*relay_options, *record, *tail], prog="stateguard capture stdio", after=bundle)
+
+
+def _cmd_report(args: argparse.Namespace) -> int:
+    from stateguard.capture import BundleError, load_bundle, render  # noqa: PLC0415
+
+    try:
+        loaded = load_bundle(args.bundle)
+    except (BundleError, OSError, ValueError) as exc:
+        print(f"stateguard report: {exc}", file=sys.stderr)
+        return _EXIT_FAILED
+    report = loaded["report"]
+    if args.json:
+        print(json.dumps({**report, "rebuilt_equal": loaded["rebuilt_equal"]}, indent=1))
+    else:
+        print(render(report))
+        rebuilt = "equal" if loaded["rebuilt_equal"] else "DIFFERENT"
+        print(f"\nrebuilt from the bundle alone: {rebuilt}")
+    if args.check and not (loaded["rebuilt_equal"] and report["denominators"]["checks_hold"]):
+        return _EXIT_PARTIAL
+    return _EXIT_OK
 
 
 def _cmd_relay(argv: list[str]) -> int:
@@ -923,6 +1057,8 @@ def main(argv: list[str] | None = None) -> None:
         # Before argparse: the relay's options (and the server command after '--')
         # belong to the relay's own parser.
         sys.exit(_cmd_relay(raw[1:]))
+    if raw[:1] == ["capture"]:
+        sys.exit(_cmd_capture(raw[1:]))
 
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -932,6 +1068,7 @@ def main(argv: list[str] | None = None) -> None:
         "diff": _cmd_diff,
         "replay": _cmd_replay,
         "incidence": _cmd_incidence,
+        "report": _cmd_report,
     }
     if args.command in commands:
         try:

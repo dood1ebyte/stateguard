@@ -3162,6 +3162,12 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         help="mask (default): persist no free-form values; secrets_only: drop credentials only.",
     )
     parser.add_argument(
+        "--record-mask-numbers",
+        action="store_true",
+        help="Reduce every number a user could have typed to its sign and order of magnitude, "
+        "whatever the provenance (always on for real_capture; stateguard capture sets it).",
+    )
+    parser.add_argument(
         "--passthrough",
         action="store_true",
         help="Kill switch: relay bytes only, StateGuard off. The measurement baseline.",
@@ -3386,7 +3392,10 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             open(args.record, "w", encoding="utf-8"),  # noqa: SIM115 -- closed at exit
             provenance=Provenance(args.record_provenance),
             session=uuid.uuid4().hex,
-            policy=RedactionPolicy(mode=RecordRedaction(args.record_redaction)),
+            policy=RedactionPolicy(
+                mode=RecordRedaction(args.record_redaction),
+                mask_numbers=args.record_mask_numbers,
+            ),
             deterministic=False,
             # Redact and write off the call path: a slow disk never stalls traffic.
             background=True,
@@ -3468,14 +3477,29 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
     return code
 
 
-def run(argv: list[str] | None = None, *, prog: str | None = None) -> NoReturn:
+def run(
+    argv: list[str] | None = None,
+    *,
+    prog: str | None = None,
+    after: Callable[[int], int] | None = None,
+) -> NoReturn:
     """Run the relay as a process entry point and exit with its code.
+
+    *after*, if given, runs once the relay has stopped, with its exit code, and returns the
+    code to exit with (``stateguard capture`` writes its bundle there). It must not write to
+    stdout: that is the client's stream.
 
     The client-side pump is a daemon thread that may still be blocked reading
     stdin. Interpreter shutdown with a thread holding stdin's lock aborts the
     process (SIGABRT), so flush what was written and exit directly.
     """
     code = main(argv, prog=prog)
+    if after is not None:
+        try:
+            code = after(code)
+        except Exception as exc:  # noqa: BLE001 -- report it; the relay's own run is over
+            print(f"stateguard: after the relay stopped: {exc}", file=sys.stderr)
+            code = code or 1
     with contextlib.suppress(Exception):
         sys.stdout.flush()
         sys.stderr.flush()
