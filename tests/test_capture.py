@@ -277,3 +277,119 @@ def test_the_projection_replaces_anything_not_identifier_shaped() -> None:
         "server_outcome": "executed", "ms": 12,
     }  # fmt: skip
     assert os.sep  # (keeps the import list honest on every platform)
+
+
+# -- S2.2: duplicates from the key store -----------------------------------------------------
+
+
+def test_the_key_store_counts_an_identical_call_executed_under_two_keys(tmp_path: Path) -> None:
+    from stateguard.adapters.mcp.idempotency import IdempotencyStore, fingerprint
+    from stateguard.capture import key_store_summary
+
+    store = IdempotencyStore(tmp_path / "keys.db", scope="s")
+    one = fingerprint("write", {"text": "a"})
+    for key, fp in (("k1", one), ("k2", one), ("k3", fingerprint("write", {"text": "b"}))):
+        store.begin(key, fp, tool="write")
+        store.complete(key, {"content": []})
+    store.begin("k4", fingerprint("write", {"text": "c"}), tool="write")  # started, not done
+    summary = key_store_summary(tmp_path / "keys.db", scope="s")
+    assert summary["keys"] == 4 and summary["executions"] == 3
+    assert summary["max_executions_per_key"] == 1
+    assert summary["identical_calls_executed_more_than_once"] == 1  # the deliberate duplicate
+    assert summary["extra_executions"] == 1
+    assert summary["by_state"] == {"done": 3, "started": 1}
+    assert summary["by_tool"] == {"write": {"executions": 3, "repeated_calls": 1, "extra": 1}}
+    assert key_store_summary(tmp_path / "keys.db", scope="other")["keys"] == 0
+    store.complete("k4", {"content": []})
+    store.close()
+
+
+MEMORY_JS = Path(
+    os.environ.get(
+        "MEMORY_JS",
+        "/opt/sg-servers/memory/node_modules/@modelcontextprotocol/server-memory/dist/index.js",
+    )
+)
+
+
+def _memory_installed() -> bool:
+    import shutil
+
+    try:
+        return MEMORY_JS.is_file() and shutil.which("node") is not None
+    except OSError:
+        return False
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _memory_installed(), reason="needs node and the pinned server-memory")
+def test_a_deliberately_duplicated_keyed_call_is_detected_from_the_key_store(
+    tmp_path: Path,
+) -> None:
+    """Three calls once each, and one sent twice (two requests: two keys, two executions)."""
+    import shutil
+
+    memory = tmp_path / "memory.jsonl"
+    memory.write_text(
+        json.dumps({"type": "entity", "name": "seed", "entityType": "t", "observations": []}) + "\n"
+    )
+    effects = tmp_path / "effects.json"
+    effects.write_text(
+        json.dumps({"tools": [{"name": "add_observations", "effect": "non_idempotent"}]})
+    )
+    directory = tmp_path / "cap"
+    command = [
+        *CLI, "capture", "stdio", "--dir", str(directory), "--label", "test fixture (scripted)",
+        "--retry", "auto", "--effects", str(effects), "--keys", "auto",
+        "--keys-db", str(tmp_path / "keys.db"),
+        "--", shutil.which("node") or "node", str(MEMORY_JS),
+    ]  # fmt: skip
+    env = {**os.environ, "MEMORY_FILE_PATH": str(memory)}
+    process = subprocess.Popen(
+        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+    )
+    assert process.stdin is not None and process.stdout is not None
+
+    def request(ident: int, method: str, params: dict[str, Any]) -> Any:
+        assert process.stdin is not None and process.stdout is not None
+        line = {"jsonrpc": "2.0", "id": ident, "method": method, "params": params}
+        process.stdin.write(json.dumps(line).encode() + b"\n")
+        process.stdin.flush()
+        while True:
+            answer = json.loads(process.stdout.readline())
+            if answer.get("id") == ident:
+                return answer
+
+    request(0, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                              "clientInfo": {"name": "t", "version": "0"}})  # fmt: skip
+    process.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
+    process.stdin.flush()
+    request(1, "tools/list", {})
+    markers = ["m-one", "m-two", "m-three", "m-dup", "m-dup"]  # the last call sent twice
+    outcomes = []
+    for i, marker in enumerate(markers):
+        arguments = {"observations": [{"entityName": "seed", "contents": [marker]}]}
+        answer = request(10 + i, "tools/call", {"name": "add_observations", "arguments": arguments})
+        assert "result" in answer, answer
+        outcomes.append(
+            (answer["result"].get("_meta") or {}).get("io.stateguard/idempotencyOutcome")
+        )
+    process.stdin.close()
+    process.wait(timeout=60)
+    assert process.returncode == 0, process.stderr.read() if process.stderr else ""
+
+    loaded = load_bundle(directory / "bundle")
+    assert loaded["rebuilt_equal"] is True
+    store = loaded["report"]["key_store"]
+    assert store["executions"] == 5 and store["max_executions_per_key"] == 1
+    assert store["identical_calls_executed_more_than_once"] == 1
+    assert store["extra_executions"] == 1
+    # The ground truth agrees: the keyed server says it executed every one of the five calls
+    # (two keys for the duplicated call, so neither is a replay). server-memory skips an
+    # observation it already holds, so this duplicate execution left the file unchanged: the
+    # key store counts executions, the conservative signal, not their effect.
+    assert outcomes == ["executed"] * 5
+    assert memory.read_text().count(json.dumps("m-dup")) == 1
+    # Counts only: no key, fingerprint or result in the bundle.
+    text = (directory / "bundle" / "keystore.json").read_text()
+    assert "m-dup" not in text and "fingerprint" not in text

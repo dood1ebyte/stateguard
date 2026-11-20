@@ -69,6 +69,7 @@ import importlib
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -938,6 +939,13 @@ def _cmd_capture(argv: list[str]) -> int:
     parser.add_argument("--dir", required=True, help="The capture directory (must be new).")
     parser.add_argument("--label", help="What this capture is (for the report).")
     parser.add_argument("--provenance", choices=["real_capture", "local_development"])
+    parser.add_argument(
+        "--key-store",
+        metavar="FILE",
+        help="A keyed server's key store to count executions in (default: the --keys-db of "
+        "--keys auto, if given).",
+    )
+    parser.add_argument("--key-scope", metavar="NAME", help="The key store scope to count.")
     own, relay_options = parser.parse_known_args(head)
     for option in relay_options:
         if option.split("=", 1)[0] in _CAPTURE_OWNED:
@@ -959,11 +967,29 @@ def _cmd_capture(argv: list[str]) -> int:
         "--audit", str(raw / "audit.jsonl"),
     ]  # fmt: skip
 
+    store, scope = own.key_store, own.key_scope
+    if store is None and _option_value(relay_options, "--keys") == "auto":
+        from stateguard.relay import keys as relay_keys  # noqa: PLC0415
+
+        store = _option_value(relay_options, "--keys-db") or str(relay_keys.DEFAULT_DB)
+        scope = scope or _option_value(relay_options, "--keys-scope")
+        scope = scope or relay_keys.default_scope(tail[1:])
+    started = time.time()
+
     def bundle(code: int) -> int:
-        from stateguard.capture import BundleError, build_bundle  # noqa: PLC0415
+        from stateguard.capture import (  # noqa: PLC0415
+            BundleError,
+            build_bundle,
+            key_store_summary,
+        )
 
         try:
-            report = build_bundle(raw, capture_dir / "bundle", label=own.label)
+            summary = (
+                key_store_summary(store, since=started - 1.0, scope=scope)
+                if store is not None
+                else None
+            )
+            report = build_bundle(raw, capture_dir / "bundle", label=own.label, key_store=summary)
         except (BundleError, OSError, ValueError) as exc:
             print(f"stateguard capture: no bundle written: {exc}", file=sys.stderr)
             return code or 1
@@ -979,6 +1005,17 @@ def _cmd_capture(argv: list[str]) -> int:
     from stateguard.relay import stdio  # noqa: PLC0415 -- only when asked
 
     stdio.run([*relay_options, *record, *tail], prog="stateguard capture stdio", after=bundle)
+
+
+def _option_value(options: list[str], name: str) -> str | None:
+    """The value of ``name VALUE`` or ``name=VALUE`` in *options*, the last one given."""
+    value = None
+    for index, option in enumerate(options):
+        if option == name and index + 1 < len(options):
+            value = options[index + 1]
+        elif option.startswith(name + "="):
+            value = option.split("=", 1)[1]
+    return value
 
 
 def _cmd_report(args: argparse.Namespace) -> int:

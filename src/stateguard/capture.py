@@ -41,7 +41,14 @@ nothing dropped):
 * relay overhead: per call forwarded exactly once, the client-side time minus the server's own
   answer time, from the recording's timestamps (live recordings only);
 * denominators: client tool calls in the recording, invocation records, answers, unfinished
-  requests, and whether they agree.
+  requests, and whether they agree;
+* on a keyed server, the key store (``keystore.json`` in the bundle, counts only): executions
+  per key, and identical calls (same tool and arguments) executed under more than one key --
+  the only duplicate signal real traffic has. A key executes at most once by construction (the
+  store's primary key and its atomic claim); a duplicate *effect* is the same call executed
+  under different keys. A client that deliberately repeats an identical call looks the same:
+  the count is of candidates, and a workload that never repeats a call (a unique marker per
+  call) makes every candidate a duplicate.
 
 What it is not: a capture of one session of one server is evidence about that session. Nothing
 here is a rate for any other server, workload or period. A scripted workload is labelled as such
@@ -56,6 +63,7 @@ import math
 import os
 import re
 import shutil
+import sqlite3
 import time
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
@@ -78,6 +86,7 @@ REPORT_SCHEMA = "stateguard.capture.report/1"
 RECORDING = "recording.jsonl"
 INVOCATIONS = "invocations.jsonl"
 MANIFEST = "manifest.json"
+KEYSTORE = "keystore.json"
 REPORT = "report.json"
 REPORT_TEXT = "report.txt"
 #: Answered by the server (the tool may still have reported an error).
@@ -223,11 +232,61 @@ def _overhead(recording: Recording) -> tuple[list[float], dict[str, int]]:
     return values, dict(sorted(skipped.items()))
 
 
+def key_store_summary(
+    db: str | os.PathLike[str],
+    *,
+    since: float | None = None,
+    scope: str | None = None,
+) -> dict[str, Any]:
+    """
+    Executions per key in an idempotency key store (``stateguard_keys``), read-only, counts
+    only: no keys, fingerprints or results leave the store. *since* (epoch seconds) and *scope*
+    narrow it to one capture.
+    """
+    path = Path(db)
+    if not path.is_file():
+        raise BundleError(f"{path}: no key store")
+    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        rows = connection.execute(
+            "SELECT scope, tool, fingerprint, state, started_at FROM stateguard_keys"
+        ).fetchall()
+    finally:
+        connection.close()
+    selected = [
+        r
+        for r in rows
+        if (scope is None or r[0] == scope) and (since is None or float(r[4]) >= since)
+    ]
+    executed = [r for r in selected if r[3] in ("done", "expired")]
+    groups = Counter((r[0], r[1], r[2]) for r in executed)
+    per_tool: dict[str, dict[str, int]] = {}
+    for (_, tool, _), count in groups.items():
+        entry = per_tool.setdefault(str(tool), {"executions": 0, "repeated_calls": 0, "extra": 0})
+        entry["executions"] += count
+        if count > 1:
+            entry["repeated_calls"] += 1
+            entry["extra"] += count - 1
+    return {
+        "keys": len(selected),
+        "by_state": dict(sorted(Counter(str(r[3]) for r in selected).items())),
+        "executions": len(executed),
+        # The store's primary key is (scope, key) and a key is claimed atomically: at most one
+        # execution per key, by construction. Counted, not assumed.
+        "max_executions_per_key": 1 if executed else 0,
+        "identical_calls_executed_more_than_once": sum(1 for c in groups.values() if c > 1),
+        "extra_executions": sum(c - 1 for c in groups.values() if c > 1),
+        "in_doubt": sum(1 for r in selected if r[3] == "in_doubt"),
+        "by_tool": dict(sorted(per_tool.items())),
+    }
+
+
 def compute_report(
     recording: Recording,
     invocations: Sequence[Mapping[str, Any]],
     *,
     manifest: Mapping[str, Any] | None = None,
+    key_store: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The report, from the bundle's recording and projected invocations only. Deterministic."""
     evidence = summarize_evidence(recording)
@@ -314,6 +373,7 @@ def compute_report(
         },
         "latency_ms": percentiles(latencies),
         "overhead_ms": {**percentiles(overhead), "skipped": overhead_skipped},
+        "key_store": dict(key_store) if key_store is not None else None,
         "integrity": evidence.get("integrity"),
         "wire": evidence.get("wire"),
         "not_claimed": list(NOT_CLAIMED),
@@ -358,10 +418,16 @@ def render(report: Mapping[str, Any]) -> str:
         f"p99 {lat['p99']}  max {lat['max']}",
         f"overhead ms n {over['n']}  p50 {over['p50']}  p90 {over['p90']}  p95 {over['p95']}  "
         f"p99 {over['p99']}  max {over['max']}  skipped {json.dumps(over['skipped'])}",
-        "",
-        "not claimed",
-        *(f"  - {line}" for line in report["not_claimed"]),
     ]
+    store = report.get("key_store")
+    if store is not None:
+        lines.append(
+            f"key store   keys {store['keys']}  executions {store['executions']}  "
+            f"max per key {store['max_executions_per_key']}  identical calls executed more "
+            f"than once {store['identical_calls_executed_more_than_once']} "
+            f"(+{store['extra_executions']})  in doubt {store['in_doubt']}"
+        )
+    lines += ["", "not claimed", *(f"  - {line}" for line in report["not_claimed"])]
     return "\n".join(lines)
 
 
@@ -382,6 +448,7 @@ def build_bundle(
     label: str | None = None,
     recording_name: str = RECORDING,
     audit_name: str = "audit.jsonl",
+    key_store: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Write a bundle to *out* from a capture's *raw* directory (its recording and audit log).
@@ -416,7 +483,10 @@ def build_bundle(
     }
     files[RECORDING] = _sha256(out_dir / RECORDING)
     files[INVOCATIONS] = _sha256(out_dir / INVOCATIONS)
-    report = compute_report(recording, invocations, manifest=manifest)
+    if key_store is not None:
+        (out_dir / KEYSTORE).write_text(json.dumps(key_store, indent=1, sort_keys=True) + "\n")
+        files[KEYSTORE] = _sha256(out_dir / KEYSTORE)
+    report = compute_report(recording, invocations, manifest=manifest, key_store=key_store)
     (out_dir / REPORT).write_text(json.dumps(report, indent=1, sort_keys=True) + "\n")
     (out_dir / REPORT_TEXT).write_text(render(report) + "\n")
     files[REPORT] = _sha256(out_dir / REPORT)
@@ -459,7 +529,9 @@ def load_bundle(bundle: str | os.PathLike[str]) -> dict[str, Any]:
     recording = read_recording(root / RECORDING)
     _check_recording_privacy(recording)
     invocations = read_invocations(root / INVOCATIONS)
-    report = compute_report(recording, invocations, manifest=manifest)
+    store_path = root / KEYSTORE
+    key_store = json.loads(store_path.read_text()) if store_path.is_file() else None
+    report = compute_report(recording, invocations, manifest=manifest, key_store=key_store)
     stored_path = root / REPORT
     stored = json.loads(stored_path.read_text()) if stored_path.is_file() else None
     return {
