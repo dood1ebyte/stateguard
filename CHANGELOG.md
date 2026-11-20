@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `idempotent` in `--effects`) honour idempotency keys. A command it cannot read with
   certainty runs unkeyed and the relay says why. The wheel ships the preload
   (`stateguard/relay/ts/`).
+- **`stateguard capture stdio|http` and `stateguard report`.** A relay session recorded
+  into a shareable bundle (mask-redacted recording with numbers masked, allowlisted
+  invocation records, key-store counts, manifest with SHA-256s) and a report rebuilt from
+  the bundle alone (`--check`): outcomes per call with Wilson intervals, UNKNOWN, retries,
+  latency and relay-overhead percentiles, denominator checks, duplicates from the key store.
+  See `docs/runtime/REAL_CAPTURE.md`.
+- **`stateguard relay http --record`**, shadow mode only, under the stdio relay's privacy
+  rules; `--record-mask-numbers` on both relays.
 
 ### Changed
 - **Three exact-but-wrong casts are held for confirmation instead of applied.**
@@ -90,6 +98,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     executions stay 0.
 
 ### Fixed
+- `stateguard relay http` now returns (exit 0) after a graceful SIGINT/SIGTERM shutdown
+  instead of dying with the signal uvicorn raises again, so its recording is closed.
 - **A repair that changed only a value's JSON type was forwarded unrepaired.**
   Payload-change detection used Python `==` (`2 == 2.0`, `True == 1`), so
   auto mode sent the original `2.0` after coercing it to `2`, and shadow
