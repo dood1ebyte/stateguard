@@ -116,9 +116,11 @@ import itertools
 import json
 import math
 import secrets
+import signal
 import sys
 import threading
 import time
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -164,6 +166,8 @@ from stateguard.adapters.mcp.incidence import (
     with_faults,
 )
 from stateguard.adapters.mcp.jsonrpc import intervenes, is_conformant_response, proposal
+from stateguard.adapters.mcp.recording import Direction, Provenance, Recorder, RedactionPolicy
+from stateguard.adapters.mcp.recording import RedactionMode as RecordRedaction
 from stateguard.core.models.config import GuardConfig, RepairMode
 
 SESSION_HEADER = "mcp-session-id"
@@ -260,6 +264,22 @@ def says_session_unknown(body: bytes) -> bool:
     return isinstance(text, str) and "session" in text.lower()
 
 
+def _sse_data(text: str) -> list[str]:
+    """The data of each event in a whole event-stream body (for the recording)."""
+    out: list[str] = []
+    data: list[str] = []
+    for line in [*text.splitlines(), ""]:
+        if line == "":
+            if data:
+                out.append("\n".join(data))
+            data = []
+            continue
+        name, _, value = line.partition(":")
+        if name == "data":
+            data.append(value[1:] if value.startswith(" ") else value)
+    return out
+
+
 def sse(message: dict[str, Any]) -> bytes:
     return f"event: message\ndata: {json.dumps(message)}\n\n".encode()
 
@@ -345,6 +365,30 @@ class Relay:
         self._ids = itertools.count(1)
         self._audit_lock = threading.Lock()
         self._audit = open(args.audit, "a", encoding="utf-8") if args.audit else None  # noqa: SIM115
+        #: A redacted recording (``--record``), shadow mode only: the same recorder and
+        #: redaction as the stdio relay. Bodies are recorded as their JSON messages, one per
+        #: line; an event stream as each event's message.
+        self._recorder: Recorder | None = None
+        if getattr(args, "record", None):
+            self._recorder = Recorder(
+                open(args.record, "w", encoding="utf-8"),  # noqa: SIM115 -- closed at shutdown
+                provenance=Provenance(args.record_provenance),
+                session=uuid.uuid4().hex,
+                policy=RedactionPolicy(
+                    mode=RecordRedaction(args.record_redaction),
+                    mask_numbers=args.record_mask_numbers,
+                ),
+                deterministic=False,
+                background=True,
+                # The relay's settings only: never the upstream URL (it may carry a token).
+                config={
+                    "mode": "shadow",
+                    "retry": args.retry,
+                    "transport": "streamable_http",
+                    "call_deadline": args.call_deadline,
+                    "listing_refresh": not args.no_listing_refresh,
+                },
+            )
         self.client = httpx2.AsyncClient(
             timeout=httpx2.Timeout(args.upstream_timeout, connect=5.0),
             limits=httpx2.Limits(keepalive_expiry=args.pool_idle_timeout),
@@ -354,12 +398,56 @@ class Relay:
     # -- audit ---------------------------------------------------------------------------------
 
     def log(self, event: str, **fields: Any) -> None:
+        recorder = self._recorder
+        if recorder is not None and event not in (INVOCATION_EVENT, INVOCATION_OPEN_EVENT):
+            # Mirrored into the recording (redacted there), except the timing-dependent
+            # invocation records, which stay in the audit log, as on stdio.
+            try:
+                recorder.audit({"event": event, **fields})
+            except Exception:  # noqa: BLE001 -- a recorder never breaks a call
+                self._recorder = None
         if self._audit is None:
             return
         record = {"ts": datetime.now(UTC).isoformat(), "event": event, **fields}
         with self._audit_lock:
             self._audit.write(json.dumps(record, default=str) + "\n")
             self._audit.flush()
+
+    # -- recording ---------------------------------------------------------------------------
+
+    def _tap(self, direction: Direction, item: Any) -> None:
+        """One message as it crossed (a dict or list, or raw bytes). Never raises."""
+        recorder = self._recorder
+        if recorder is None or item is None:
+            return
+        try:
+            line = (
+                item
+                if isinstance(item, bytes)
+                else json.dumps(item, separators=(",", ":")).encode("utf-8")
+            )
+            recorder.message(direction, line.replace(b"\n", b" "))
+        except Exception:  # noqa: BLE001 -- a recorder never breaks a call
+            self._recorder = None
+
+    def _tap_body(self, direction: Direction, content: bytes, content_type: str) -> None:
+        """A whole HTTP body: a JSON message, or an event stream's messages."""
+        if self._recorder is None or not content:
+            return
+        if content_type.startswith("text/event-stream"):
+            for data in _sse_data(content.decode("utf-8", errors="replace")):
+                self._tap(direction, data.encode("utf-8"))
+            return
+        try:
+            parsed = json.loads(content)
+        except ValueError:
+            parsed = None
+        self._tap(direction, parsed if isinstance(parsed, dict | list) else content)
+
+    def close_recording(self) -> None:
+        recorder, self._recorder = self._recorder, None
+        if recorder is not None:
+            recorder.close()
 
     # -- forwarding ------------------------------------------------------------------------------
 
@@ -474,6 +562,31 @@ class Relay:
         return await self.delete(request)
 
     async def post(self, request: Request) -> Response:
+        if self._recorder is None:
+            return await self._post(request)
+        self._tap_body(
+            Direction.CLIENT_TO_RELAY,
+            await request.body(),
+            request.headers.get("content-type", "application/json"),
+        )
+        response = await self._post(request)
+        if isinstance(response, StreamingResponse):
+            response.body_iterator = self._tapped(response.body_iterator)
+        else:
+            self._tap_body(
+                Direction.RELAY_TO_CLIENT,
+                bytes(response.body),
+                response.headers.get("content-type", ""),
+            )
+        return response
+
+    async def _tapped(self, chunks: Any) -> AsyncIterator[bytes]:
+        async for chunk in chunks:
+            raw = chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8")
+            self._tap_body(Direction.RELAY_TO_CLIENT, raw, "text/event-stream")
+            yield raw
+
+    async def _post(self, request: Request) -> Response:
         body = await request.body()
         try:
             message = json.loads(body)
@@ -556,6 +669,10 @@ class Relay:
             except httpx2.TransportError as exc:
                 self.log("forward_failed", error=f"{type(exc).__name__}: {exc}")
                 return Response(status_code=502)
+            self._tap_body(Direction.RELAY_TO_SERVER, body, "application/json")
+            self._tap_body(
+                Direction.SERVER_TO_RELAY, answer.content, answer.headers.get("content-type", "")
+            )
             lost = (
                 session is not None
                 and not self.passthrough
@@ -590,6 +707,10 @@ class Relay:
         except httpx2.TransportError as exc:
             self.log("initialize_failed", error=f"{type(exc).__name__}: {exc}")
             return Response(status_code=502)
+        self._tap(Direction.RELAY_TO_SERVER, message)
+        self._tap_body(
+            Direction.SERVER_TO_RELAY, answer.content, answer.headers.get("content-type", "")
+        )
         upstream_id = answer.headers.get(SESSION_HEADER)
         if upstream_id is None:
             return self._plain(answer, None)  # a server without sessions: nothing to map
@@ -935,6 +1056,7 @@ class Relay:
                 state["in_doubt"] = True
                 return Attempt("unknown", reason="transport_closed")
             break
+        self._tap(Direction.RELAY_TO_SERVER, payload)
         status = answer.status_code
         if status == 404 and session is not None and not self.passthrough:
             await answer.aread()
@@ -977,6 +1099,7 @@ class Relay:
             parsed = None
         if not isinstance(parsed, dict):
             return Attempt("passthrough", response=answer, body=body)
+        self._tap(Direction.SERVER_TO_RELAY, parsed)
         attempt.message = parsed
         return attempt
 
@@ -1005,6 +1128,7 @@ class Relay:
                         message = json.loads(data)
                     except ValueError:
                         continue
+                    self._tap(Direction.SERVER_TO_RELAY, message)
                     if (
                         isinstance(message, dict)
                         and message.get("id") == upstream_id
@@ -1499,8 +1623,11 @@ def build_app(relay: Relay, path: str) -> Starlette:
 
     @contextlib.asynccontextmanager
     async def lifespan(_: Starlette) -> AsyncIterator[None]:
-        yield
-        await relay.client.aclose()
+        try:
+            yield
+        finally:
+            await relay.client.aclose()
+            relay.close_recording()
 
     return Starlette(
         routes=[Route(path, endpoint, methods=["GET", "POST", "DELETE"])], lifespan=lifespan
@@ -1563,6 +1690,29 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     parser.add_argument("--audit", help="append one JSON line per relay decision here")
     parser.add_argument(
+        "--record",
+        metavar="FILE",
+        help="Write a redacted recording of the traffic (JSON lines). Shadow mode only: "
+        "needs --shadow, no --passthrough and no --retry auto (a recording relay never acts).",
+    )
+    parser.add_argument(
+        "--record-provenance",
+        choices=[Provenance.LOCAL_DEVELOPMENT.value, Provenance.REAL_CAPTURE.value],
+        default=Provenance.LOCAL_DEVELOPMENT.value,
+        help="Provenance written into the recording (default: local_development).",
+    )
+    parser.add_argument(
+        "--record-redaction",
+        choices=[m.value for m in RecordRedaction],
+        default=RecordRedaction.MASK.value,
+        help="mask (default): persist no free-form values; secrets_only: drop credentials only.",
+    )
+    parser.add_argument(
+        "--record-mask-numbers",
+        action="store_true",
+        help="Mask every user-typeable number (always on for real_capture).",
+    )
+    parser.add_argument(
         "--upstream",
         dest="upstream_option",
         metavar="URL",
@@ -1587,6 +1737,19 @@ def parse_args(
     args.upstream = option if option is not None else positional
     if args.upstream is None:
         parser.error("give the MCP server's endpoint: --upstream URL")
+    if args.record:
+        if not args.shadow or args.passthrough:
+            parser.error("--record is shadow-only: add --shadow (and drop --passthrough)")
+        if args.retry != "off":
+            parser.error(
+                "--record records a relay that never acts: drop --retry auto (shadow mode "
+                "alone does not stop the HTTP relay from resending)"
+            )
+        if (
+            args.record_provenance == Provenance.REAL_CAPTURE.value
+            and args.record_redaction != RecordRedaction.MASK.value
+        ):
+            parser.error("--record-provenance real_capture requires --record-redaction mask")
     return args
 
 
@@ -1594,13 +1757,25 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
     args = parse_args(build_parser(prog), argv)
     host, _, port = args.listen.rpartition(":")
     relay = Relay(args)
-    uvicorn.run(
-        build_app(relay, args.path),
-        host=host or "127.0.0.1",
-        port=int(port),
-        log_level="warning",
-        lifespan="on",
-    )
+    # uvicorn shuts down gracefully on SIGINT/SIGTERM and then raises the signal again under
+    # the handler it found. A no-op handler here lets main() return after that shutdown, so a
+    # caller can finish (``stateguard capture http`` writes its bundle then).
+    stops = (signal.SIGINT, signal.SIGTERM)
+    previous = {stop: signal.getsignal(stop) for stop in stops}
+    for stop in stops:
+        signal.signal(stop, lambda *_: None)
+    try:
+        uvicorn.run(
+            build_app(relay, args.path),
+            host=host or "127.0.0.1",
+            port=int(port),
+            log_level="warning",
+            lifespan="on",
+        )
+    finally:
+        for stop, handler in previous.items():
+            signal.signal(stop, handler)
+        relay.close_recording()  # idempotent: the lifespan's shutdown closed it already
     return 0
 
 

@@ -905,6 +905,11 @@ The http relay needs the MCP extra: pip install 'sguard[mcp]'."""
 _CAPTURE_USAGE = """\
 usage: stateguard capture stdio --dir DIR [--label TEXT] [--provenance P] [relay options]
                                 -- <server command>
+       stateguard capture http --dir DIR [--label TEXT] [--provenance P] --shadow
+                               --upstream URL [relay options]
+
+The http capture is shadow-only (the HTTP relay records only in shadow mode, with no
+--retry auto); it runs until stopped (Ctrl-C or SIGTERM), then writes the bundle.
 
 Run the stdio relay with a recording and an audit log written to DIR/raw/ (private), and when
 it stops write DIR/bundle/: the mask-redacted recording (numbers masked), the invocation
@@ -929,13 +934,13 @@ def _cmd_capture(argv: list[str]) -> int:
     if transport in (None, "-h", "--help"):
         print(_CAPTURE_USAGE, file=sys.stdout if transport else sys.stderr)
         return _EXIT_OK if transport else _EXIT_FAILED
-    if transport != "stdio":
+    if transport not in ("stdio", "http"):
         print(_CAPTURE_USAGE, file=sys.stderr)
         print(f"\nstateguard capture: unknown transport {transport!r}", file=sys.stderr)
         return _EXIT_FAILED
     split = rest.index("--") if "--" in rest else len(rest)
     head, tail = rest[:split], rest[split:]
-    parser = argparse.ArgumentParser(prog="stateguard capture stdio", allow_abbrev=False)
+    parser = argparse.ArgumentParser(prog=f"stateguard capture {transport}", allow_abbrev=False)
     parser.add_argument("--dir", required=True, help="The capture directory (must be new).")
     parser.add_argument("--label", help="What this capture is (for the report).")
     parser.add_argument("--provenance", choices=["real_capture", "local_development"])
@@ -1001,6 +1006,18 @@ def _cmd_capture(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return code
+
+    if transport == "http":
+        try:
+            from stateguard.relay import http  # noqa: PLC0415 -- optional dependencies
+        except ImportError as exc:
+            print(
+                f"stateguard capture http: a dependency is missing ({exc.name or exc}). "
+                "The HTTP relay needs the MCP extra: pip install 'sguard[mcp]'",
+                file=sys.stderr,
+            )
+            return _EXIT_FAILED
+        return bundle(http.main([*relay_options, *record, *tail], prog="stateguard capture http"))
 
     from stateguard.relay import stdio  # noqa: PLC0415 -- only when asked
 
