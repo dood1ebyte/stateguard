@@ -1,0 +1,41 @@
+rows 180  driver_errors 0
+
+===== tsnotes
+
+raw
+  fault-free  -
+  faulted     36/36 (100.0%, ci 90.4%-100.0%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 12, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 24}  induced_vs_raw -  recovered_vs_raw -
+  latency fault-free None
+
+naive
+  fault-free  -
+  faulted     36/36 (100.0%, ci 90.4%-100.0%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 36}  induced_vs_raw 0  recovered_vs_raw 0
+  latency fault-free None
+
+sg
+  fault-free  -
+  faulted     36/36 (100.0%, ci 90.4%-100.0%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 36, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 36, mismatching ground truth 0
+  latency fault-free None
+
+sg_keyed
+  fault-free  -
+  faulted     24/36 (66.7%, ci 50.3%-79.8%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 12
+  relay invocation records 36, mismatching ground truth 0
+  latency fault-free None
+
+sg_keyed_deadline
+  fault-free  -
+  faulted     24/36 (66.7%, ci 50.3%-79.8%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 12
+  relay invocation records 36, mismatching ground truth 0
+  latency fault-free None
+
+op/mode                                 raw              naive                 sg           sg_keyed  sg_keyed_deadline
+write/after_begin                 12/12              12/12              12/12              12/12              12/12    
+write/after_effect                12/12              12/12              12/12              12/12              12/12    
+write/after_record                12/12              12/12              12/12               0/12               0/12    

@@ -1,0 +1,5 @@
+384 rows, 0 driver errors
+sqlite/naive: 48/96 (50.0%, CI 40.2%-59.8%); unresolved 0, failed resolved 48; unsafe 26 {'duplicate_effect': 16, 'false_success': 0, 'false_failure': 10, 'wrong_content': 0}; faulted calls 40 (0 twice+); failed with 1 fault 24, 2+ 0, none 24; disagreeing trials []
+sqlite/raw: 80/96 (83.3%, CI 74.6%-89.5%); unresolved 0, failed resolved 80; unsafe 27 {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 27, 'wrong_content': 0}; faulted calls 24 (0 twice+); failed with 1 fault 24, 2+ 0, none 56; disagreeing trials []
+sqlite/sg: 68/96 (70.8%, CI 61.1%-79.0%); unresolved 68, failed resolved 0; unsafe 0 {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}; faulted calls 21 (0 twice+); failed with 1 fault 21, 2+ 0, none 47; disagreeing trials []
+sqlite/sg_keyed: 9/96 (9.4%, CI 5.0%-16.9%); unresolved 9, failed resolved 0; unsafe 0 {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}; faulted calls 42 (9 twice+); failed with 1 fault 4, 2+ 3, none 2; disagreeing trials []

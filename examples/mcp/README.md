@@ -27,7 +27,7 @@ what you see is the actual protocol rather than a simulation of it.
 |---|---|
 | `server.py` | An ordinary MCP server with three tools. Knows nothing about StateGuard. |
 | `proxy.py` | `RepairingClient` — an in-process wrapper around an MCP SDK `Client`: caches `tools/list`, repairs `arguments`, forwards. |
-| `stdio_proxy.py` | A **stdio relay** — no SDK. Put it where a client expects a server command; it sits on the wire between them. See [below](#on-the-wire-the-stdio-relay). |
+| `stdio_proxy.py` | A **stdio relay** — no SDK. Put it where a client expects a server command; it sits on the wire between them. Now the package command `stateguard relay stdio`; this file is a thin wrapper. See [below](#on-the-wire-the-stdio-relay). |
 | `demo.py` | Runs the same five calls three times: directly, through the proxy, and through the proxy in shadow mode. |
 
 ## Output
@@ -222,14 +222,43 @@ before repair, and the reason says so.
 
 ## On the wire: the stdio relay
 
-`proxy.py` needs the MCP SDK and sits *inside* your client. `stdio_proxy.py`
+`proxy.py` needs the MCP SDK and sits *inside* your client. The stdio relay
 needs neither: it is a separate process an MCP client launches in place of
-the server, and it relays newline-delimited JSON-RPC between them.
+the server, and it relays newline-delimited JSON-RPC between them. It is a
+package command (`stateguard.relay.stdio`); `stdio_proxy.py` here is a thin
+wrapper around it, kept so existing scripts keep working.
 
 ```bash
 # where a client config says:   python my_server.py
 # put instead:
-python examples/mcp/stdio_proxy.py --audit stateguard.jsonl -- python my_server.py
+stateguard relay stdio --audit stateguard.jsonl -- python my_server.py
+# (the same: python examples/mcp/stdio_proxy.py --audit stateguard.jsonl -- python my_server.py)
+```
+
+`stateguard relay stdio -h` lists the options. The Streamable HTTP relay is
+`stateguard relay http --upstream http://127.0.0.1:3000/mcp [--listen 127.0.0.1:8800]`
+(it needs the MCP extra, `pip install "sguard[mcp]"`; `http_proxy.py` here is
+its wrapper).
+
+**Keys by default for Python and Node servers: `--keys auto`.** With
+`--retry auto --keys auto`, the relay starts the server so that the tools you
+key honour StateGuard's idempotency keys: a Python server (`python server.py`,
+`python -m module`, or a console script whose `#!` line names Python) runs
+under the injector, and a Node server (`node dist/index.js`, or an npm-installed
+bin) runs with the TypeScript preload (Node 22.18+). The keyed tools are those
+named with `--keyed-tools` plus those declared `non_idempotent` or `idempotent`
+in `--effects`; the key store defaults to `~/.stateguard/keys.db`. Anything
+else (`npx`, `uvx`, `docker`, a shell wrapper, a binary) runs unkeyed, and the
+relay says why on stderr and in its audit log (`relay_started.keys`). After
+each listing the audit log says, per keyed tool, whether the server advertised
+its keys (`keys_advertised` / `keys_not_advertised`). A keyed call whose server
+crashes after recording the outcome is answered from that record when resent;
+a crash before the record leaves the outcome unknown, never success or failure
+(see `docs/runtime/SERVER_IDEMPOTENCY_CONTRACT.md`).
+
+```bash
+stateguard relay stdio --retry auto --restart 2 --restart-policy after-unknown \
+  --effects effects.json --keys auto -- node node_modules/@modelcontextprotocol/server-memory/dist/index.js
 ```
 
 Every message passes through byte for byte except three:

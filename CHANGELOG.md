@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The relays are package commands.** `stateguard relay stdio [opts] -- <server>`
+  (`stateguard.relay.stdio`) and `stateguard relay http --upstream URL [opts]`
+  (`stateguard.relay.http`, needs the `mcp` extra); `python -m stateguard` runs the CLI.
+  `examples/mcp/stdio_proxy.py` and `http_proxy.py` remain as thin wrappers (imported,
+  they are the package modules themselves).
+- **`stateguard relay stdio --keys auto`** (default off) starts a Python server under
+  the injector and a Node server with the TypeScript preload, detected from the server
+  command, so the keyed tools (`--keyed-tools`, plus tools declared `non_idempotent` or
+  `idempotent` in `--effects`) honour idempotency keys. A command it cannot read with
+  certainty runs unkeyed and the relay says why. The wheel ships the preload
+  (`stateguard/relay/ts/`).
+- **`stateguard capture stdio|http` and `stateguard report`.** A relay session recorded
+  into a shareable bundle (mask-redacted recording with numbers masked, allowlisted
+  invocation records, key-store counts, manifest with SHA-256s) and a report rebuilt from
+  the bundle alone (`--check`): outcomes per call with Wilson intervals, UNKNOWN, retries,
+  latency and relay-overhead percentiles, denominator checks, duplicates from the key store.
+  See `docs/runtime/REAL_CAPTURE.md`.
+- **`stateguard relay http --record`**, shadow mode only, under the stdio relay's privacy
+  rules; `--record-mask-numbers` on both relays.
+
 ### Changed
 - **Three exact-but-wrong casts are held for confirmation instead of applied.**
   `TypeCoercionStrategy` records a semantic objection (`evidence.contradiction`,
@@ -77,6 +98,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     executions stay 0.
 
 ### Fixed
+- `stateguard relay http` now returns (exit 0) after a graceful SIGINT/SIGTERM shutdown
+  instead of dying with the signal uvicorn raises again, so its recording is closed.
 - **A repair that changed only a value's JSON type was forwarded unrepaired.**
   Payload-change detection used Python `==` (`2 == 2.0`, `True == 1`), so
   auto mode sent the original `2.0` after coercing it to `2`, and shadow

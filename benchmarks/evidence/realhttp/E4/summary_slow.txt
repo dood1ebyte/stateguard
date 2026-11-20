@@ -1,0 +1,13 @@
+rows 12  driver_errors 0
+
+===== notes
+
+sg_keyed_default
+  fault-free  -
+  faulted     0/12 (0.0%, ci 0.0%-24.2%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 12, mismatching ground truth 0
+  latency fault-free None
+
+op/mode                    sg_keyed_default
+write/slow                         0/12    

@@ -1,0 +1,54 @@
+rows 960  driver_errors 0
+
+===== notes
+
+raw
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     168/168 (100.0%, ci 97.8%-100.0%)   transport 144/144 (100.0%, ci 97.4%-100.0%)   session 24/24 (100.0%, ci 86.2%-100.0%)
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 24, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 24, 'no_answer_crash': 48}  induced_vs_raw -  recovered_vs_raw -
+  latency fault-free {'n': 24, 'mean': 0.89, 'median': 0.883, 'p95': 0.94}
+
+naive
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     48/168 (28.6%, ci 22.3%-35.8%)   transport 48/144 (33.3%, ci 26.2%-41.4%)   session 0/24 (0.0%, ci 0.0%-13.8%)
+  unsafe {'duplicate_effect': 48, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 120
+  latency fault-free {'n': 24, 'mean': 0.915, 'median': 0.887, 'p95': 1.184}
+
+sg
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     84/168 (50.0%, ci 42.5%-57.5%)   transport 84/144 (58.3%, ci 50.2%-66.1%)   session 0/24 (0.0%, ci 0.0%-13.8%)
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 60, 'surfaced_not_sent': 0, 'no_answer_timeout': 24, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 84
+  relay invocation records 177, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 0.936, 'median': 0.927, 'p95': 1.039}
+
+sg_keyed
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     24/168 (14.3%, ci 9.8%-20.4%)   transport 24/144 (16.7%, ci 11.5%-23.6%)   session 0/24 (0.0%, ci 0.0%-13.8%)
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 24, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 144
+  relay invocation records 172, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 0.939, 'median': 0.928, 'p95': 1.059}
+
+sg_keyed_deadline
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     0/168 (0.0%, ci 0.0%-2.2%)   transport 0/144 (0.0%, ci 0.0%-2.6%)   session 0/24 (0.0%, ci 0.0%-13.8%)
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 168
+  relay invocation records 192, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 0.929, 'median': 0.921, 'p95': 0.992}
+
+op/mode                                 raw              naive                 sg           sg_keyed  sg_keyed_deadline
+read/cut_stream                   12/12               0/12               0/12               0/12               0/12    
+read/hang_after                   12/12               0/12              12/12              12/12               0/12    
+read/http_502_after               12/12               0/12               0/12               0/12               0/12    
+read/http_503_before              12/12               0/12               0/12               0/12               0/12    
+read/kill_before                  12/12               0/12               0/12               0/12               0/12    
+read/lost_response                12/12               0/12               0/12               0/12               0/12    
+read/none                          0/12               0/12               0/12               0/12               0/12    
+read/session_loss                 12/12               0/12               0/12               0/12               0/12    
+write/cut_stream                  12/12              12/12              12/12               0/12               0/12    
+write/hang_after                  12/12              12/12              12/12              12/12               0/12    
+write/http_502_after              12/12              12/12              12/12               0/12               0/12    
+write/http_503_before             12/12               0/12              12/12               0/12               0/12    
+write/kill_before                 12/12               0/12              12/12               0/12               0/12    
+write/lost_response               12/12              12/12              12/12               0/12               0/12    
+write/none                         0/12               0/12               0/12               0/12               0/12    
+write/session_loss                12/12               0/12               0/12               0/12               0/12    

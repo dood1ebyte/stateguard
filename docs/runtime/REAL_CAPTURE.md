@@ -15,6 +15,82 @@ No real capture has been taken yet. Everything below that runs uses local
 fixtures only (the in-process `ScriptedServer` and
 `tests/examples/fake_mcp_server.py`), and the tests that label their
 recordings `real_capture` say so: they are a harness, not production evidence.
+Batch C1 (`benchmarks/evidence/capture/C1/`) drove three real public servers
+with **scripted** workloads: it is recorded as `local_development` and
+labelled "real server, scripted workload", and it is not a real capture either.
+
+---
+
+## Capture bundles: `stateguard capture` and `stateguard report` (Phase 2 S2)
+
+```bash
+stateguard capture stdio --dir ~/stateguard-captures/cap1 --shadow \
+  [--label TEXT] [relay options] -- <server command>
+stateguard capture http --dir ~/stateguard-captures/cap2 --shadow \
+  --upstream http://127.0.0.1:3000/mcp [--listen 127.0.0.1:8800] [relay options]
+stateguard report --check ~/stateguard-captures/cap1/bundle
+```
+
+`capture` runs the relay with its recording and audit log in `DIR/raw/` (mode
+0700) and, when the relay stops, writes **`DIR/bundle/`**, the only part meant
+to leave the machine, and only by the operator's hand. Nothing sends anything
+anywhere. The bundle holds:
+
+| File | What it holds |
+|---|---|
+| `recording.jsonl` | The recording, mask-redacted with **numbers masked** whatever the provenance (`--record-mask-numbers`, which capture always sets). A recording that is not, or that carries ground truth, is refused. |
+| `invocations.jsonl` | One line per client request, projected from the relay's `invocation` records through an allowlist: method, tool name, attempts, faults, resolution, the keyed server's outcome, milliseconds. No JSON-RPC or session ids, no text; a value that is not identifier-shaped is replaced. |
+| `keystore.json` | (keyed servers) Counts from the key store: executions, max executions per key, identical calls executed under more than one key. No keys, fingerprints or results. |
+| `manifest.json` | Provenance, mode, the operator's label, the server's name and version, the stateguard version, each file's SHA-256. |
+| `report.json`, `report.txt` | The report, computed from the files above alone. |
+
+**What never enters the bundle:** the raw audit log, which is not redacted, and the key store,
+which holds tool results.
+
+`report` checks the files against the manifest, rebuilds the report from the
+recording and invocations alone, and says whether it equals the stored one
+(`--check` exits 1 unless it does and the denominators agree; 2 if the bundle
+is malformed or altered).
+
+**The report** counts every client `tools/call` and drops none:
+- **succeeded**;
+- **tool error**: answered with `isError`, or with the server's own JSON-RPC error;
+- **failed**: not answered by the server: UNKNOWN and the other unresolved outcomes, `not_sent`,
+  refused;
+- **UNKNOWN**: the unresolved part of failed. It is never success, and it is a residual failure.
+- **not successful** = failed + tool error. Every rate carries a Wilson 95% interval.
+
+It also reports:
+- retries made, and in shadow, the resends auto mode would have made;
+- latency percentiles, nearest rank;
+- relay overhead per call forwarded exactly once (stdio). Upstream ids are the relay's own on
+  HTTP, so there it is not matched, and the report says so.
+
+**Denominators** (S2.2):
+- client tool calls in the recording = invocation records (a request still open when the relay
+  stopped is counted from its `invocation_open` line, as `unfinished`);
+- answers to the client = finished records;
+- no call answered twice;
+- the recording is complete.
+A broken check is reported, never hidden.
+
+**Duplicates from the key store** (S2.2): a key executes at most once by construction (the
+store's primary key and its atomic claim). So a duplicate *effect* is the same tool and
+arguments executed under *different* keys, and that is what the report counts. A client that
+deliberately repeats an identical call looks the same, so the figure counts candidates. Under a
+workload that never repeats a call, every candidate is a duplicate.
+`tests/test_capture.py` verifies it against a deliberately duplicated keyed call on the pinned
+server-memory.
+
+**The HTTP relay records in shadow mode only** (S2.3). `--record` needs `--shadow`, and refuses
+`--passthrough` and `--retry auto`: the HTTP relay's shadow mode does not by itself stop
+resends, and a recording relay never acts. Its taps are where messages cross:
+- the client's POST body;
+- each upstream POST;
+- each JSON answer or event-stream message from the server;
+- each answer or event to the client.
+Bodies are recorded as their JSON messages, and the header never holds the upstream URL. The
+same recorder, redactor and privacy rules apply as on stdio.
 
 ---
 

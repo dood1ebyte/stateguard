@@ -1,0 +1,11 @@
+C1  real server, scripted workload   rows 8   tool calls 400
+
+fetch/auto           sessions 4 invalid 0  calls client 200 relay 200 records 200 answered 200 unfinished 0  checks hold  rebuilt equal
+                     succeeded 192 tool_error 8 failed 0 unknown 0 (unknown ci [0.0, 0.0188])  retries 8 would_retry 0  latency p50 492.0 p95max 563.0  overhead p50 1.3 p95max 11.7 (n 200)
+fetch/shadow         sessions 4 invalid 0  calls client 200 relay 200 records 200 answered 200 unfinished 0  checks hold  rebuilt equal
+                     succeeded 192 tool_error 8 failed 0 unknown 0 (unknown ci [0.0, 0.0188])  retries 0 would_retry 8  latency p50 495.0 p95max 570.0  overhead p50 1.2 p95max 2.9 (n 200)
+
+pair fetch seed 1: paired, same workload True, equal True {"succeeded": [49, 49], "tool_error": [1, 1], "failed": [0, 0], "unknown": [0, 0]}
+pair fetch seed 2: paired, same workload True, equal True {"succeeded": [45, 45], "tool_error": [5, 5], "failed": [0, 0], "unknown": [0, 0]}
+pair fetch seed 3: paired, same workload True, equal True {"succeeded": [49, 49], "tool_error": [1, 1], "failed": [0, 0], "unknown": [0, 0]}
+pair fetch seed 4: paired, same workload True, equal True {"succeeded": [49, 49], "tool_error": [1, 1], "failed": [0, 0], "unknown": [0, 0]}

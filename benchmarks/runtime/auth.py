@@ -38,10 +38,15 @@ if __package__ in (None, ""):
 
 from stateguard.adapters.mcp import EffectPolicy, classify_response  # noqa: E402
 
-from .harness import DELAY_SECONDS, RelayMode, Rig, ScriptedServer, ServerTool  # noqa: E402
+from .harness import RelayMode, Rig, ScriptedServer, ServerTool  # noqa: E402
 
 ARMS = ("auto", "auto_retry")
 DEADLINE_SECONDS = 0.3
+#: How late a ``late`` case answers. The relay acts on the deadline at 0.30-0.35 s (it
+#: checks every 0.05 s); at the shared 0.45 s a loaded macOS runner woke the deadline
+#: thread after the answer had arrived (CI run 55), and the relay then rightly delivered
+#: the real answer. 0.9 s leaves 0.55 s for that.
+LATE_SECONDS = 0.9
 
 TOOLS = [
     {
@@ -90,7 +95,7 @@ class Case:
     arguments: dict[str, Any]
     #: The first answer (the fault); every later attempt succeeds.
     first: dict[str, Any] | None
-    #: Answer only after DELAY_SECONDS (past the auto_retry deadline).
+    #: Answer only after LATE_SECONDS (well past the auto_retry deadline).
     late: bool = False
     note: str = ""
     #: The expected class where no deadline turns the slow answer into UNKNOWN.
@@ -259,7 +264,7 @@ class CannedServer(ScriptedServer):
         if case is None or case.first is None or attempt > 0:
             return super()._call(identifier, params, message, writer)
         if case.late:
-            time.sleep(DELAY_SECONDS)
+            time.sleep(LATE_SECONDS)
         self._write(writer, json.dumps({"jsonrpc": "2.0", "id": identifier, **case.first}).encode())
         return True
 
@@ -281,7 +286,7 @@ def run_case(case: Case, arm: str) -> dict[str, Any]:
         rig.request("server/discover")
         rig.wait_synced()
         answer = rig.call(case.tool, case.arguments, timeout=3.0)
-        time.sleep(DELAY_SECONDS + 0.1 if case.late else 0.05)
+        time.sleep(LATE_SECONDS + 0.1 if case.late else 0.05)
     finally:
         rig.close()
     identifier = rig.sent_ids[-1]

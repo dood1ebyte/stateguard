@@ -1,0 +1,530 @@
+{
+ "n_rows": 624,
+ "driver_errors": 0,
+ "servers": {
+  "sqlite": {
+   "raw": {
+    "fault_free": {
+     "fail": 0,
+     "n": 24,
+     "rifr": 0.0,
+     "ci95": [
+      0.0,
+      0.138
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 132,
+     "n": 132,
+     "rifr": 1.0,
+     "ci95": [
+      0.9717,
+      1.0
+     ]
+    },
+    "faulted_transport": {
+     "fail": 96,
+     "n": 96,
+     "rifr": 1.0,
+     "ci95": [
+      0.9615,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 36,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 24,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {
+     "error_answer": 108,
+     "not_executed": 36,
+     "no_answer_timeout": 24,
+     "false_failure": 36
+    },
+    "server_outcomes": {},
+    "invocation_records": 0,
+    "invocation_record_mismatch": 0,
+    "invocation_record_mismatch_runs": [],
+    "latency_fault_free": {
+     "n": 24,
+     "mean": 1.258,
+     "median": 1.234,
+     "p95": 1.433
+    },
+    "cells": {
+     "read/hang": [
+      12,
+      12
+     ],
+     "read/kill_before": [
+      12,
+      12
+     ],
+     "read/lost_exit": [
+      12,
+      12
+     ],
+     "read/none": [
+      0,
+      12
+     ],
+     "read/transient": [
+      12,
+      12
+     ],
+     "write/after_begin": [
+      12,
+      12
+     ],
+     "write/after_effect": [
+      12,
+      12
+     ],
+     "write/after_record": [
+      12,
+      12
+     ],
+     "write/hang": [
+      12,
+      12
+     ],
+     "write/kill_before": [
+      12,
+      12
+     ],
+     "write/lost_exit": [
+      12,
+      12
+     ],
+     "write/none": [
+      0,
+      12
+     ],
+     "write/transient": [
+      12,
+      12
+     ]
+    }
+   },
+   "naive": {
+    "fault_free": {
+     "fail": 0,
+     "n": 24,
+     "rifr": 0.0,
+     "ci95": [
+      0.0,
+      0.138
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 48,
+     "n": 132,
+     "rifr": 0.3636,
+     "ci95": [
+      0.2865,
+      0.4485
+     ]
+    },
+    "faulted_transport": {
+     "fail": 24,
+     "n": 96,
+     "rifr": 0.25,
+     "ci95": [
+      0.1741,
+      0.3451
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 48,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 0,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {
+     "duplicate_effect": 48
+    },
+    "server_outcomes": {},
+    "invocation_records": 0,
+    "invocation_record_mismatch": 0,
+    "invocation_record_mismatch_runs": [],
+    "latency_fault_free": {
+     "n": 24,
+     "mean": 1.227,
+     "median": 1.203,
+     "p95": 1.371
+    },
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 84,
+    "cells": {
+     "read/hang": [
+      0,
+      12
+     ],
+     "read/kill_before": [
+      0,
+      12
+     ],
+     "read/lost_exit": [
+      0,
+      12
+     ],
+     "read/none": [
+      0,
+      12
+     ],
+     "read/transient": [
+      0,
+      12
+     ],
+     "write/after_begin": [
+      0,
+      12
+     ],
+     "write/after_effect": [
+      12,
+      12
+     ],
+     "write/after_record": [
+      12,
+      12
+     ],
+     "write/hang": [
+      12,
+      12
+     ],
+     "write/kill_before": [
+      0,
+      12
+     ],
+     "write/lost_exit": [
+      12,
+      12
+     ],
+     "write/none": [
+      0,
+      12
+     ],
+     "write/transient": [
+      0,
+      12
+     ]
+    }
+   },
+   "sg": {
+    "fault_free": {
+     "fail": 0,
+     "n": 24,
+     "rifr": 0.0,
+     "ci95": [
+      0.0,
+      0.138
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 84,
+     "n": 132,
+     "rifr": 0.6364,
+     "ci95": [
+      0.5515,
+      0.7135
+     ]
+    },
+    "faulted_transport": {
+     "fail": 48,
+     "n": 96,
+     "rifr": 0.5,
+     "ci95": [
+      0.4019,
+      0.5981
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 72,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 0,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {
+     "surfaced_unknown": 72,
+     "not_executed": 36,
+     "error_answer": 12
+    },
+    "server_outcomes": {},
+    "invocation_records": 156,
+    "invocation_record_mismatch": 0,
+    "invocation_record_mismatch_runs": [],
+    "latency_fault_free": {
+     "n": 24,
+     "mean": 1.438,
+     "median": 1.431,
+     "p95": 1.619
+    },
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 48,
+    "cells": {
+     "read/hang": [
+      0,
+      12
+     ],
+     "read/kill_before": [
+      0,
+      12
+     ],
+     "read/lost_exit": [
+      0,
+      12
+     ],
+     "read/none": [
+      0,
+      12
+     ],
+     "read/transient": [
+      0,
+      12
+     ],
+     "write/after_begin": [
+      12,
+      12
+     ],
+     "write/after_effect": [
+      12,
+      12
+     ],
+     "write/after_record": [
+      12,
+      12
+     ],
+     "write/hang": [
+      12,
+      12
+     ],
+     "write/kill_before": [
+      12,
+      12
+     ],
+     "write/lost_exit": [
+      12,
+      12
+     ],
+     "write/none": [
+      0,
+      12
+     ],
+     "write/transient": [
+      12,
+      12
+     ]
+    }
+   },
+   "sg_keyed": {
+    "fault_free": {
+     "fail": 0,
+     "n": 24,
+     "rifr": 0.0,
+     "ci95": [
+      0.0,
+      0.138
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 24,
+     "n": 132,
+     "rifr": 0.1818,
+     "ci95": [
+      0.1253,
+      0.2563
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 96,
+     "rifr": 0.0,
+     "ci95": [
+      0.0,
+      0.0385
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 24,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 0,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {
+     "surfaced_unknown": 24,
+     "not_executed": 12
+    },
+    "server_outcomes": {
+     "executed": 36,
+     "replayed": 36
+    },
+    "invocation_records": 156,
+    "invocation_record_mismatch": 0,
+    "invocation_record_mismatch_runs": [],
+    "latency_fault_free": {
+     "n": 24,
+     "mean": 1.587,
+     "median": 1.571,
+     "p95": 1.79
+    },
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 108,
+    "cells": {
+     "read/hang": [
+      0,
+      12
+     ],
+     "read/kill_before": [
+      0,
+      12
+     ],
+     "read/lost_exit": [
+      0,
+      12
+     ],
+     "read/none": [
+      0,
+      12
+     ],
+     "read/transient": [
+      0,
+      12
+     ],
+     "write/after_begin": [
+      12,
+      12
+     ],
+     "write/after_effect": [
+      12,
+      12
+     ],
+     "write/after_record": [
+      0,
+      12
+     ],
+     "write/hang": [
+      0,
+      12
+     ],
+     "write/kill_before": [
+      0,
+      12
+     ],
+     "write/lost_exit": [
+      0,
+      12
+     ],
+     "write/none": [
+      0,
+      12
+     ],
+     "write/transient": [
+      0,
+      12
+     ]
+    }
+   }
+  }
+ }
+}

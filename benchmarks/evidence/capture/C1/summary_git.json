@@ -1,0 +1,226 @@
+{
+ "rows": 8,
+ "label": "real server, scripted workload",
+ "groups": {
+  "git/auto": {
+   "sessions": 4,
+   "invalid_sessions": [],
+   "client_tool_calls": 200,
+   "relay_tool_calls": 200,
+   "records": 200,
+   "answered": 200,
+   "unfinished": 0,
+   "checks_hold": true,
+   "client_equals_relay": true,
+   "client_tool_errors_equal_report": true,
+   "rebuilt_equal": true,
+   "calls": 200,
+   "succeeded": {
+    "k": 192,
+    "ci95": [
+     0.9231,
+     0.9796
+    ]
+   },
+   "tool_error": {
+    "k": 8,
+    "ci95": [
+     0.0204,
+     0.0769
+    ]
+   },
+   "failed": {
+    "k": 0,
+    "ci95": [
+     0.0,
+     0.0188
+    ]
+   },
+   "unknown": {
+    "k": 0,
+    "ci95": [
+     0.0,
+     0.0188
+    ]
+   },
+   "not_successful": {
+    "k": 8,
+    "ci95": [
+     0.0204,
+     0.0769
+    ]
+   },
+   "retries_made": 8,
+   "would_retry": 0,
+   "latency_p50_ms_median_of_sessions": 7.0,
+   "latency_p95_ms_max_of_sessions": 16.0,
+   "overhead_p50_ms_median_of_sessions": 1.0,
+   "overhead_p95_ms_max_of_sessions": 3.8,
+   "overhead_calls": 200,
+   "client_noise_lines": 0
+  },
+  "git/shadow": {
+   "sessions": 4,
+   "invalid_sessions": [],
+   "client_tool_calls": 200,
+   "relay_tool_calls": 200,
+   "records": 200,
+   "answered": 200,
+   "unfinished": 0,
+   "checks_hold": true,
+   "client_equals_relay": true,
+   "client_tool_errors_equal_report": true,
+   "rebuilt_equal": true,
+   "calls": 200,
+   "succeeded": {
+    "k": 192,
+    "ci95": [
+     0.9231,
+     0.9796
+    ]
+   },
+   "tool_error": {
+    "k": 8,
+    "ci95": [
+     0.0204,
+     0.0769
+    ]
+   },
+   "failed": {
+    "k": 0,
+    "ci95": [
+     0.0,
+     0.0188
+    ]
+   },
+   "unknown": {
+    "k": 0,
+    "ci95": [
+     0.0,
+     0.0188
+    ]
+   },
+   "not_successful": {
+    "k": 8,
+    "ci95": [
+     0.0204,
+     0.0769
+    ]
+   },
+   "retries_made": 0,
+   "would_retry": 8,
+   "latency_p50_ms_median_of_sessions": 7.0,
+   "latency_p95_ms_max_of_sessions": 15.0,
+   "overhead_p50_ms_median_of_sessions": 1.0,
+   "overhead_p95_ms_max_of_sessions": 2.0,
+   "overhead_calls": 200,
+   "client_noise_lines": 0
+  }
+ },
+ "pairs": [
+  {
+   "server": "git",
+   "seed": 1,
+   "paired": true,
+   "same_workload": true,
+   "shadow_auto": {
+    "succeeded": [
+     47,
+     47
+    ],
+    "tool_error": [
+     3,
+     3
+    ],
+    "failed": [
+     0,
+     0
+    ],
+    "unknown": [
+     0,
+     0
+    ]
+   },
+   "equal": true
+  },
+  {
+   "server": "git",
+   "seed": 2,
+   "paired": true,
+   "same_workload": true,
+   "shadow_auto": {
+    "succeeded": [
+     49,
+     49
+    ],
+    "tool_error": [
+     1,
+     1
+    ],
+    "failed": [
+     0,
+     0
+    ],
+    "unknown": [
+     0,
+     0
+    ]
+   },
+   "equal": true
+  },
+  {
+   "server": "git",
+   "seed": 3,
+   "paired": true,
+   "same_workload": true,
+   "shadow_auto": {
+    "succeeded": [
+     50,
+     50
+    ],
+    "tool_error": [
+     0,
+     0
+    ],
+    "failed": [
+     0,
+     0
+    ],
+    "unknown": [
+     0,
+     0
+    ]
+   },
+   "equal": true
+  },
+  {
+   "server": "git",
+   "seed": 4,
+   "paired": true,
+   "same_workload": true,
+   "shadow_auto": {
+    "succeeded": [
+     46,
+     46
+    ],
+    "tool_error": [
+     4,
+     4
+    ],
+    "failed": [
+     0,
+     0
+    ],
+    "unknown": [
+     0,
+     0
+    ]
+   },
+   "equal": true
+  }
+ ],
+ "total_tool_calls": 400,
+ "servers": [
+  "git"
+ ]
+}

@@ -1,0 +1,41 @@
+rows 120  driver_errors 0
+
+===== memory
+
+raw
+  fault-free  -
+  faulted     0/24 (0.0%, ci 0.0%-13.8%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw -  recovered_vs_raw -
+  latency fault-free None
+
+sg
+  fault-free  -
+  faulted     0/24 (0.0%, ci 0.0%-13.8%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 24, mismatching ground truth 0
+  latency fault-free None
+
+sg_keyed
+  fault-free  -
+  faulted     0/24 (0.0%, ci 0.0%-13.8%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 24, mismatching ground truth 0
+  latency fault-free None
+
+sg_keyed_bound
+  fault-free  -
+  faulted     0/24 (0.0%, ci 0.0%-13.8%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 24, mismatching ground truth 0
+  latency fault-free None
+
+sg_bound
+  fault-free  -
+  faulted     12/24 (50.0%, ci 31.4%-68.6%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 12, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 12  recovered_vs_raw 0
+  relay invocation records 24, mismatching ground truth 0
+  latency fault-free None
+
+op/mode                                 raw                 sg           sg_keyed     sg_keyed_bound           sg_bound
+read/slow                          0/12               0/12               0/12               0/12               0/12    
+write/slow                         0/12               0/12               0/12               0/12              12/12    

@@ -1,0 +1,33 @@
+{
+ "n_rows": 240,
+ "driver_errors": 0,
+ "cells": {
+  "notes/sg_keyed": {
+   "eligible": 240,
+   "failed": 1,
+   "unresolved": 1,
+   "failed_resolved": 0,
+   "rfr": 0.0042,
+   "ci95": [
+    0.0007,
+    0.0232
+   ],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "calls_faulted": 93,
+   "calls_faulted_twice_or_more": 16,
+   "failed_with_one_fault": 0,
+   "failed_with_two_or_more": 1,
+   "failed_unfaulted": 0,
+   "faults_injected": 110,
+   "trials": 10,
+   "trials_disagreeing": [],
+   "seed_intact": true,
+   "wall_s_max": 2.782
+  }
+ }
+}

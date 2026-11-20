@@ -1,0 +1,167 @@
+{
+ "calls": 3000,
+ "session_errors": 0,
+ "failed_calls": 0,
+ "cells": {
+  "memory/read/first/raw": {
+   "latency": {
+    "n": 20,
+    "mean_ms": 9.99,
+    "median_ms": 8.1,
+    "p95_ms": 12.56
+   }
+  },
+  "memory/read/first/sg": {
+   "latency": {
+    "n": 20,
+    "mean_ms": 8.93,
+    "median_ms": 8.38,
+    "p95_ms": 10.9
+   },
+   "vs_raw": {
+    "pairs": 20,
+    "mean_ms": -1.07,
+    "ci95_ms": [
+     -4.64,
+     2.5
+    ]
+   }
+  },
+  "memory/read/first/sg_keyed": {
+   "latency": {
+    "n": 20,
+    "mean_ms": 8.86,
+    "median_ms": 8.71,
+    "p95_ms": 10.18
+   },
+   "vs_raw": {
+    "pairs": 20,
+    "mean_ms": -1.13,
+    "ci95_ms": [
+     -4.61,
+     2.34
+    ]
+   }
+  },
+  "memory/read/warm/raw": {
+   "latency": {
+    "n": 480,
+    "mean_ms": 2.01,
+    "median_ms": 1.93,
+    "p95_ms": 2.76
+   }
+  },
+  "memory/read/warm/sg": {
+   "latency": {
+    "n": 480,
+    "mean_ms": 2.96,
+    "median_ms": 2.9,
+    "p95_ms": 3.67
+   },
+   "vs_raw": {
+    "pairs": 480,
+    "mean_ms": 0.94,
+    "ci95_ms": [
+     0.9,
+     0.99
+    ]
+   }
+  },
+  "memory/read/warm/sg_keyed": {
+   "latency": {
+    "n": 480,
+    "mean_ms": 3.23,
+    "median_ms": 3.05,
+    "p95_ms": 4.51
+   },
+   "vs_raw": {
+    "pairs": 480,
+    "mean_ms": 1.22,
+    "ci95_ms": [
+     1.15,
+     1.28
+    ]
+   }
+  },
+  "memory/write/first/raw": {
+   "latency": {
+    "n": 20,
+    "mean_ms": 5.4,
+    "median_ms": 5.42,
+    "p95_ms": 6.1
+   }
+  },
+  "memory/write/first/sg": {
+   "latency": {
+    "n": 20,
+    "mean_ms": 6.43,
+    "median_ms": 6.5,
+    "p95_ms": 6.98
+   },
+   "vs_raw": {
+    "pairs": 20,
+    "mean_ms": 1.03,
+    "ci95_ms": [
+     0.65,
+     1.4
+    ]
+   }
+  },
+  "memory/write/first/sg_keyed": {
+   "latency": {
+    "n": 20,
+    "mean_ms": 15.94,
+    "median_ms": 14.96,
+    "p95_ms": 20.23
+   },
+   "vs_raw": {
+    "pairs": 20,
+    "mean_ms": 10.54,
+    "ci95_ms": [
+     8.83,
+     12.25
+    ]
+   }
+  },
+  "memory/write/warm/raw": {
+   "latency": {
+    "n": 480,
+    "mean_ms": 3.1,
+    "median_ms": 2.85,
+    "p95_ms": 3.89
+   }
+  },
+  "memory/write/warm/sg": {
+   "latency": {
+    "n": 480,
+    "mean_ms": 3.99,
+    "median_ms": 3.81,
+    "p95_ms": 5.07
+   },
+   "vs_raw": {
+    "pairs": 480,
+    "mean_ms": 0.89,
+    "ci95_ms": [
+     0.66,
+     1.11
+    ]
+   }
+  },
+  "memory/write/warm/sg_keyed": {
+   "latency": {
+    "n": 480,
+    "mean_ms": 9.96,
+    "median_ms": 9.59,
+    "p95_ms": 12.97
+   },
+   "vs_raw": {
+    "pairs": 480,
+    "mean_ms": 6.86,
+    "ci95_ms": [
+     6.57,
+     7.15
+    ]
+   }
+  }
+ }
+}

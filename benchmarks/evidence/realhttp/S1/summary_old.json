@@ -1,0 +1,26 @@
+{
+ "old": {
+  "n": 60,
+  "failed": 13,
+  "rate": 0.2167,
+  "ci95": [
+   0.1312,
+   0.3362
+  ],
+  "relay_faults": {
+   "transport_lost": 13
+  },
+  "relay_resolutions": {
+   "answered": 47,
+   "unknown": 13
+  },
+  "answers": {
+   "result:None": 47,
+   "mcp_error:unknown": 13
+  },
+  "duplicates": 0,
+  "false_success": 0,
+  "not_executed": 13,
+  "upstream_connections": 32
+ }
+}

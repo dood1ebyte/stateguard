@@ -1,0 +1,31 @@
+{
+ "new": "benchmarks/evidence/realstdio/S10/summary_keys_auto_sqlite.json",
+ "refs": [
+  "benchmarks/evidence/realstdio/S10/summary_sqlite.json"
+ ],
+ "arms": [
+  {
+   "server": "sqlite",
+   "arm": "sg_keys_auto",
+   "kind": "stateguard",
+   "ref": "benchmarks/evidence/realstdio/S10/summary_sqlite.json",
+   "ref_arm": "sg_keyed",
+   "cells": 4,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    24,
+    48
+   ],
+   "ref_total": [
+    24,
+    48
+   ]
+  }
+ ]
+}

@@ -1,0 +1,11 @@
+C1  real server, scripted workload   rows 8   tool calls 400
+
+git/auto             sessions 4 invalid 0  calls client 200 relay 200 records 200 answered 200 unfinished 0  checks hold  rebuilt equal
+                     succeeded 192 tool_error 8 failed 0 unknown 0 (unknown ci [0.0, 0.0188])  retries 8 would_retry 0  latency p50 7.0 p95max 16.0  overhead p50 1.0 p95max 3.8 (n 200)
+git/shadow           sessions 4 invalid 0  calls client 200 relay 200 records 200 answered 200 unfinished 0  checks hold  rebuilt equal
+                     succeeded 192 tool_error 8 failed 0 unknown 0 (unknown ci [0.0, 0.0188])  retries 0 would_retry 8  latency p50 7.0 p95max 15.0  overhead p50 1.0 p95max 2.0 (n 200)
+
+pair git seed 1: paired, same workload True, equal True {"succeeded": [47, 47], "tool_error": [3, 3], "failed": [0, 0], "unknown": [0, 0]}
+pair git seed 2: paired, same workload True, equal True {"succeeded": [49, 49], "tool_error": [1, 1], "failed": [0, 0], "unknown": [0, 0]}
+pair git seed 3: paired, same workload True, equal True {"succeeded": [50, 50], "tool_error": [0, 0], "failed": [0, 0], "unknown": [0, 0]}
+pair git seed 4: paired, same workload True, equal True {"succeeded": [46, 46], "tool_error": [4, 4], "failed": [0, 0], "unknown": [0, 0]}

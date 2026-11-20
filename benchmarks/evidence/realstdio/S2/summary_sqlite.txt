@@ -1,0 +1,44 @@
+rows 624  driver_errors 0
+
+===== sqlite
+
+raw
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     132/132 (100.0%, ci 97.2%-100.0%)   transport 96/96 (100.0%, ci 96.2%-100.0%)   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 36, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 24, 'no_answer_crash': 0}  induced_vs_raw -  recovered_vs_raw -
+  latency fault-free {'n': 24, 'mean': 1.331, 'median': 1.303, 'p95': 1.392}
+
+naive
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     48/132 (36.4%, ci 28.6%-44.9%)   transport 24/96 (25.0%, ci 17.4%-34.5%)   session -
+  unsafe {'duplicate_effect': 48, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 84
+  latency fault-free {'n': 24, 'mean': 1.36, 'median': 1.298, 'p95': 1.538}
+
+sg
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     96/132 (72.7%, ci 64.6%-79.6%)   transport 60/96 (62.5%, ci 52.5%-71.5%)   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 72, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 36
+  relay invocation records 156, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 1.594, 'median': 1.546, 'p95': 2.004}
+
+sg_keyed
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     48/132 (36.4%, ci 28.6%-44.9%)   transport 24/96 (25.0%, ci 17.4%-34.5%)   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 24, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 84
+  relay invocation records 156, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 1.769, 'median': 1.692, 'p95': 2.374}
+
+op/mode                                 raw              naive                 sg           sg_keyed
+read/hang                         12/12               0/12               0/12               0/12    
+read/kill_before                  12/12               0/12               0/12               0/12    
+read/lost_exit                    12/12               0/12               0/12               0/12    
+read/none                          0/12               0/12               0/12               0/12    
+read/transient                    12/12               0/12              12/12              12/12    
+write/after_begin                 12/12               0/12              12/12              12/12    
+write/after_effect                12/12              12/12              12/12              12/12    
+write/after_record                12/12              12/12              12/12               0/12    
+write/hang                        12/12              12/12              12/12               0/12    
+write/kill_before                 12/12               0/12              12/12               0/12    
+write/lost_exit                   12/12              12/12              12/12               0/12    
+write/none                         0/12               0/12               0/12               0/12    
+write/transient                   12/12               0/12              12/12              12/12    

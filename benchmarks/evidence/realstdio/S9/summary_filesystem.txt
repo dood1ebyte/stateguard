@@ -1,0 +1,25 @@
+rows 156  driver_errors 0
+
+===== filesystem
+
+sg_keyed
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     24/132 (18.2%, ci 12.5%-25.6%)   transport 0/96 (0.0%, ci 0.0%-3.9%)   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 24, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 156, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 1.317, 'median': 1.312, 'p95': 1.412}
+
+op/mode                            sg_keyed
+read/hang                          0/12    
+read/kill_before                   0/12    
+read/lost_exit                     0/12    
+read/none                          0/12    
+read/transient                     0/12    
+write/after_begin                 12/12    
+write/after_effect                12/12    
+write/after_record                 0/12    
+write/hang                         0/12    
+write/kill_before                  0/12    
+write/lost_exit                    0/12    
+write/none                         0/12    
+write/transient                    0/12    

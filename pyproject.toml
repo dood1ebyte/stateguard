@@ -60,6 +60,11 @@ all = ["sguard[pydantic,mcp,dev]"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/stateguard"]
 
+# The TypeScript preload, for ``stateguard relay stdio --keys auto`` with a Node server
+# (stateguard/relay/keys.py finds it here; a checkout uses adapters/typescript/src directly).
+[tool.hatch.build.targets.wheel.force-include]
+"adapters/typescript/src" = "stateguard/relay/ts"
+
 # ---------------------------------------------------------------------------
 # Pytest
 # ---------------------------------------------------------------------------
@@ -110,6 +115,12 @@ no_implicit_reexport   = true
 [[tool.mypy.overrides]]
 module                 = "stateguard.adapters.pydantic.*"
 warn_return_any        = false
+
+# Typed against mcp 1.x, which this environment does not have: checked by
+# `mypy --config-file mypy-mcp1.ini --python-executable <python with mcp 1.x>`.
+[[tool.mypy.overrides]]
+module                 = "stateguard.adapters.mcp.idempotency_sdk1"
+ignore_errors          = true
 
 # ---------------------------------------------------------------------------
 # Ruff

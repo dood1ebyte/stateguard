@@ -1,0 +1,5 @@
+384 rows, 0 driver errors
+memory/naive: 16/96 (16.7%, CI 10.5%-25.4%); unresolved 0, failed resolved 16; unsafe 8 {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 8, 'wrong_content': 0}; faulted calls 32 (0 twice+); failed with 1 fault 16, 2+ 0, none 0; disagreeing trials []
+memory/raw: 40/96 (41.7%, CI 32.3%-51.7%); unresolved 8, failed resolved 32; unsafe 8 {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 8, 'wrong_content': 0}; faulted calls 24 (0 twice+); failed with 1 fault 24, 2+ 0, none 16; disagreeing trials []
+memory/sg: 32/96 (33.3%, CI 24.7%-43.2%); unresolved 24, failed resolved 8; unsafe 0 {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}; faulted calls 32 (0 twice+); failed with 1 fault 32, 2+ 0, none 0; disagreeing trials []
+memory/sg_keyed: 0/96 (0.0%, CI 0.0%-3.9%); unresolved 0, failed resolved 0; unsafe 0 {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}; faulted calls 40 (0 twice+); failed with 1 fault 0, 2+ 0, none 0; disagreeing trials []

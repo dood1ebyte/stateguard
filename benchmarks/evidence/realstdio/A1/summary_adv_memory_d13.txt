@@ -1,0 +1,34 @@
+rows 324  driver_errors 0
+
+===== memory
+
+raw
+  fault-free  -
+  faulted     72/108 (66.7%, ci 57.3%-74.9%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 72, 'no_answer_crash': 0}  induced_vs_raw -  recovered_vs_raw -
+  latency fault-free None
+
+sg
+  fault-free  -
+  faulted     36/108 (33.3%, ci 25.1%-42.7%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 36, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 36
+  relay invocation records 108, mismatching ground truth 0
+  latency fault-free None
+
+sg_keyed
+  fault-free  -
+  faulted     0/108 (0.0%, ci 0.0%-3.4%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 72
+  relay invocation records 108, mismatching ground truth 0
+  latency fault-free None
+
+op/mode                                 raw                 sg           sg_keyed
+read/duplicate                     0/12               0/12               0/12    
+read/garbage                      12/12               0/12               0/12    
+read/nonconformant                12/12               0/12               0/12    
+read/truncated                    12/12               0/12               0/12    
+write/duplicate                    0/12               0/12               0/12    
+write/garbage                     12/12              12/12               0/12    
+write/nonconformant               12/12              12/12               0/12    
+write/stale_listing                0/12               0/12               0/12    
+write/truncated                   12/12              12/12               0/12    

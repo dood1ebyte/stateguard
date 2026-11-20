@@ -1,0 +1,98 @@
+{
+ "n_rows": 12,
+ "driver_errors": 0,
+ "servers": {
+  "notes": {
+   "sg_norefresh": {
+    "fault_free": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 12,
+     "n": 12,
+     "rifr": 1.0,
+     "ci95": [
+      0.7575,
+      1.0
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 0,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {
+     "error_answer": 12,
+     "not_executed": 12
+    },
+    "server_outcomes": {},
+    "invocation_records": 12,
+    "invocation_record_mismatch": 12,
+    "invocation_record_mismatch_runs": [
+     "notes-write-stale_listing-sg_norefresh-20002-ffe92ab71f",
+     "notes-write-stale_listing-sg_norefresh-20003-0aa1ef78e0",
+     "notes-write-stale_listing-sg_norefresh-20001-076234e607",
+     "notes-write-stale_listing-sg_norefresh-20000-bb8dea77e1",
+     "notes-write-stale_listing-sg_norefresh-20004-295e6d1a77",
+     "notes-write-stale_listing-sg_norefresh-20006-70323fc93f",
+     "notes-write-stale_listing-sg_norefresh-20005-de577969ec",
+     "notes-write-stale_listing-sg_norefresh-20007-85d2e41a72",
+     "notes-write-stale_listing-sg_norefresh-20008-dd28aa596d",
+     "notes-write-stale_listing-sg_norefresh-20009-b623ac9ab7",
+     "notes-write-stale_listing-sg_norefresh-20010-cf84325dc6",
+     "notes-write-stale_listing-sg_norefresh-20011-4663fbbe1a"
+    ],
+    "latency_fault_free": null,
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 0,
+    "cells": {
+     "write/stale_listing": [
+      12,
+      12
+     ]
+    }
+   }
+  }
+ }
+}
