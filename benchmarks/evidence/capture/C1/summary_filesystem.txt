@@ -1,0 +1,11 @@
+C1  real server, scripted workload   rows 8   tool calls 400
+
+filesystem/auto      sessions 4 invalid 0  calls client 200 relay 200 records 200 answered 200 unfinished 0  checks hold  rebuilt equal
+                     succeeded 193 tool_error 7 failed 0 unknown 0 (unknown ci [0.0, 0.0188])  retries 7 would_retry 0  latency p50 2.0 p95max 5.0  overhead p50 1.0 p95max 2.7 (n 200)
+filesystem/shadow    sessions 4 invalid 0  calls client 200 relay 200 records 200 answered 200 unfinished 0  checks hold  rebuilt equal
+                     succeeded 193 tool_error 7 failed 0 unknown 0 (unknown ci [0.0, 0.0188])  retries 0 would_retry 7  latency p50 2.0 p95max 5.0  overhead p50 1.0 p95max 2.1 (n 200)
+
+pair filesystem seed 1: paired, same workload True, equal True {"succeeded": [47, 47], "tool_error": [3, 3], "failed": [0, 0], "unknown": [0, 0]}
+pair filesystem seed 2: paired, same workload True, equal True {"succeeded": [49, 49], "tool_error": [1, 1], "failed": [0, 0], "unknown": [0, 0]}
+pair filesystem seed 3: paired, same workload True, equal True {"succeeded": [49, 49], "tool_error": [1, 1], "failed": [0, 0], "unknown": [0, 0]}
+pair filesystem seed 4: paired, same workload True, equal True {"succeeded": [48, 48], "tool_error": [2, 2], "failed": [0, 0], "unknown": [0, 0]}
