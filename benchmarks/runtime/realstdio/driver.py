@@ -85,9 +85,15 @@ CELLS = {
     + [f"write/{m}" for m in CRASH]
     for s in ("sqlite", "memory", "filesystem")
 }
-ARMS = {s: ["raw", "naive", "sg", "sg_keyed"] for s in ("sqlite", "memory", "filesystem")}
-WRITE_TOOL = {"sqlite": "write_query", "memory": "add_observations", "filesystem": "move_file"}
-READ_TOOL = {"sqlite": "read_query", "memory": "search_nodes", "filesystem": "read_text_file"}
+#: Phase 2 S3: the cooperating notes server (note and key record in one SQLite transaction),
+#: keyed natively; unkeyed arms run it with --no-keys.
+CELLS["coop"] = ["read/none", "write/none"] + [f"write/{m}" for m in CRASH]
+ARMS = {s: ["raw", "naive", "sg", "sg_keyed"] for s in ("sqlite", "memory", "filesystem", "coop")}
+WRITE_TOOL = {"sqlite": "write_query", "memory": "add_observations", "filesystem": "move_file",
+              "coop": "add_note"}
+READ_TOOL = {"sqlite": "read_query", "memory": "search_nodes", "filesystem": "read_text_file",
+             "coop": "list_notes"}
+COOP_SERVER = str(CODE / "examples/mcp/cooperating_notes_server.py")
 CLIENT_WAIT = 8.0
 
 
@@ -120,6 +126,14 @@ def setup(server: str, base: Path, t: int, arm: str, op: str, mode: str) -> tupl
             cmd = [str(Path(MCP1).parent / "mcp-server-sqlite"), "--db-path", str(db)]
         read = ("read_query", {"query": "SELECT text FROM notes"}, f"seed-{t}")
         write = ("write_query", {"query": f"INSERT INTO notes VALUES ('{marker}')"})
+    elif server == "coop":
+        db = base / "notes.db"
+        with sqlite3.connect(db) as conn:
+            conn.execute("CREATE TABLE notes (seq INTEGER PRIMARY KEY, text TEXT NOT NULL)")
+            conn.execute("INSERT INTO notes (text) VALUES (?)", (f"seed-{t}",))
+        cmd = [PY, COOP_SERVER, str(db)] + ([] if keyed else ["--no-keys"])
+        read = ("list_notes", {}, f"seed-{t}")
+        write = ("add_note", {"text": marker})
     elif server == "filesystem":
         root = base / "root"
         root.mkdir()
@@ -148,6 +162,9 @@ def setup(server: str, base: Path, t: int, arm: str, op: str, mode: str) -> tupl
 
 
 def truth_count(server: str, base: Path, marker: str) -> int:
+    if server == "coop":
+        with sqlite3.connect(base / "notes.db") as conn:
+            return conn.execute("SELECT COUNT(*) FROM notes WHERE text = ?", (marker,)).fetchone()[0]
     if server == "sqlite":
         with sqlite3.connect(base / "app.db") as conn:
             return conn.execute("SELECT COUNT(*) FROM notes WHERE text = ?", (marker,)).fetchone()[0]

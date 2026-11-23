@@ -42,6 +42,7 @@ import os
 import random
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -60,6 +61,8 @@ NODE = os.environ.get("NODE") or shutil.which("node") or "/opt/node22/bin/node"
 RELAY = [PY, "-m", "stateguard", "relay", "http"]
 FAULTS = str(CODE / "benchmarks/runtime/http_fault_proxy.py")
 NOTES_SERVER = str(CODE / "tests/examples/http_notes_server.py")
+#: Phase 2 S3: the cooperating notes server (note and key record in one SQLite transaction).
+COOP_SERVER = str(CODE / "examples/mcp/cooperating_notes_server.py")
 TS_SERVER = str(CODE / "adapters/typescript/test/fixtures/http_notes_server.ts")
 TS_PRELOAD = str(CODE / "adapters/typescript/src/preload.ts")
 EVERYTHING = os.environ.get(
@@ -82,8 +85,10 @@ CRASH = ["after_begin", "after_effect", "after_record"]
 #: The taxonomy's J, H, C and B (fault proxy modes; not in the default cells; the call runs).
 ADVERSARIAL = ["dup_answer", "garbage_answer", "truncated_answer", "nonconformant_answer",
                "stale_listing"]
-CELLS = {"notes": FULL, "tsnotes": FULL, "everything": [f"read/{m}" for m in MODES]}
+CELLS = {"notes": FULL, "tsnotes": FULL, "everything": [f"read/{m}" for m in MODES],
+         "coopnotes": ["write/none"] + [f"write/{m}" for m in CRASH]}
 ARMS = {"notes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
+        "coopnotes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
         "tsnotes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
         "everything": ["raw", "naive", "sg", "sg_deadline"]}
 KEYED = ("sg_keyed", "sg_keyed_deadline", "sg_keyed_default")
@@ -183,6 +188,21 @@ def setup(server, base, t, arm, op, slow=0.0, crash=None):
                 cmd += ["--slow", str(slow)]
         read = ("list_notes", {}, f"seed-{t}")
         write = ("add_note", {"Text" if op == "drift" else "text": f"w-{t}"})
+    elif server == "coopnotes":
+        # Cooperating: keyed natively (its own transactional keys); unkeyed arms run it with
+        # --no-keys. Faults come from the same STATEGUARD_FAULT variables.
+        db = base / "notes.db"
+        with sqlite3.connect(db) as conn:
+            conn.execute("CREATE TABLE notes (seq INTEGER PRIMARY KEY, text TEXT NOT NULL)")
+            conn.execute("INSERT INTO notes (text) VALUES (?)", (f"seed-{t}",))
+        if crash:
+            env.update(STATEGUARD_FAULT=crash, STATEGUARD_FAULT_FILE=str(base / "crash.fired"),
+                       STATEGUARD_FAULT_TOOLS="add_note")
+        cmd = [PY, COOP_SERVER, str(db), "--http", str(port)]
+        if arm not in KEYED:
+            cmd.append("--no-keys")
+        read = ("list_notes", {}, f"seed-{t}")
+        write = ("add_note", {"text": f"w-{t}"})
     else:
         env["PORT"] = str(port)
         cmd = [NODE, "--no-warnings", EVERYTHING, "streamableHttp"]
@@ -191,6 +211,10 @@ def setup(server, base, t, arm, op, slow=0.0, crash=None):
 
 
 def truth_count(base, t):
+    db = base / "notes.db"
+    if db.exists() and not (base / "notes.txt").exists():  # the cooperating server
+        with sqlite3.connect(db) as conn:
+            return conn.execute("SELECT COUNT(*) FROM notes WHERE text = ?", (f"w-{t}",)).fetchone()[0]
     path = base / "notes.txt"
     return path.read_text().split("\n").count(f"w-{t}") if path.exists() else 0
 
@@ -246,8 +270,8 @@ def run(server, cell, arm, t):
         if mode == "slow" and server not in ("notes", "tsnotes"):
             raise ValueError("mode slow needs a notes server (--slow)")
         slow = SLOW_SECONDS if mode == "slow" else 0.0
-        if mode in CRASH and (server not in ("notes", "tsnotes") or op != "write"):
-            raise ValueError("crash cells are write cells on notes and tsnotes")
+        if mode in CRASH and (server not in ("notes", "tsnotes", "coopnotes") or op != "write"):
+            raise ValueError("crash cells are write cells on notes, tsnotes and coopnotes")
         crash = mode if mode in CRASH else None
         port, server_cmd, server_env, read, write = setup(server, base, t, arm, op, slow, crash)
         name, args = (read[0], read[1]) if op == "read" else write
