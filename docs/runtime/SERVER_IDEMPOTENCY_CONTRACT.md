@@ -216,7 +216,7 @@ What recovery does **not** claim:
 
 **Not closed, and not claimed:**
 - unmodified third-party servers, even when keyed by the injector or the preload: their keys are
-  two-phase with no recovery check;
+  two-phase, with no recovery check unless the operator supplies one (S3.2, below);
 - any effect outside the key store's transaction (files, remote APIs, other databases).
 CW1 re-ran their crash cells on S3's code, and they are **identical to Phase 1** (B6 for notes and
 tsnotes, S10 for sqlite, memory and filesystem):
@@ -225,12 +225,34 @@ tsnotes, S10 for sqlite, memory and filesystem):
 - 0 unsafe.
 No document or report may say "crash-window recovery" without naming this boundary.
 
-**Not delivered in S3, recorded in `NEXT.md`:**
-- the `STATEGUARD_RECOVERY_CHECK` environment hook for the injector and preload (S3.2);
+**The recovery-check hook (S3.2, delivered in S4 on 2026-11-25 as a deferred item):**
+- `STATEGUARD_RECOVERY_CHECK` is available in the injector (`module:function` or
+  `file.py:function`) and in the preload (`module#export`).
+- It settles an abandoned attempt of a keyed tool, unless the tool is declared idempotent.
+  The check is called as `check(tool, key, arguments)`:
+  - **found:** the effect is recorded and answered `recovered`, never run again;
+  - **absent:** the call runs now, once;
+  - **anything else, or an error:** the key stays in doubt, never re-run.
+- **It is refused without `STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1`.** "Absent" may run the call
+  only because the exclusive store proves the original executor is gone: the replay rule's
+  third case.
+  - While the original process lives, a second process cannot open the store. That is tested.
+- **The check's promise.** The check must be about this key's own effect, through a token the
+  call carries, never a postcondition. For an effect it cannot see it must answer "cannot tell".
+  With such a check, an unmodified server's two-phase keys leave doubt for the effects the
+  check can see.
+- **Tests:**
+  - `tests/examples/test_inject_python.py` (mcp 2.x);
+  - `tests/examples/test_typescript_adapter.py` (the pinned server-memory under the preload);
+  - each fails with the check unwired.
+- **No crash cells were run with a check.** The 0/36 claim above stays for the cooperating
+  server only.
+
+**Not delivered, recorded in `NEXT.md`:**
 - the TypeScript cooperating server (S3.3, the plan's fallback).
-The TypeScript transactional helper itself exists (`store.transact`, `KeyedTools.transactional`
-in `adapters/typescript/src/sdk.ts`), and so does a recovery check for servers built with the
-adapters (`two_phase(..., recover=)`).
+- The TypeScript transactional helper itself exists (`store.transact`,
+  `KeyedTools.transactional` in `adapters/typescript/src/sdk.ts`), and so does a recovery check
+  for servers built with the adapters (`two_phase(..., recover=)`).
 
 ## 5. What the relay does with it
 

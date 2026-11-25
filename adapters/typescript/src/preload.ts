@@ -30,6 +30,20 @@
  * instead of staying in doubt. The declaration is the evidence: declare only a
  * tool whose repeat is harmless.
  *
+ * `STATEGUARD_RECOVERY_CHECK=<module>#<export>` (only with `STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1`;
+ * the default export without `#`; a path is resolved from the working directory) is the
+ * operator's recovery check (Phase 2 S3.2), for keyed tools not declared idempotent. An
+ * abandoned attempt -- its process died, which the exclusive store proves -- is settled by
+ * `check(tool, key, args)`, returning a `Recovery` or a plain `{ applied, result, note }`:
+ *   - found (`applied: true`): this key's own effect is present; recorded and answered
+ *     `recovered`, never run again (`result`: text or a tools/call result);
+ *   - absent (`applied: false`): it is not, and nothing partial remains; it runs now, once;
+ *   - anything else, or a thrown error: the key stays in doubt (unknown), never re-run.
+ * The replay rule holds the check to its promise: "absent" may run the call only because the
+ * original executor is proven gone, and only if the check is about this key's own effect (a
+ * token the call carries), not a postcondition another request could produce. An effect the
+ * check cannot see must answer "cannot tell".
+ *
  * TEST-ONLY fault injection (labelled faults, never in production):
  *   STATEGUARD_FAULT=before_begin|after_begin|after_effect|after_record|hang_after_record
  *   STATEGUARD_FAULT_FILE=<path>   the fault fires once per file (whatever the process generation)
@@ -41,7 +55,7 @@
  */
 
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { IdempotencyStore } from "./store.ts";
@@ -89,6 +103,35 @@ const faultFile = process.env["STATEGUARD_FAULT_FILE"];
 const db = process.env["STATEGUARD_IDEMPOTENCY_DB"];
 const keyedTools = list(process.env["STATEGUARD_KEYED_TOOLS"]);
 const idempotentTools = list(process.env["STATEGUARD_IDEMPOTENT_TOOLS"]);
+const recoverySpec = process.env["STATEGUARD_RECOVERY_CHECK"];
+
+type OperatorCheck = (tool: string, key: string, args: Record<string, unknown>) => unknown;
+
+/** `<module>#<export>` (default export without `#`); a path is resolved from the cwd. */
+async function loadCheck(spec: string): Promise<OperatorCheck> {
+  const at = spec.lastIndexOf("#");
+  const target = at >= 0 ? spec.slice(0, at) : spec;
+  const name = at >= 0 ? spec.slice(at + 1) : "default";
+  const looksLikePath = target.startsWith(".") || isAbsolute(target) || /\.[cm]?[jt]s$/.test(target);
+  const url = looksLikePath ? pathToFileURL(resolve(target)).href : target;
+  const module = (await import(url)) as Record<string, unknown>;
+  const check = module[name];
+  if (typeof check !== "function") throw new Error(`stateguard preload: STATEGUARD_RECOVERY_CHECK=${spec}: ${name} is not a function`);
+  return check as OperatorCheck;
+}
+
+/** The operator's answer as a `Recovery`; anything it cannot read is "cannot tell". */
+function asRecovery(value: unknown): Recovery {
+  if (value instanceof Recovery) return value;
+  if (typeof value === "object" && value !== null) {
+    const { applied, result, note } = value as { applied?: unknown; result?: unknown; note?: unknown };
+    if (applied === true)
+      return Recovery.found(typeof result === "string" ? { content: [{ type: "text", text: result }] } : result);
+    if (applied === false) return Recovery.absent();
+    return Recovery.unknown(typeof note === "string" ? note : "the check could not tell");
+  }
+  return Recovery.unknown("not a Recovery");
+}
 const faultTools = new Set(list(process.env["STATEGUARD_FAULT_TOOLS"]).length ? list(process.env["STATEGUARD_FAULT_TOOLS"]) : keyedTools);
 
 function fires(point: Fault, tool: string): boolean {
@@ -118,6 +161,11 @@ if (db !== undefined || fault !== undefined) {
     // would do nothing: refuse rather than let it look as if it did.
     if (idempotentTools.length > 0 && !exclusive)
       throw new Error("stateguard preload: STATEGUARD_IDEMPOTENT_TOOLS needs STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1");
+    // The replay rule: "absent" may run the call only when the original executor is proven
+    // gone, which is what the exclusive store establishes.
+    if (recoverySpec !== undefined && recoverySpec !== "" && !exclusive)
+      throw new Error("stateguard preload: STATEGUARD_RECOVERY_CHECK needs STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1");
+    const check = recoverySpec ? await loadCheck(recoverySpec) : undefined;
     const notKeyed = idempotentTools.filter((name) => !keyedTools.includes(name));
     if (notKeyed.length > 0)
       throw new Error(`stateguard preload: STATEGUARD_IDEMPOTENT_TOOLS must be keyed tools: ${notKeyed.join(",")}`);
@@ -132,11 +180,14 @@ if (db !== undefined || fault !== undefined) {
       },
     });
     const plain = keyedTools.filter((name) => !idempotentTools.includes(name));
-    if (plain.length > 0) keyed.twoPhase(plain);
+    if (plain.length > 0 && check === undefined) keyed.twoPhase(plain);
+    for (const name of check === undefined ? [] : plain)
+      keyed.twoPhase(name, { recover: async (key, args) => asRecovery(await check!(name, key, args)) });
     if (idempotentTools.length > 0) keyed.twoPhase(idempotentTools, { recover: () => Recovery.rerun() });
     wrap = (schema, handler) => keyed.wrapFor(schema, handler);
     const declared = idempotentTools.length > 0 ? `, declared idempotent ${idempotentTools.join(",")}` : "";
-    process.stderr.write(`stateguard preload: keyed ${keyedTools.join(",")} (store ${db}, scope ${store.scope}${declared})\n`);
+    const checked = check !== undefined ? `, recovery check ${recoverySpec}` : "";
+    process.stderr.write(`stateguard preload: keyed ${keyedTools.join(",")} (store ${db}, scope ${store.scope}${declared}${checked})\n`);
   } else {
     // Fault-only: the same crash points around the unmodified handler, no keys.
     wrap = (schema, handler) =>

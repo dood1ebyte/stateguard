@@ -640,3 +640,93 @@ def test_the_fault_only_preload_keys_nothing(tmp_path: Path) -> None:
         client.close()
     assert died is None  # the process died after the move, before answering
     assert (tmp_path / "fired").exists() and (root / "b.txt").exists()
+
+
+# -- S3.2: the operator's recovery check in the preload (STATEGUARD_RECOVERY_CHECK) -----------------
+
+CHECK_MODULE = """
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+
+const file = process.env.MEMORY_FILE_PATH;
+const seen = (tool, key) => appendFileSync(file + ".checks", `${tool} ${key}\\n`);
+
+// Each test call's observation is a token no other call carries: present means this key's own.
+export function byToken(tool, key, args) {
+  seen(tool, key);
+  const token = args?.observations?.[0]?.contents?.[0];
+  const text = existsSync(file) ? readFileSync(file, "utf8") : "";
+  return text.includes(JSON.stringify(token))
+    ? { applied: true, result: `added ${token}` }
+    : { applied: false };
+}
+
+export function cannotTell(tool, key) {
+  seen(tool, key);
+  return { applied: null, note: "the effect is elsewhere" };
+}
+"""
+
+
+@pytest.mark.skipif(not MEM_SERVER.exists(), reason="pinned server-memory not installed")
+@pytest.mark.parametrize(
+    ("point", "check", "expected"),
+    [
+        ("after_effect", "byToken", "recovered"),  # found: recorded, never run again
+        ("after_begin", "byToken", "executed"),  # absent: runs now, once
+        ("after_effect", "cannotTell", None),  # cannot tell: in doubt -> unknown, never re-run
+    ],
+)
+def test_the_preload_recovery_check_settles_an_abandoned_call(
+    tmp_path: Path, point: str, check: str, expected: str | None
+) -> None:
+    store = tmp_path / "mem.jsonl"
+    store.write_text(
+        json.dumps({"type": "entity", "name": "alice", "entityType": "person", "observations": []})
+        + "\n"
+    )
+    (tmp_path / "check.mjs").write_text(CHECK_MODULE)
+    env = {
+        "MEMORY_FILE_PATH": str(store),
+        "STATEGUARD_IDEMPOTENCY_DB": str(tmp_path / "keys.db"),
+        "STATEGUARD_IDEMPOTENCY_SCOPE": "memory",
+        "STATEGUARD_KEYED_TOOLS": "add_observations",
+        "STATEGUARD_IDEMPOTENCY_EXCLUSIVE": "1",
+        "STATEGUARD_RECOVERY_CHECK": f"{tmp_path / 'check.mjs'}#{check}",
+        "STATEGUARD_FAULT": point,
+        "STATEGUARD_FAULT_FILE": str(tmp_path / "fault.fired"),
+    }
+    argv, full_env = _preloaded(MEM_SERVER, env=env)
+    client = _relay(tmp_path, argv, env=full_env)
+    try:
+        answer = client.call(
+            1, "add_observations", {"observations": [{"entityName": "alice", "contents": ["tok-1"]}]}
+        )
+    finally:
+        client.close()
+    assert (tmp_path / "fault.fired").exists()
+    if expected is None:
+        assert _unknown(answer), answer
+    else:
+        assert answer is not None and "result" in answer, answer
+        assert _outcome(answer) == expected
+    observations = json.loads(store.read_text().splitlines()[0])["observations"]
+    assert observations == ["tok-1"]  # once, whatever the check said
+    checks = (tmp_path / "mem.jsonl.checks").read_text().splitlines()
+    assert len(checks) == 1 and checks[0].startswith("add_observations ")
+
+
+@pytest.mark.skipif(not MEM_SERVER.exists(), reason="pinned server-memory not installed")
+def test_a_preload_recovery_check_without_an_exclusive_store_is_refused(tmp_path: Path) -> None:
+    (tmp_path / "check.mjs").write_text(CHECK_MODULE)
+    argv, env = _preloaded(
+        MEM_SERVER,
+        env={
+            "MEMORY_FILE_PATH": str(tmp_path / "mem.jsonl"),
+            "STATEGUARD_IDEMPOTENCY_DB": str(tmp_path / "keys.db"),
+            "STATEGUARD_KEYED_TOOLS": "add_observations",
+            "STATEGUARD_RECOVERY_CHECK": f"{tmp_path / 'check.mjs'}#byToken",
+        },
+    )
+    done = subprocess.run(argv, env=env, input=b"", capture_output=True, timeout=30, check=False)
+    assert done.returncode != 0
+    assert b"STATEGUARD_RECOVERY_CHECK needs STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1" in done.stderr
