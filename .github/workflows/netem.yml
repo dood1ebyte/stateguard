@@ -1,0 +1,82 @@
+name: netem (connection reuse, S4.4)
+
+# Phase 2 S4.4: the HTTP relay's connections to the server, and the time per call, for calls
+# answered over event streams, under emulated latency (tc netem on loopback). The relay at
+# 290ba5d (before the event-stream drain) is measured against this commit's. TEST-ONLY: a
+# measurement, not a gate; the rows are printed and uploaded.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/stateguard/relay/http.py"
+      - "benchmarks/runtime/realhttp/conn_reuse.py"
+      - ".github/workflows/netem.yml"
+  workflow_dispatch:
+
+jobs:
+  netem:
+    name: Connection reuse under netem
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install
+        run: pip install -e ".[pydantic,mcp,dev]"
+
+      - name: The relay before the drain (290ba5d)
+        run: git worktree add /tmp/before 290ba5d5d4f27327c5446c477e274e69530c5e38
+
+      - name: Load netem
+        run: |
+          sudo modprobe sch_netem || {
+            sudo apt-get update -q
+            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
+            sudo modprobe sch_netem
+          }
+
+      - name: Measure (0, 5 and 25 ms one-way on loopback)
+        run: |
+          set -euo pipefail
+          uname -r
+          for delay in 0 5 25; do
+            sudo tc qdisc del dev lo root 2>/dev/null || true
+            if [ "$delay" != 0 ]; then
+              sudo tc qdisc add dev lo root netem delay "${delay}ms"
+            fi
+            tc qdisc show dev lo
+            for who in before after; do
+              if [ "$who" = before ]; then src=/tmp/before/src; else src=src; fi
+              python benchmarks/runtime/realhttp/conn_reuse.py --src "$src" --calls 40 \
+                --label "${who}_netem_${delay}ms" | tee -a conn_reuse.jsonl
+            done
+          done
+          sudo tc qdisc del dev lo root 2>/dev/null || true
+
+      - name: Summary
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          p = pathlib.Path("conn_reuse.jsonl")
+          print("| run | calls ok | connections during calls | p50 ms | p95 ms |")
+          print("|---|---|---|---|---|")
+          for line in (p.read_text().splitlines() if p.exists() else []):
+              r = json.loads(line)
+              print(f"| {r['label']} | {r['ok']}/{r['calls']} | {r['connections_during_calls']} "
+                    f"| {r['ms_p50']} | {r['ms_p95']} |")
+          EOF
+          cat conn_reuse.jsonl || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: conn-reuse
+          path: conn_reuse.jsonl

@@ -111,6 +111,7 @@ request, then its 404 delivered.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import itertools
 import json
@@ -179,6 +180,10 @@ from stateguard.core.models.config import GuardConfig, RepairMode
 
 SESSION_HEADER = "mcp-session-id"
 LAST_EVENT_ID = "last-event-id"
+#: An answered event stream is read to its end in the background, so its connection is reused,
+#: for at most this long and this much (S4.4); past either it is closed, as before.
+DRAIN_SECONDS = 2.0
+DRAIN_BYTES = 64 * 1024
 UNKNOWN_OUTCOME_CODE = -32000
 UNKNOWN_OUTCOME_KEY = "io.stateguard/executionState"
 #: The idempotency contract's "nothing executed now" errors (stateguard.adapters.mcp.idempotency).
@@ -346,6 +351,8 @@ class Attempt:
 class Relay:
     def __init__(self, args: argparse.Namespace) -> None:
         self.upstream: str = args.upstream
+        #: Background reads of answered event streams (``_drain_later``), held until done.
+        self._drains: set[asyncio.Task[None]] = set()
         self.passthrough: bool = args.passthrough
         self.retry: str = "off" if args.passthrough else args.retry
         self.keys: bool = self.retry == "auto" and not args.no_idempotency_keys
@@ -1188,8 +1195,10 @@ class Relay:
         response = attempt.response
         resumed = 0
         while True:
+            lines = response.aiter_lines()
+            answered = False
             try:
-                async for event_id, data in sse_events(response.aiter_lines()):
+                async for event_id, data in sse_events(lines):
                     last_id = event_id or last_id
                     try:
                         message = json.loads(data)
@@ -1201,13 +1210,19 @@ class Relay:
                         and message.get("id") == upstream_id
                         and "method" not in message
                     ):
+                        answered = True
                         yield "end", message
                         return
                     yield "event", message
             except httpx2.TransportError as exc:
                 self.log("stream_cut", id=upstream_id, error=f"{type(exc).__name__}: {exc}")
             finally:
-                await response.aclose()
+                if answered:
+                    # The server ends the stream after the answer: read to that end, off the
+                    # client's path, so the connection goes back to the pool (S4.4).
+                    self._drain_later(response, lines, upstream_id)
+                else:
+                    await response.aclose()
             if state is not None:
                 state["faults"].append("stream_cut")
                 state["in_doubt"] = True
@@ -1229,6 +1244,41 @@ class Relay:
                 yield "end", None
                 return
             self.log("stream_resumed", id=upstream_id, last_event_id=last_id)
+
+    def _drain_later(
+        self, response: httpx2.Response, lines: AsyncIterator[str], upstream_id: Any
+    ) -> None:
+        """
+        Read what is left of an answered event stream, then close it, in the background.
+
+        httpx reuses a connection only once its response was read to the end; closing a
+        stream at the answer event (before the server's end of stream) drops the connection,
+        so every call over an event stream paid a new TCP connection. Bounded: a server that
+        keeps the stream open after the answer, or sends more than ``DRAIN_BYTES``, is closed
+        after ``DRAIN_SECONDS`` as before. Anything read here is dropped, as it was.
+        """
+
+        async def drain() -> None:
+            read, complete = 0, False
+            try:
+                async with asyncio.timeout(DRAIN_SECONDS):
+                    async for line in lines:
+                        read += len(line) + 1
+                        if read > DRAIN_BYTES:
+                            break
+                    else:
+                        complete = True
+            except (TimeoutError, httpx2.HTTPError):
+                pass
+            finally:
+                with contextlib.suppress(httpx2.HTTPError):
+                    await response.aclose()
+            if not complete:
+                self.log("stream_not_drained", id=upstream_id, bytes=read)
+
+        task = asyncio.get_running_loop().create_task(drain())
+        self._drains.add(task)
+        task.add_done_callback(self._drains.discard)
 
     async def _stream(
         self,
