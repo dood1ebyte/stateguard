@@ -63,6 +63,8 @@ FAULTS = str(CODE / "benchmarks/runtime/http_fault_proxy.py")
 NOTES_SERVER = str(CODE / "tests/examples/http_notes_server.py")
 #: Phase 2 S3: the cooperating notes server (note and key record in one SQLite transaction).
 COOP_SERVER = str(CODE / "examples/mcp/cooperating_notes_server.py")
+#: Phase 2 S3.3: its TypeScript twin (TypeScript SDK and adapter, the same tools and faults).
+TS_COOP_SERVER = str(CODE / "adapters/typescript/examples/cooperating_notes_server.ts")
 TS_SERVER = str(CODE / "adapters/typescript/test/fixtures/http_notes_server.ts")
 TS_PRELOAD = str(CODE / "adapters/typescript/src/preload.ts")
 EVERYTHING = os.environ.get(
@@ -86,9 +88,11 @@ CRASH = ["after_begin", "after_effect", "after_record"]
 ADVERSARIAL = ["dup_answer", "garbage_answer", "truncated_answer", "nonconformant_answer",
                "stale_listing"]
 CELLS = {"notes": FULL, "tsnotes": FULL, "everything": [f"read/{m}" for m in MODES],
-         "coopnotes": ["write/none"] + [f"write/{m}" for m in CRASH]}
+         "coopnotes": ["write/none"] + [f"write/{m}" for m in CRASH],
+         "tscoop": ["write/none"] + [f"write/{m}" for m in CRASH]}
 ARMS = {"notes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
         "coopnotes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
+        "tscoop": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
         "tsnotes": ["raw", "naive", "sg", "sg_keyed", "sg_keyed_deadline"],
         "everything": ["raw", "naive", "sg", "sg_deadline"]}
 KEYED = ("sg_keyed", "sg_keyed_deadline", "sg_keyed_default")
@@ -188,7 +192,7 @@ def setup(server, base, t, arm, op, slow=0.0, crash=None):
                 cmd += ["--slow", str(slow)]
         read = ("list_notes", {}, f"seed-{t}")
         write = ("add_note", {"Text" if op == "drift" else "text": f"w-{t}"})
-    elif server == "coopnotes":
+    elif server in ("coopnotes", "tscoop"):
         # Cooperating: keyed natively (its own transactional keys); unkeyed arms run it with
         # --no-keys. Faults come from the same STATEGUARD_FAULT variables.
         db = base / "notes.db"
@@ -198,7 +202,8 @@ def setup(server, base, t, arm, op, slow=0.0, crash=None):
         if crash:
             env.update(STATEGUARD_FAULT=crash, STATEGUARD_FAULT_FILE=str(base / "crash.fired"),
                        STATEGUARD_FAULT_TOOLS="add_note")
-        cmd = [PY, COOP_SERVER, str(db), "--http", str(port)]
+        cmd = ([PY, COOP_SERVER] if server == "coopnotes" else [NODE, "--no-warnings", TS_COOP_SERVER])
+        cmd += [str(db), "--http", str(port)]
         if arm not in KEYED:
             cmd.append("--no-keys")
         read = ("list_notes", {}, f"seed-{t}")
@@ -270,8 +275,8 @@ def run(server, cell, arm, t):
         if mode == "slow" and server not in ("notes", "tsnotes"):
             raise ValueError("mode slow needs a notes server (--slow)")
         slow = SLOW_SECONDS if mode == "slow" else 0.0
-        if mode in CRASH and (server not in ("notes", "tsnotes", "coopnotes") or op != "write"):
-            raise ValueError("crash cells are write cells on notes, tsnotes and coopnotes")
+        if mode in CRASH and (server not in ("notes", "tsnotes", "coopnotes", "tscoop") or op != "write"):
+            raise ValueError("crash cells are write cells on notes, tsnotes, coopnotes and tscoop")
         crash = mode if mode in CRASH else None
         port, server_cmd, server_env, read, write = setup(server, base, t, arm, op, slow, crash)
         name, args = (read[0], read[1]) if op == "read" else write

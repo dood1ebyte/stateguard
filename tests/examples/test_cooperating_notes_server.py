@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import socket
 import sqlite3
@@ -36,6 +37,22 @@ pytestmark = pytest.mark.integration
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVER = ROOT / "examples" / "mcp" / "cooperating_notes_server.py"
+#: Phase 2 S3.3: its TypeScript twin (the TypeScript SDK and this repository's adapter).
+TS_SERVER = ROOT / "adapters" / "typescript" / "examples" / "cooperating_notes_server.ts"
+NODE = shutil.which("node")
+_TS_READY = (
+    NODE is not None
+    and (ROOT / "adapters/typescript/node_modules/@modelcontextprotocol/sdk").exists()
+)
+#: The server command (before its DB argument), per language.
+LANGUAGES = [
+    pytest.param([sys.executable, str(SERVER)], id="python"),
+    pytest.param(
+        [NODE or "node", "--no-warnings", str(TS_SERVER)],
+        id="typescript",
+        marks=pytest.mark.skipif(not _TS_READY, reason="node or the TypeScript SDK not installed"),
+    ),
+]
 CLI = [sys.executable, "-c", "from stateguard.cli import main; main()"]
 POINTS = ("after_begin", "after_effect", "after_record")
 OUTCOME = "io.stateguard/idempotencyOutcome"
@@ -66,13 +83,15 @@ def _crash_env(tmp: Path, point: str) -> dict[str, str]:
 # -- stdio --------------------------------------------------------------------------------------
 
 
-def _stdio_call(tmp: Path, point: str, *server_flags: str) -> dict[str, Any]:
+def _stdio_call(
+    tmp: Path, point: str, *server_flags: str, server: list[str] | None = None
+) -> dict[str, Any]:
     db = tmp / "notes.db"
     relay = [
         *CLI, "relay", "stdio", "--retry", "auto", "--restart", "2",
         "--restart-policy", "after-unknown", "--effects", str(_effects(tmp)),
         "--audit", str(tmp / "audit.jsonl"),
-        "--", sys.executable, str(SERVER), str(db), *server_flags,
+        "--", *(server or [sys.executable, str(SERVER)]), str(db), *server_flags,
     ]  # fmt: skip
     process = subprocess.Popen(
         relay, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -106,9 +125,12 @@ def _stdio_call(tmp: Path, point: str, *server_flags: str) -> dict[str, Any]:
     return {"answer": answer, "count": _count(db, "m-1"), "fired": (tmp / "crash.fired").exists()}
 
 
+@pytest.mark.parametrize("server", LANGUAGES)
 @pytest.mark.parametrize("point", POINTS)
-def test_a_keyed_call_survives_a_crash_at_any_point_over_stdio(tmp_path: Path, point: str) -> None:
-    out = _stdio_call(tmp_path, point)
+def test_a_keyed_call_survives_a_crash_at_any_point_over_stdio(
+    tmp_path: Path, point: str, server: list[str]
+) -> None:
+    out = _stdio_call(tmp_path, point, server=server)
     assert out["fired"], "the crash point was never reached"
     answer = out["answer"]
     assert answer is not None and "result" in answer, answer
@@ -119,10 +141,13 @@ def test_a_keyed_call_survives_a_crash_at_any_point_over_stdio(tmp_path: Path, p
     assert out["count"] == 1  # exactly once, never a duplicate
 
 
+@pytest.mark.parametrize("server", LANGUAGES)
 @pytest.mark.parametrize("point", ["after_begin", "after_effect"])
-def test_without_cooperation_the_same_crash_stays_unknown(tmp_path: Path, point: str) -> None:
+def test_without_cooperation_the_same_crash_stays_unknown(
+    tmp_path: Path, point: str, server: list[str]
+) -> None:
     """The baseline (--no-keys): the relay cannot resend a non-idempotent call, so UNKNOWN."""
-    out = _stdio_call(tmp_path, point, "--no-keys")
+    out = _stdio_call(tmp_path, point, "--no-keys", server=server)
     assert out["fired"]
     answer = out["answer"]
     assert answer is not None and "error" in answer, answer  # never success
@@ -149,12 +174,15 @@ def _listening(port: int, timeout: float = 20.0) -> None:
     raise TimeoutError(port)
 
 
+@pytest.mark.parametrize("server", LANGUAGES)
 @pytest.mark.parametrize("point", POINTS)
-def test_a_keyed_call_survives_a_crash_at_any_point_over_http(tmp_path: Path, point: str) -> None:
+def test_a_keyed_call_survives_a_crash_at_any_point_over_http(
+    tmp_path: Path, point: str, server: list[str]
+) -> None:
     httpx2 = pytest.importorskip("httpx2")
     db = tmp_path / "notes.db"
     server_port, relay_port = _port(), _port()
-    server_cmd = [sys.executable, str(SERVER), str(db), "--http", str(server_port), "--json"]
+    server_cmd = [*server, str(db), "--http", str(server_port), "--json"]
     env = _crash_env(tmp_path, point)
     servers = [subprocess.Popen(server_cmd, env=env, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL)]  # fmt: skip
