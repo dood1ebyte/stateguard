@@ -23,3 +23,12 @@ connection per event-stream call.
   or recorded as a blocker.
 
 Synthetic fault injection; not production traffic.
+
+## Run log
+
+- **09:41 IST:** the `notes` part was started by mistake while B8 was still running: a queue
+  script's wait matched no process. It was stopped about a minute later, after 51 rows, so
+  that the two matrices would not load the machine together.
+  - Those rows are kept as `rows_notes_interrupted.jsonl`, are not used in any comparison, and
+    were run under double load.
+  - The part is re-run from the start as `notes_r2` once B8 and S11 have finished.
