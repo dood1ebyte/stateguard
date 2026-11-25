@@ -297,6 +297,7 @@ import contextlib
 import itertools
 import json
 import os
+import queue
 import secrets
 import shutil
 import subprocess
@@ -484,8 +485,23 @@ class StdioRelay:
         idempotency_keys: bool = False,
         answer_timeout: float = 300.0,
         expected_keyed: tuple[str, ...] = (),
+        serialize_tools: tuple[str, ...] = (),
+        serialize_wait: float = 30.0,
     ) -> None:
         self.registry = ToolRegistry(guard)
+        # --serialize-tools (Phase 2 S4.3): calls to these tools share one lane and go to the
+        # server one at a time. The next waits until the server has answered every request
+        # the previous one put on the wire, or the relay has reaped that server process, and
+        # until the previous client request has its one answer (so a resend of it is never
+        # beside the next). A call still waiting after serialize_wait seconds is answered
+        # "not sent": it was never written, so it certainly did not run.
+        self._serial_tools = frozenset(serialize_tools)
+        self._serial_wait = serialize_wait
+        self._lane = threading.Condition()
+        self._lane_wire: dict[Any, int] = {}  # wire id -> server generation
+        self._lane_clients: set[Any] = set()  # admitted client ids not yet answered
+        self._lane_queue: queue.SimpleQueue[tuple[bytes, Any, Any]] = queue.SimpleQueue()
+        self._lane_worker: threading.Thread | None = None
         # --keys auto: the tools the server was started to key. Each listing is checked
         # once per tool: a tool listed without the keys advertisement is logged (its calls
         # go unkeyed, as for any server that does not advertise keys).
@@ -679,6 +695,13 @@ class StdioRelay:
                 self._tap(Direction.RELAY_TO_CLIENT, line)  # written: now it happened
         if stream is self._client_out and is_response(message):
             self._record_invocation(message.get("id"), message)
+        if stream is self._client_out and self._lane_clients:
+            parsed = message if message is not None else _parse(line)
+            if is_response(parsed) and _hashable(parsed.get("id")):
+                with self._lane:
+                    if parsed["id"] in self._lane_clients:
+                        self._lane_clients.discard(parsed["id"])
+                        self._lane.notify_all()
 
     def _record_invocation(
         self, identifier: Any, message: dict[str, Any] | None, *, kind: str | None = None
@@ -951,7 +974,10 @@ class StdioRelay:
             except Exception as exc:  # noqa: BLE001 -- fail open; see the module docstring
                 self._internal_error("client message", exc)
             if is_request(message, TOOLS_CALL):
-                self._on_call(line, message, identifier)
+                if self._serialized(message, identifier):
+                    self._enqueue_serial(line, message, identifier)
+                else:
+                    self._on_call(line, message, identifier)
                 continue
             try:
                 if is_request(message, TOOLS_LIST):
@@ -965,6 +991,98 @@ class StdioRelay:
             if is_notification(message, "notifications/initialized"):
                 self._handshake_done = True
                 self._discover_tools()
+
+    # -- --serialize-tools: one lane, one call at a time -------------------------------
+
+    def _serialized(self, message: Any, identifier: Any) -> bool:
+        """Whether this ``tools/call`` goes through the lane (shadow only logs that it would)."""
+        if not self._serial_tools or identifier is None or not _hashable(identifier):
+            return False
+        params = message.get("params") if isinstance(message, dict) else None
+        tool = params.get("name") if isinstance(params, dict) else None
+        if tool not in self._serial_tools:
+            return False
+        if self._shadow:
+            self._log("serialize_would_apply", id=identifier, tool=tool)
+            return False
+        return True
+
+    def _enqueue_serial(self, line: bytes, message: Any, identifier: Any) -> None:
+        if self._lane_worker is None:
+            self._lane_worker = threading.Thread(target=self._serial_worker, daemon=True)
+            self._lane_worker.start()
+        self._lane_queue.put((line, message, identifier))
+
+    def _lane_busy(self) -> bool:
+        """Caller holds ``_lane``."""
+        return bool(self._lane_wire or self._lane_clients)
+
+    def _serial_worker(self) -> None:
+        """Admit the lane's calls in arrival order, each once the lane is free."""
+        while True:
+            line, message, identifier = self._lane_queue.get()
+            tool = message.get("params", {}).get("name")
+            started = time.monotonic()
+            with self._lane:
+                waited = self._lane_busy()
+                while self._lane_busy() and not self._stopped.is_set():
+                    left = self._serial_wait - (time.monotonic() - started)
+                    if left <= 0:
+                        break
+                    self._lane.wait(min(left, 0.5))
+                admitted = not self._lane_busy()
+                if admitted:
+                    self._lane_clients.add(identifier)
+            if not admitted:
+                self._log(
+                    "serialize_timeout",
+                    category="E",
+                    id=identifier,
+                    tool=tool,
+                    waited_s=round(time.monotonic() - started, 3),
+                    reason="the previous call to a serialised tool is still unresolved",
+                )
+                self._answer_not_sent(identifier, "serialised tool: the lane did not free")
+                continue
+            if waited:
+                self._log(
+                    "serialized",
+                    id=identifier,
+                    tool=tool,
+                    waited_s=round(time.monotonic() - started, 3),
+                )
+            # Its one answer, whatever it is (relayed, refused, not sent, unknown), frees the
+            # client half of the lane (``_send``); what it put on the wire holds the rest.
+            try:
+                self._on_call(line, message, identifier)
+            except Exception as exc:  # noqa: BLE001 -- the lane never stops on one call
+                self._internal_error("serialised tools/call", exc, id=identifier)
+                with self._lane:
+                    self._lane_clients.discard(identifier)
+                    self._lane.notify_all()
+
+    def _lane_sent(self, payload: bytes, generation: int) -> None:
+        """A request now on the wire: if it calls a serialised tool, the lane holds it."""
+        message = _parse(payload)
+        if not is_request(message, TOOLS_CALL):
+            return
+        params = message.get("params")
+        if isinstance(params, dict) and params.get("name") in self._serial_tools:
+            with self._lane:
+                self._lane_wire[message["id"]] = generation
+
+    def _lane_settled(self, identifier: Any) -> None:
+        """The server answered *identifier*: a serialised request leaves the wire."""
+        with self._lane:
+            if self._lane_wire.pop(identifier, None) is not None:
+                self._lane.notify_all()
+
+    def _lane_reaped(self, generation: int) -> None:
+        """No request to server *generation* or older can still run: they leave the wire."""
+        with self._lane:
+            for wire in [w for w, g in self._lane_wire.items() if g <= generation]:
+                del self._lane_wire[wire]
+            self._lane.notify_all()
 
     def _track(self, message: Any) -> Any:
         """Record a client request in the ledger; its id, or None if not a request."""
@@ -1072,6 +1190,8 @@ class StdioRelay:
                 return False
             if identifier is not None:
                 self.ledger.sent(identifier)
+            if self._serial_tools:  # before the write: its answer may come at once
+                self._lane_sent(payload, generation)
             try:
                 self._write_server(payload)
             except OSError as exc:
@@ -2442,7 +2562,12 @@ class StdioRelay:
         try:
             while True:
                 self._pump_server()
-                if self._passthrough or not self._on_server_lost():
+                lost = self.generation
+                go_on = not self._passthrough and self._on_server_lost()
+                # Its process is reaped (a restart stops it first) or no other will be
+                # written to: nothing it was sent can still run beside a next call.
+                self._lane_reaped(lost)
+                if not go_on:
                     break
         except OSError as exc:  # the client's stdout is gone
             self._log("transport_closed", category="E", direction="server->client", error=str(exc))
@@ -2708,6 +2833,8 @@ class StdioRelay:
                 continue
             message = _parse(line)
             identifier = request_id(message)
+            if self._lane_wire and is_response(message) and _hashable(identifier):
+                self._lane_settled(identifier)  # the server answered: it is done with it
             if (
                 is_response(message)
                 and self._reinit_id is not None
@@ -3229,6 +3356,22 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         "for an answer before 'outcome unknown' (default 300).",
     )
     parser.add_argument(
+        "--serialize-tools",
+        default="",
+        metavar="LIST",
+        help="Comma-separated tools whose calls go to the server one at a time (for a server "
+        "that loses concurrent writes): each waits until the server has answered the previous "
+        "one, or its process is reaped. Default: none.",
+    )
+    parser.add_argument(
+        "--serialize-wait",
+        type=float,
+        default=30.0,
+        metavar="SECONDS",
+        help="With --serialize-tools: a call still waiting for the lane after SECONDS is "
+        "answered 'not sent' (it never ran). Default 30.",
+    )
+    parser.add_argument(
         "--restart",
         type=int,
         default=0,
@@ -3509,6 +3652,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 "unreadable": args.unreadable,
             },
         )
+    serialize_tools = tuple(t.strip() for t in args.serialize_tools.split(",") if t.strip())
     relay = StdioRelay(
         ContractGuard.with_mcp(config=GuardConfig(mode=mode)),
         sys.stdin.buffer,
@@ -3534,6 +3678,8 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         reconcile=reconcile,
         executor=scopes[0].identity if scoped else None,
         expected_keyed=keys.keyed_tools if isinstance(keys, relay_keys.KeyedLaunch) else (),
+        serialize_tools=serialize_tools,
+        serialize_wait=args.serialize_wait,
     )
     scope_info = (
         {
@@ -3549,6 +3695,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
     relay._log(
         "relay_started",
         mode="passthrough" if args.passthrough else mode.value,
+        **({"serialize_tools": list(serialize_tools)} if serialize_tools else {}),
         # The audit log is not redacted. A real capture's server command may
         # carry credentials (``--token ...``): name the program only.
         **(
