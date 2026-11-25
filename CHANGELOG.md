@@ -27,8 +27,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   See `docs/runtime/REAL_CAPTURE.md`.
 - **`stateguard relay http --record`**, shadow mode only, under the stdio relay's privacy
   rules; `--record-mask-numbers` on both relays.
+- **`stateguard relay stdio --serialize-tools LIST`** (default: none). Calls to the listed
+  tools go to the server one at a time, in arrival order. Use it for servers that lose
+  concurrent writes; server-memory lost 149 of 160 concurrent writes without it and 0 with
+  it (`benchmarks/evidence/realstdio/SER1/`).
+  - A call is sent only when the server has answered the previous one (or the relay has
+    reaped that server process) and the previous client request has its answer.
+  - A call still waiting after `--serialize-wait` (default 30 s) is answered "not sent". It
+    never ran.
+  - Shadow mode only logs `serialize_would_apply`.
+  - Not available on the HTTP relay.
+- **A published compatibility matrix:** `docs/runtime/COMPATIBILITY_MATRIX.md`. Ten pinned
+  public servers were attempted through the relays, with a status for each and 0 unsafe
+  outcomes in 315 rows. The harness is `benchmarks/runtime/compat/`.
 
 ### Changed
+- **With `--no-listing-refresh`, the relays no longer repair or refuse a call on an
+  unconfirmed listing.** Both relays forward the client's call unchanged. The `call` event
+  carries `listing: "unconfirmed"`, `proposal: "withheld"` and what auto mode would have
+  done. (Phase 1 A1: a stale listing "repaired" correct calls into wrong ones.)
+- **A repaired call the server rejects falls back to the client's own call,** once, and only
+  where that cannot run anything twice:
+  - the server answered JSON-RPC `-32602` and nothing says the call ran;
+  - or the tool is declared `read_only` or `idempotent`.
+  Otherwise the server's error is delivered. Each decision is logged (`repair_fallback`). The
+  HTTP relay does this for JSON answers only.
+- **The HTTP relay reuses its connection after an event-stream answer.** The rest of the
+  stream is read in the background, bounded (2 s, 64 KiB), instead of closing the stream at
+  the answer event.
+  - Before: one new TCP connection per call answered over an event stream.
+  - Measured under netem on a GitHub runner (`benchmarks/evidence/realhttp/NR1/`): 40 → 0
+    new connections in 40 calls, with p50 per call 54.6 → 34.3 ms at 5 ms one-way delay.
+  - Caveat: a server that does not set TCP_NODELAY can stall about 40 ms on a reused
+    connection.
 - **Three exact-but-wrong casts are held for confirmation instead of applied.**
   `TypeCoercionStrategy` records a semantic objection (`evidence.contradiction`,
   the mechanism opposed-name renames already use) on:
