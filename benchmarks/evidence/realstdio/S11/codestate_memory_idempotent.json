@@ -1,0 +1,27 @@
+{
+ "batch": "S11",
+ "part": "memory_idempotent",
+ "started": "2026-11-25T04:46:56.538270+00:00",
+ "commit": "290ba5d5d4f27327c5446c477e274e69530c5e38",
+ "harness_commit": "c90ed9d398d27759f92791158c43dceadc755179",
+ "harness_dirty": false,
+ "driver": "../realstdio/driver.py",
+ "driver_args": [
+  "memory",
+  "12",
+  "write/none,write/kill_before,write/lost_exit,write/hang,write/transient,write/after_begin,write/after_effect,write/after_record",
+  "sg_keyed_idempotent"
+ ],
+ "trial_offset": "22000",
+ "python": "3.13.18",
+ "mcp": "2.3.0",
+ "node": "v22.23.4",
+ "typescript_sdk": "1.32.1",
+ "typescript_lockfile_sha256": "ffdaebb2f832db1ec9f116eec1b458c2d5b444f8a1f24b56a5173c2788c471cd",
+ "everything_tree_sha256": "823e40005f94f353567c7b9bce56146516c8038ff3a15d44cbeef53b60a99778",
+ "platform": "Linux-6.18.44-fc-v880-x86_64-with-glibc2.39",
+ "cpus": 4,
+ "driver_exit": 0,
+ "finished": "2026-11-25T04:47:35.712739+00:00",
+ "everything_tree_sha256_after": "823e40005f94f353567c7b9bce56146516c8038ff3a15d44cbeef53b60a99778"
+}
