@@ -70,10 +70,13 @@ def main(argv: list[str]) -> int:
         "--driver",
         default="driver.py",
         help="driver.py, stale_pool.py, repeated.py, ../realstdio/driver.py, "
-        "../realstdio/per_call.py or ../realstdio/repeated.py (relative to this directory)",
+        "../realstdio/per_call.py, ../realstdio/repeated.py or ../compat/matrix.py "
+        "(relative to this directory)",
     )
     parser.add_argument(
-        "--suite", default="realhttp", help="evidence directory: realhttp, realstdio, capture"
+        "--suite",
+        default="realhttp",
+        help="evidence directory: realhttp, realstdio, capture, compat",
     )
     args = parser.parse_args(argv[:split])
     driver_args = argv[split + 1 :]
@@ -164,6 +167,7 @@ def main(argv: list[str]) -> int:
         "repeated.py": "repeated_summary.py",
         "../realstdio/repeated.py": "repeated_summary.py",
         "../capture_workloads.py": "../capture_summary.py",
+        "../compat/matrix.py": "../compat/summary.py",
     }.get(args.driver, "summarize.py")
     with (out / f"summary{suffix}.txt").open("w") as summary:
         subprocess.run(
