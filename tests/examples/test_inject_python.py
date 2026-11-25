@@ -479,3 +479,168 @@ def test_an_idempotent_declaration_that_could_not_act_is_refused(
     }
     with pytest.raises(SystemExit, match=message):
         _attacher(env)
+
+
+# -- S3.2: the operator's recovery check (STATEGUARD_RECOVERY_CHECK) --------------------------------
+
+CHECKS = """
+import os
+from stateguard.adapters.mcp.idempotency import Recovery
+
+NOTES = os.environ["CHECK_NOTES"]
+CALLS = NOTES + ".checks"
+
+
+def _seen(tool, key):
+    with open(CALLS, "a") as out:
+        out.write(f"{tool} {key}\\n")
+
+
+def by_token(tool, key, arguments):
+    # Each test call's text is a token no other call carries: a note with it is this key's own.
+    _seen(tool, key)
+    lines = open(NOTES).read().split("\\n")[:-1] if os.path.exists(NOTES) else []
+    text = arguments.get("text")
+    return Recovery.found(f"added {text}") if text in lines else Recovery.absent()
+
+
+def cannot_tell(tool, key, arguments):
+    _seen(tool, key)
+    return Recovery.unknown("the effect is elsewhere")
+
+
+def broken(tool, key, arguments):
+    _seen(tool, key)
+    raise RuntimeError("the check failed")
+"""
+
+
+def _checked(tmp: Path, function: str) -> dict[str, str]:
+    (tmp / "checks.py").write_text(CHECKS)
+    return {
+        "STATEGUARD_IDEMPOTENCY_EXCLUSIVE": "1",
+        "STATEGUARD_RECOVERY_CHECK": f"{tmp / 'checks.py'}:{function}",
+        "CHECK_NOTES": str(tmp / "n.txt"),
+    }
+
+
+def _checks_run(tmp: Path) -> list[str]:
+    path = tmp / "n.txt.checks"
+    return path.read_text().splitlines() if path.exists() else []
+
+
+def test_a_found_effect_is_recovered_never_run_again(tmp_path: Path) -> None:
+    """Crash after the note, before its record: the check finds this key's note."""
+    servers = [_mcp2_server(tmp_path, fault="after_effect", extra=_checked(tmp_path, "by_token"))]
+    try:
+        assert servers[0].call("tools/call", _tool_call("add_note", {"text": "t1"}, "k1")) is None
+        servers[0].close()  # its process is dead: the kernel drops its store lock
+        servers.append(_mcp2_server(tmp_path, extra=_checked(tmp_path, "by_token")))
+        answer = servers[1].call("tools/call", _tool_call("add_note", {"text": "t1"}, "k1"))
+        assert _outcome(answer) == "recovered", answer
+        assert answer is not None and answer["result"]["content"][0]["text"] == "added t1"
+        again = servers[1].call("tools/call", _tool_call("add_note", {"text": "t1"}, "k1"))
+        assert _outcome(again) == "replayed"
+        assert _notes(tmp_path) == ["t1"]  # once
+        assert _checks_run(tmp_path) == ["add_note k1"]  # one check, for this key
+    finally:
+        for server in servers:
+            server.close()
+
+
+def test_an_absent_effect_runs_once(tmp_path: Path) -> None:
+    """Crash after the key's claim, before the note: the check finds nothing; it runs now."""
+    servers = [_mcp2_server(tmp_path, fault="after_begin", extra=_checked(tmp_path, "by_token"))]
+    try:
+        assert servers[0].call("tools/call", _tool_call("add_note", {"text": "t2"}, "k2")) is None
+        servers[0].close()
+        servers.append(_mcp2_server(tmp_path, extra=_checked(tmp_path, "by_token")))
+        answer = servers[1].call("tools/call", _tool_call("add_note", {"text": "t2"}, "k2"))
+        assert _outcome(answer) == "executed", answer
+        assert _notes(tmp_path) == ["t2"]
+    finally:
+        for server in servers:
+            server.close()
+
+
+@pytest.mark.parametrize("function", ["cannot_tell", "broken"])
+def test_a_check_that_cannot_tell_leaves_the_key_in_doubt(tmp_path: Path, function: str) -> None:
+    servers = [_mcp2_server(tmp_path, fault="after_effect", extra=_checked(tmp_path, function))]
+    try:
+        assert servers[0].call("tools/call", _tool_call("add_note", {"text": "t3"}, "k3")) is None
+        servers[0].close()
+        servers.append(_mcp2_server(tmp_path, extra=_checked(tmp_path, function)))
+        answer = servers[1].call("tools/call", _tool_call("add_note", {"text": "t3"}, "k3"))
+        assert _outcome(answer) == "in_doubt", answer
+        assert _notes(tmp_path) == ["t3"]  # never re-run
+        assert _checks_run(tmp_path) == ["add_note k3"]
+    finally:
+        for server in servers:
+            server.close()
+
+
+def test_a_live_original_fences_off_the_recovery(tmp_path: Path) -> None:
+    """
+    The replay rule's race: the original process is alive (its call hangs after its record is
+    claimed), and a second process starts on the same store. The exclusive store refuses the
+    second one, so nothing can run beside the original, and no check runs; once the original is
+    gone, the check decides.
+    """
+    import time as _time
+
+    extra = _checked(tmp_path, "by_token")
+    original = _mcp2_server(tmp_path, fault="hang_after_record", extra=extra)
+    try:
+        original.request("tools/call", _tool_call("add_note", {"text": "t4"}, "k4"))
+        deadline = _time.monotonic() + 10
+        while _notes(tmp_path) != ["t4"] and _time.monotonic() < deadline:
+            _time.sleep(0.05)
+        env = {**os.environ, "PYTHONPATH": str(SRC), "PYTHONDONTWRITEBYTECODE": "1",
+               "STATEGUARD_IDEMPOTENCY_DB": str(tmp_path / "keys.db"),
+               "STATEGUARD_KEYED_TOOLS": "add_note", **extra}  # fmt: skip
+        second = subprocess.run(
+            [sys.executable, "-m", "stateguard.adapters.mcp.inject", str(tmp_path / "plain_server.py"),
+             str(tmp_path / "n.txt")],
+            input=b"", capture_output=True, env=env, timeout=60, check=False,
+        )  # fmt: skip
+        assert second.returncode != 0  # refused: another live instance holds the store
+        assert b"exclusively" in second.stderr or b"locked" in second.stderr, second.stderr
+        assert _notes(tmp_path) == ["t4"] and _checks_run(tmp_path) == []
+    finally:
+        original.close()
+    after = _mcp2_server(tmp_path, extra=extra)
+    try:  # the original is gone, and it had recorded its result: a plain replay
+        answer = after.call("tools/call", _tool_call("add_note", {"text": "t4"}, "k4"))
+        assert _outcome(answer) == "replayed", answer
+        assert _notes(tmp_path) == ["t4"]
+    finally:
+        after.close()
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ({"STATEGUARD_RECOVERY_CHECK": "json:loads"}, "needs STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1"),
+        (
+            {"STATEGUARD_RECOVERY_CHECK": "no_such_module_x:f",
+             "STATEGUARD_IDEMPOTENCY_EXCLUSIVE": "1"},
+            "ModuleNotFoundError",
+        ),
+        (
+            {"STATEGUARD_RECOVERY_CHECK": "json", "STATEGUARD_IDEMPOTENCY_EXCLUSIVE": "1"},
+            "use module:function",
+        ),
+    ],
+)  # fmt: skip
+def test_a_recovery_check_that_could_not_act_is_refused(
+    extra: dict[str, str], message: str, tmp_path: Path
+) -> None:
+    from stateguard.adapters.mcp.inject import _attacher
+
+    env = {
+        "STATEGUARD_IDEMPOTENCY_DB": str(tmp_path / "keys.db"),
+        "STATEGUARD_KEYED_TOOLS": "add_note",
+        **extra,
+    }
+    with pytest.raises(SystemExit, match=message):
+        _attacher(env)

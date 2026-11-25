@@ -30,11 +30,32 @@ without ``Server.run``) -- so that when the server starts serving:
 too. The server's files are not touched; this is an *adopting deployment*,
 not an unmodified server.
 
-Keyed tools are two-phase, with no recovery check: the tools' own effects (a
-row written, a file changed) carry no key, so a crash between the effect and
-its record leaves the key **in doubt**. It is reported as unknown and never
-re-run. The store need not be exclusive (exclusivity only serves recovery),
-but ``STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1`` makes it so.
+Keyed tools are two-phase, with no recovery check by default: the tools' own
+effects (a row written, a file changed) carry no key, so a crash between the
+effect and its record leaves the key **in doubt**. It is reported as unknown
+and never re-run. The store need not be exclusive (exclusivity only serves
+recovery), but ``STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1`` makes it so.
+
+``STATEGUARD_RECOVERY_CHECK=module:function`` (or ``path/to/file.py:function``;
+only with ``STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1``) is the operator's recovery
+check (Phase 2 S3.2), for keyed tools not declared idempotent. An abandoned
+attempt -- its process died, which the exclusive store proves -- is settled by
+``function(tool, key, arguments)``:
+
+- ``Recovery.found(result)``: this key's own effect is present; it is recorded
+  and answered ``recovered``, never run again (*result*: text, a JSON
+  ``CallToolResult`` or the SDK's own);
+- ``Recovery.absent()``: it is not, and nothing partial remains; the call runs
+  now, once;
+- ``Recovery.unknown(note)``, anything else, or an exception: the key stays
+  **in doubt** (UNKNOWN), never re-run.
+
+The replay rule holds the check to its promise: "not found" may run the call
+only because the original executor is proven gone (the exclusive store), and
+only if the check is about *this key's* effect -- written with a token the
+call carries, not a postcondition another request could produce. An effect
+outside what the check can see (a remote API, another host) must answer
+``unknown``. A process the server started that outlives it is not covered.
 
 ``STATEGUARD_IDEMPOTENT_TOOLS=<list>`` (keyed tools only, and only with
 ``STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1``) is the operator's declaration that a
@@ -60,6 +81,7 @@ without the adapter.
 
 from __future__ import annotations
 
+import importlib
 import importlib.metadata
 import importlib.util
 import os
@@ -150,6 +172,15 @@ def _attacher(environ: dict[str, str]) -> Callable[[Any], None] | None:
                 "stateguard inject: STATEGUARD_IDEMPOTENT_TOOLS must be keyed tools: "
                 + ",".join(sorted(set(idempotent) - set(keyed)))
             )
+        spec = environ.get("STATEGUARD_RECOVERY_CHECK")
+        if spec and not exclusive:
+            # The replay rule: "absent" may run the call only when the original executor is
+            # proven gone, which is what the exclusive store establishes.
+            raise SystemExit(
+                "stateguard inject: STATEGUARD_RECOVERY_CHECK needs "
+                "STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1"
+            )
+        check = load_recovery_check(spec) if spec else None
         store = IdempotencyStore(
             db,
             scope=environ.get("STATEGUARD_IDEMPOTENCY_SCOPE", "default"),
@@ -159,6 +190,7 @@ def _attacher(environ: dict[str, str]) -> Callable[[Any], None] | None:
             f"stateguard inject: keyed {','.join(keyed)} on mcp {major}.x "
             f"(store {db}, scope {store.scope}"
             + (f", declared idempotent {','.join(idempotent)}" if idempotent else "")
+            + (f", recovery check {spec}" if check is not None else "")
             + ")",
             file=sys.stderr,
             flush=True,
@@ -167,25 +199,102 @@ def _attacher(environ: dict[str, str]) -> Callable[[Any], None] | None:
             from stateguard.adapters.mcp import idempotency_sdk1
 
             tools1 = idempotency_sdk1.KeyedTools(store, on_point=faults.on_point)
-            _two_phase(tools1, keyed, idempotent)
+            _two_phase(tools1, keyed, idempotent, check, major)
             return tools1.install
         from stateguard.adapters.mcp import idempotency_sdk
 
         tools2 = idempotency_sdk.KeyedTools(store, on_point=faults.on_point)
-        _two_phase(tools2, keyed, idempotent)
+        _two_phase(tools2, keyed, idempotent, check, major)
         middleware = tools2.middleware()
         return lambda server: server.middleware.append(middleware)
     # Fault-only: the same crash points around the unmodified handler, no keys.
     return _fault_only_v1(faults) if major == 1 else _fault_only_v2(faults)
 
 
-def _two_phase(tools: Any, keyed: list[str], idempotent: list[str]) -> None:
-    """Every keyed tool two-phase; a declared idempotent one runs again when abandoned."""
+#: ``check(tool, key, arguments) -> Recovery``: the operator's recovery check (S3.2).
+RecoveryCheck = Callable[[str, str, Any], Recovery]
+
+
+def load_recovery_check(spec: str) -> RecoveryCheck:
+    """
+    ``STATEGUARD_RECOVERY_CHECK``: ``module:function`` (importable here) or
+    ``path/to/file.py:function``. Called as ``check(tool, key, arguments)`` for an abandoned
+    attempt of a keyed tool not declared idempotent; it returns ``Recovery.found(result)`` (this
+    key's own effect is present), ``Recovery.absent()`` (it is not, and nothing partial
+    remains) or ``Recovery.unknown(note)``. Anything else, or an exception, leaves the key in
+    doubt.
+    """
+    target, sep, name = spec.rpartition(":")
+    if not sep or not target or not name:
+        raise SystemExit(
+            f"stateguard inject: STATEGUARD_RECOVERY_CHECK={spec!r}: use module:function"
+        )
+    try:
+        if target.endswith(".py") or os.sep in target:
+            loader = importlib.util.spec_from_file_location("stateguard_recovery_check", target)
+            if loader is None or loader.loader is None:
+                raise ImportError(f"cannot load {target}")
+            module = importlib.util.module_from_spec(loader)
+            loader.loader.exec_module(module)
+        else:
+            module = importlib.import_module(target)
+        check = getattr(module, name)
+    except Exception as exc:  # noqa: BLE001 -- the server must not start half-configured
+        raise SystemExit(
+            f"stateguard inject: STATEGUARD_RECOVERY_CHECK={spec!r}: {type(exc).__name__}: {exc}"
+        ) from exc
+    if not callable(check):
+        raise SystemExit(f"stateguard inject: STATEGUARD_RECOVERY_CHECK={spec!r} is not callable")
+    return check  # type: ignore[no-any-return]
+
+
+def _two_phase(
+    tools: Any,
+    keyed: list[str],
+    idempotent: list[str],
+    check: RecoveryCheck | None = None,
+    major: int = 2,
+) -> None:
+    """
+    Every keyed tool two-phase. An abandoned attempt of a declared idempotent one runs again;
+    of any other, the operator's recovery check (if any) settles it; otherwise it stays in doubt.
+    """
     plain = [name for name in keyed if name not in idempotent]
-    if plain:
+    if plain and check is None:
         tools.two_phase(*plain)
+    elif check is not None:
+        for name in plain:
+            tools.two_phase(name, recover=_checking(check, name, major))
     if idempotent:
         tools.two_phase(*idempotent, recover=lambda _key, _arguments: Recovery.rerun())
+
+
+def _checking(check: RecoveryCheck, tool: str, major: int) -> Callable[[str, Any], Recovery]:
+    """The check for *tool*; a found result given as text or JSON becomes the SDK's result."""
+
+    def recover(key: str, arguments: Any) -> Recovery:
+        found = check(tool, key, arguments)
+        if isinstance(found, Recovery) and found.applied is True:
+            found = Recovery.found(_as_tool_result(found.result, major))
+        return found
+
+    return recover
+
+
+def _as_tool_result(value: Any, major: int) -> Any:
+    """Text or a JSON ``CallToolResult`` as the server SDK's ``CallToolResult``; else as given."""
+    if major == 1:
+        from mcp import types
+    else:
+        import mcp_types as types  # type: ignore[no-redef]
+    if isinstance(value, str):
+        return types.CallToolResult(content=[types.TextContent(type="text", text=value)])
+    if isinstance(value, dict):
+        try:
+            return types.CallToolResult.model_validate(value)
+        except Exception:  # noqa: BLE001 -- not a result: the adapter answers "cannot tell"
+            return value
+    return value
 
 
 async def _around(faults: Faults, tool: str, run: Callable[[], Awaitable[Any]]) -> Any:
