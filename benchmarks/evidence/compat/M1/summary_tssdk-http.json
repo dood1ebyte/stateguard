@@ -1,0 +1,85 @@
+{
+ "tssdk-http": {
+  "cells": {
+   "list/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "listing_identical": 3,
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/direct": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/shadow": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "listing_identical": 3,
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/hang_after/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/kill_before/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/lost_response/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/none/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/none/shadow": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   }
+  },
+  "direct_listings": 1,
+  "driver_errors": 0,
+  "rows": 24,
+  "tools": [
+   "collect-user-info",
+   "collect-user-info-task",
+   "delay",
+   "greet",
+   "list-files",
+   "multi-greet",
+   "start-notification-stream"
+  ],
+  "unsafe": 0
+ }
+}

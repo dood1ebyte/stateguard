@@ -1,0 +1,126 @@
+{
+ "fastmcp": {
+  "cells": {
+   "keys/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "keys_advertised": [
+     "add"
+    ],
+    "keys_not_advertised": [],
+    "keys_plan": [
+     {
+      "adapter": "python-injector",
+      "db": "/tmp/realhttp-M1-yf2bq5ry/runs/fastmcp-keys-auto--40000-4b2dbab8/keys.db",
+      "keyed_tools": [
+       "add"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "fastmcp"
+     },
+     {
+      "adapter": "python-injector",
+      "db": "/tmp/realhttp-M1-yf2bq5ry/runs/fastmcp-keys-auto--40001-37d57671/keys.db",
+      "keyed_tools": [
+       "add"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "fastmcp"
+     },
+     {
+      "adapter": "python-injector",
+      "db": "/tmp/realhttp-M1-yf2bq5ry/runs/fastmcp-keys-auto--40002-5f901a6a/keys.db",
+      "keyed_tools": [
+       "add"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "fastmcp"
+     }
+    ],
+    "kinds": {},
+    "server_outcomes": {
+     "executed": 3
+    },
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "listing_identical": 3,
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/direct": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/shadow": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "listing_identical": 3,
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/hang/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/kill_before/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/lost_exit/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/none/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/none/shadow": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   }
+  },
+  "direct_listings": 1,
+  "driver_errors": 0,
+  "rows": 27,
+  "tools": [
+   "add"
+  ],
+  "unsafe": 0
+ }
+}
