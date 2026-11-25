@@ -1,0 +1,339 @@
+{
+ "n_rows": 96,
+ "driver_errors": 0,
+ "servers": {
+  "coop": {
+   "raw": {
+    "fault_free": {
+     "fail": 0,
+     "n": 24,
+     "rifr": 0.0,
+     "ci95": [
+      0.0,
+      0.138
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 0,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {},
+    "server_outcomes": {},
+    "invocation_records": 0,
+    "invocation_record_mismatch": 0,
+    "invocation_record_mismatch_runs": [],
+    "latency_fault_free": {
+     "n": 24,
+     "mean": 1.443,
+     "median": 1.432,
+     "p95": 1.517
+    },
+    "cells": {
+     "read/none": [
+      0,
+      12
+     ],
+     "write/none": [
+      0,
+      12
+     ]
+    }
+   },
+   "naive": {
+    "fault_free": {
+     "fail": 0,
+     "n": 24,
+     "rifr": 0.0,
+     "ci95": [
+      0.0,
+      0.138
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 0,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {},
+    "server_outcomes": {},
+    "invocation_records": 0,
+    "invocation_record_mismatch": 0,
+    "invocation_record_mismatch_runs": [],
+    "latency_fault_free": {
+     "n": 24,
+     "mean": 1.436,
+     "median": 1.45,
+     "p95": 1.534
+    },
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 0,
+    "cells": {
+     "read/none": [
+      0,
+      12
+     ],
+     "write/none": [
+      0,
+      12
+     ]
+    }
+   },
+   "sg": {
+    "fault_free": {
+     "fail": 0,
+     "n": 24,
+     "rifr": 0.0,
+     "ci95": [
+      0.0,
+      0.138
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 0,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {},
+    "server_outcomes": {},
+    "invocation_records": 24,
+    "invocation_record_mismatch": 0,
+    "invocation_record_mismatch_runs": [],
+    "latency_fault_free": {
+     "n": 24,
+     "mean": 1.633,
+     "median": 1.614,
+     "p95": 1.75
+    },
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 0,
+    "cells": {
+     "read/none": [
+      0,
+      12
+     ],
+     "write/none": [
+      0,
+      12
+     ]
+    }
+   },
+   "sg_keyed": {
+    "fault_free": {
+     "fail": 0,
+     "n": 24,
+     "rifr": 0.0,
+     "ci95": [
+      0.0,
+      0.138
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 0,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {},
+    "server_outcomes": {
+     "executed": 12
+    },
+    "invocation_records": 24,
+    "invocation_record_mismatch": 0,
+    "invocation_record_mismatch_runs": [],
+    "latency_fault_free": {
+     "n": 24,
+     "mean": 1.645,
+     "median": 1.635,
+     "p95": 1.763
+    },
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 0,
+    "cells": {
+     "read/none": [
+      0,
+      12
+     ],
+     "write/none": [
+      0,
+      12
+     ]
+    }
+   }
+  }
+ }
+}

@@ -174,6 +174,64 @@ What recovery does **not** claim:
   - after execution, it is `executed_unrecorded`, and the key is left *started*, so a resend is in doubt or recovered, never re-executed blindly;
   - for a transactional call, a store failure is `rejected_store`, because the effect was in the same uncommitted transaction.
 
+### 4.5 The replay rule, and where the crash window is closed (Phase 2 S3, 2026-11-23/25)
+
+**The replay rule** (PHASE2_PLAN.md, clarification A):
+- A recovery check that answers "not found" is **not** proof that the original attempt cannot
+  still execute.
+- A keyed call is replayed or re-executed only when the server's contract makes the execution
+  state authoritative **and** fences off the original attempt. One of these must hold:
+  1. **the record and the effect commit in one transaction** (§4.2). A late or concurrent original
+     waits on the database's write lock, then finds the record. It cannot commit a second effect,
+     because the key is the record's primary key and the record commits with the effect;
+  2. **an atomic claim, or a fencing token checked on the effect's write path**;
+  3. **an exclusive store that proves the original executor is gone** (§4.3; D11's declared-
+     idempotent re-run uses the same lock).
+- Otherwise the call stays **UNKNOWN** (in doubt). It is never replayed and never re-run, and it
+  counts as a residual failure.
+
+**Where the crash window is closed: only on cooperating servers.**
+- *Transactional* (§4.2): the effect is in the key store's own SQLite database. The reference is
+  the **cooperating notes server** (`examples/mcp/cooperating_notes_server.py`, S3.1). Its
+  `add_note` writes the note row and the key's record in one `BEGIN IMMEDIATE` transaction, over
+  stdio or Streamable HTTP. Results:
+  - **Crash cells, CW1** (`benchmarks/evidence/realstdio/CW1/`, `.../realhttp/CW1/`;
+    `after_begin`, `after_effect` and `after_record` × 12): **0/36 unresolved and 0 duplicates**
+    on each relay (HTTP sg_keyed, HTTP sg_keyed_deadline, stdio sg_keyed). The resend is
+    `executed` after a rollback and `replayed` after the commit.
+  - **The same server without keys (`--no-keys`):** 36/36 UNKNOWN, never success.
+  - **Fencing tests** (`tests/examples/test_cooperating_notes_server.py`), for a late original
+    attempt racing the resend:
+    - the original commits: the resend replays;
+    - the original rolls back: the resend executes;
+    - the resend's lock wait times out: `rejected_store`, and nothing runs;
+    - the original's process is killed inside its transaction: nothing is left, and the resend
+      executes once.
+    One note every time.
+  - **Mutants:** every new crash test fails against a two-phase (non-cooperating) version of the
+    server.
+- *Two-phase with recovery* (§4.3): only under its two conditions, an exclusive store and a check
+  about the key's own effect. The reference servers are `keyed_reference_server.py` and
+  `keyed_mcpserver.py`.
+
+**Not closed, and not claimed:**
+- unmodified third-party servers, even when keyed by the injector or the preload: their keys are
+  two-phase with no recovery check;
+- any effect outside the key store's transaction (files, remote APIs, other databases).
+CW1 re-ran their crash cells on S3's code, and they are **identical to Phase 1** (B6 for notes and
+tsnotes, S10 for sqlite, memory and filesystem):
+- `after_begin` and `after_effect`: 12/12 unresolved, in doubt or unknown, never success;
+- `after_record`: 0/12;
+- 0 unsafe.
+No document or report may say "crash-window recovery" without naming this boundary.
+
+**Not delivered in S3, recorded in `NEXT.md`:**
+- the `STATEGUARD_RECOVERY_CHECK` environment hook for the injector and preload (S3.2);
+- the TypeScript cooperating server (S3.3, the plan's fallback).
+The TypeScript transactional helper itself exists (`store.transact`, `KeyedTools.transactional`
+in `adapters/typescript/src/sdk.ts`), and so does a recovery check for servers built with the
+adapters (`two_phase(..., recover=)`).
+
 ## 5. What the relay does with it
 
 With `--retry auto`, and unless `--no-idempotency-keys` is given:
