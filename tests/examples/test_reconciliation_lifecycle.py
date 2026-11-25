@@ -376,6 +376,11 @@ def test_simultaneous_reconciliations_are_each_answered_once_with_their_own_verd
             assert data["io.stateguard/executionState"] == "unknown"
             assert data["io.stateguard/treatAsSuccess"] is False
         assert len(_events(rig, "reconcile_pending")) == 2
+        # The relay logs reconcile_answered after it has written the answer (the event says
+        # whether the write succeeded), so the second may follow the client's read of it.
+        deadline = time.monotonic() + 5
+        while len(_events(rig, "reconcile_answered")) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
         assert len(_events(rig, "reconcile_answered")) == 2
         probe_ids = [e["id"] for e in _events(rig, "reconcile_probe")]
         assert len(probe_ids) == 4
