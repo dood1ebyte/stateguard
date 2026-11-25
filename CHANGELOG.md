@@ -37,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     never ran.
   - Shadow mode only logs `serialize_would_apply`.
   - Not available on the HTTP relay.
+- **`STATEGUARD_RECOVERY_CHECK`** in the injector (`module:function`) and the TypeScript
+  preload (`module#export`). It is only accepted with `STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1`.
+  - It is the operator's check, `check(tool, key, arguments)`, for an abandoned attempt of a
+    keyed tool:
+    - found: recorded and answered `recovered`;
+    - absent: the call runs once;
+    - otherwise: in doubt, never re-run.
+  - See `SERVER_IDEMPOTENCY_CONTRACT.md` §4.5 for the replay rule it is held to.
+- **The TypeScript cooperating notes server** (`adapters/typescript/examples/`), the twin of
+  the Python one. Its note and its key's record commit in one transaction. Keyed crash cells
+  gave 0/36 unresolved with 0 duplicates on each relay
+  (`benchmarks/evidence/{realhttp,realstdio}/CW2/`).
 - **A published compatibility matrix:** `docs/runtime/COMPATIBILITY_MATRIX.md`. Ten pinned
   public servers were attempted through the relays, with a status for each and 0 unsafe
   outcomes in 315 rows. The harness is `benchmarks/runtime/compat/`.
