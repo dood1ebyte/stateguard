@@ -318,7 +318,10 @@ class SlowFirstServer(ScriptedServer):
         key = self._begin_key(identifier, "pay", params.get("arguments"), message, writer)
 
         def finish() -> None:
-            time.sleep(0.5)
+            # Well past the 0.3 s deadline: the relay acts on it when its deadline thread
+            # wakes (every 0.05 s), and a loaded runner can wake it late (CI runs 55 and 61
+            # lost this race in other tests at 0.45 s).
+            time.sleep(0.9)
             self.executed.append(ServerCall(-1, "pay", params.get("arguments"), message))
             result = self._result_for(None, "pay", params.get("arguments"), ServerAction.NORMAL)
             if isinstance(key, str):

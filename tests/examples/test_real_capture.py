@@ -31,12 +31,14 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "benchmarks"))
 
+from runtime import harness as _harness  # noqa: E402
 from runtime import replay  # noqa: E402
 from runtime.harness import (  # noqa: E402
     RelayMode,
@@ -140,9 +142,21 @@ def _shadow_capture() -> tuple[Rig, list[bytes], list[Any], str]:
     return rig, sent, answers, sink.getvalue()
 
 
+#: How late the "late" call answers here. The relay acts on the 0.3 s deadline when its deadline
+#: thread next wakes (every 0.05 s); at the harness's shared 0.45 s a loaded macOS runner woke it
+#: after the answer had arrived (CI run 61, macOS 3.14), so no "outcome unknown" was logged for
+#: it -- the relay rightly delivered the real answer. 0.9 s leaves about 0.55 s for that.
+LATE_SECONDS = 0.9
+
+
 @pytest.fixture(scope="module")
-def capture() -> tuple[Rig, list[bytes], list[Any], str]:
-    return _shadow_capture()
+def capture() -> Iterator[tuple[Rig, list[bytes], list[Any], str]]:
+    shared = _harness.DELAY_SECONDS
+    _harness.DELAY_SECONDS = LATE_SECONDS
+    try:
+        yield _shadow_capture()
+    finally:
+        _harness.DELAY_SECONDS = shared
 
 
 def _events(rig: Rig, name: str) -> list[dict[str, Any]]:
