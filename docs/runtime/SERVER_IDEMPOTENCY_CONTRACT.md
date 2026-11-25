@@ -248,11 +248,19 @@ No document or report may say "crash-window recovery" without naming this bounda
 - **No crash cells were run with a check.** The 0/36 claim above stays for the cooperating
   server only.
 
-**Not delivered, recorded in `NEXT.md`:**
-- the TypeScript cooperating server (S3.3, the plan's fallback).
-- The TypeScript transactional helper itself exists (`store.transact`,
-  `KeyedTools.transactional` in `adapters/typescript/src/sdk.ts`), and so does a recovery check
-  for servers built with the adapters (`two_phase(..., recover=)`).
+**The TypeScript cooperating server (S3.3, delivered in S4 on 2026-11-25 as a deferred item).**
+- **What it is:** `adapters/typescript/examples/cooperating_notes_server.ts`, the TypeScript
+  twin of the Python server. It is built with `KeyedTools.transactional` and
+  `store.transact`, and has the same tools, transaction and fault points.
+- **Tests:** its crash tests run in `tests/examples/test_cooperating_notes_server.py` beside the
+  Python server's. A two-phase mutant fails them all.
+- **CW2** (`benchmarks/evidence/{realhttp,realstdio}/CW2/`):
+  - keyed, 0/36 unresolved with 0 duplicates on each relay (HTTP `sg_keyed` and
+    `sg_keyed_deadline`, stdio `sg_keyed`);
+  - fault-free 0/12;
+  - `--no-keys`, 36/36 UNKNOWN, never success.
+- **So the 0/36 above holds for both languages:** the Python and the TypeScript cooperating
+  servers, each for its own note, in the key store's transaction.
 
 ## 5. What the relay does with it
 
