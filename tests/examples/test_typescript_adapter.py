@@ -699,7 +699,9 @@ def test_the_preload_recovery_check_settles_an_abandoned_call(
     client = _relay(tmp_path, argv, env=full_env)
     try:
         answer = client.call(
-            1, "add_observations", {"observations": [{"entityName": "alice", "contents": ["tok-1"]}]}
+            1,
+            "add_observations",
+            {"observations": [{"entityName": "alice", "contents": ["tok-1"]}]},
         )
     finally:
         client.close()

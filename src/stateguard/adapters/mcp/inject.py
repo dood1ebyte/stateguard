@@ -283,10 +283,8 @@ def _checking(check: RecoveryCheck, tool: str, major: int) -> Callable[[str, Any
 
 def _as_tool_result(value: Any, major: int) -> Any:
     """Text or a JSON ``CallToolResult`` as the server SDK's ``CallToolResult``; else as given."""
-    if major == 1:
-        from mcp import types
-    else:
-        import mcp_types as types  # type: ignore[no-redef]
+    # The server's own SDK: ``mcp.types`` on 1.x, ``mcp_types`` on 2.x (absent on 1.x).
+    types: Any = importlib.import_module("mcp.types" if major == 1 else "mcp_types")
     if isinstance(value, str):
         return types.CallToolResult(content=[types.TextContent(type="text", text=value)])
     if isinstance(value, dict):
