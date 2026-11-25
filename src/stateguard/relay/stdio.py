@@ -352,12 +352,15 @@ from stateguard.adapters.mcp.idempotency import (
     with_key,
 )
 from stateguard.adapters.mcp.incidence import (
+    EXECUTION_STATE,
+    IDEMPOTENCY_OUTCOME,
     INVOCATION_EVENT,
     INVOCATION_OPEN_EVENT,
     resolution,
     with_faults,
 )
 from stateguard.adapters.mcp.jsonrpc import (
+    INVALID_PARAMS,
     JSONRPC_VERSION,
     PROTOCOL_VERSION_META_KEY,
     TOOLS_CALL,
@@ -519,6 +522,9 @@ class StdioRelay:
         self._retry_ids = (f"{RETRY_ID_PREFIX}{n}" for n in itertools.count(1))
         # client id -> (payload, tool, server generation it was decided against)
         self._calls: dict[Any, tuple[bytes, str | None, int]] = {}
+        #: S4.1: client id -> (the client's own line, tool, generation) for a call forwarded
+        #: changed (repaired), until its first answer: a rejected repair falls back to it.
+        self._repaired: dict[Any, tuple[bytes, str | None, int]] = {}
         self._attempts: dict[Any, int] = {}  # client id -> attempts sent
         #: client ids resent after an attempt whose outcome is unknown (D15).
         self._in_doubt: set[Any] = set()
@@ -1710,6 +1716,70 @@ class StdioRelay:
             **verdict.to_dict(),
         )
 
+    def _fallback_to_original(self, client_id: Any, message: Any, observed: Observed) -> bool:
+        """
+        S4.1: the server rejected a call StateGuard repaired. Send the client's own call
+        instead, once -- only where that cannot run anything twice: the server refused the
+        arguments themselves (JSON-RPC -32602, saying nothing ran), or the operator declared
+        the tool safe to repeat. Otherwise the error is delivered as sent. True if sent.
+        """
+        if self._shadow or not _hashable(client_id):
+            return False
+        with self._retry_lock:
+            repaired = self._repaired.pop(client_id, None)
+            attempts = self._attempts.get(client_id, 1)
+        if repaired is None:
+            return False
+        original, tool, generation = repaired
+        error = message.get("error") if isinstance(message, dict) else None
+        data = error.get("data") if isinstance(error, dict) else None
+        says_what_ran = isinstance(data, dict) and (
+            IDEMPOTENCY_OUTCOME in data or EXECUTION_STATE in data
+        )
+        rejected = (
+            isinstance(error, dict) and error.get("code") == INVALID_PARAMS and not says_what_ran
+        )
+        declaration = self._declaration(tool)
+        repeatable = declaration.declared and declaration.effect.repeatable
+        if generation != self.generation or not (rejected or repeatable):
+            self._log(
+                "repair_fallback",
+                category="A",
+                id=client_id,
+                tool=tool,
+                observed=observed.value,
+                acted=False,
+                reason="the server rejected the repaired call and it may have run (not -32602, "
+                "not declared safe to repeat): its answer is delivered as sent",
+            )
+            return False
+        payload = self._keyed_payload(original, tool)
+        retry_id = next(self._retry_ids)
+        while self.ledger.get(retry_id) is not None:  # never an id a client has used
+            retry_id = next(self._retry_ids)
+        resend = json.loads(payload)
+        resend["id"] = retry_id
+        self._log(
+            "repair_fallback",
+            category="A",
+            id=client_id,
+            tool=tool,
+            observed=observed.value,
+            acted=True,
+            reason="invalid params: the server ran nothing; the client's own call is sent"
+            if rejected
+            else f"declared {declaration.effect.value}: the client's own call is sent",
+        )
+        with self._retry_lock:
+            self._calls[client_id] = (payload, tool, generation)
+            self._client_of[retry_id] = client_id
+            self._attempts[client_id] = attempts + 1
+        self.ledger.received(retry_id, TOOLS_CALL, tool)
+        if self._send_decided(retry_id, self._encode(resend), generation):
+            return True
+        self.ledger.answered_locally(retry_id)
+        return False
+
     def _consider_retry(
         self,
         client_id: Any,
@@ -2056,6 +2126,7 @@ class StdioRelay:
     def _forget(self, client_id: Any) -> None:
         with self._retry_lock:
             self._calls.pop(client_id, None)
+            self._repaired.pop(client_id, None)
             self._in_doubt.discard(client_id)
             attempts = self._attempts.pop(client_id, None)
             if attempts is not None and attempts > 1:
@@ -2187,6 +2258,13 @@ class StdioRelay:
                 self._record_invocation(identifier, None, kind="refused")
                 return
             tool = message.get("params", {}).get("name") if isinstance(message, dict) else None
+            if identifier is not None and _hashable(identifier) and payload != line:
+                with self._retry_lock:  # forwarded changed: the client's own line is the fallback
+                    self._repaired[identifier] = (
+                        line,
+                        tool if isinstance(tool, str) else None,
+                        generation,
+                    )
             try:
                 payload = self._keyed_payload(payload, tool if isinstance(tool, str) else None)
             except Exception as exc:  # noqa: BLE001 -- fail open: send it without a key
@@ -2248,6 +2326,25 @@ class StdioRelay:
             if isinstance(evaluated, tuple):
                 return evaluated
             outcome, listing = evaluated, "confirmed"
+        elif not self._shadow and _intervenes(request, outcome):
+            # S4.1: refresh is off, so nothing confirms this listing is the server's current
+            # one. A repair or refusal from a stale listing turns a correct call into a wrong
+            # one (A1: false successes on a server that reports errors as text). Withheld:
+            # the call goes as the client sent it, and the proposal is logged.
+            self._log(
+                "call",
+                id=request.id,
+                tool=request.name,
+                action="unvalidated",
+                auto_action=(outcome.auto_action or outcome.action).value,
+                reason="refresh is off: the listing cannot be confirmed current, so StateGuard "
+                "neither repairs nor refuses on it; forwarded unchanged",
+                listing="unconfirmed",
+                would_modify=False,
+                proposal="withheld",
+                withheld=_proposal(request, outcome),
+            )
+            return True, line
 
         self._log(
             "call",
@@ -2794,6 +2891,8 @@ class StdioRelay:
                 return False
             if disposition is ResponseDisposition.DELIVER:
                 self._note_failure(identifier, failure)
+                if is_error and self._fallback_to_original(identifier, message, observed):
+                    return False
                 if is_error and self._consider_retry(identifier, observed):
                     return False
                 self._forget(identifier)

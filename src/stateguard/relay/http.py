@@ -160,12 +160,19 @@ from stateguard.adapters.mcp.idempotency import (
     with_key,
 )
 from stateguard.adapters.mcp.incidence import (
+    EXECUTION_STATE,
+    IDEMPOTENCY_OUTCOME,
     INVOCATION_EVENT,
     INVOCATION_OPEN_EVENT,
     resolution,
     with_faults,
 )
-from stateguard.adapters.mcp.jsonrpc import intervenes, is_conformant_response, proposal
+from stateguard.adapters.mcp.jsonrpc import (
+    INVALID_PARAMS,
+    intervenes,
+    is_conformant_response,
+    proposal,
+)
 from stateguard.adapters.mcp.recording import Direction, Provenance, Recorder, RedactionPolicy
 from stateguard.adapters.mcp.recording import RedactionMode as RecordRedaction
 from stateguard.core.models.config import GuardConfig, RepairMode
@@ -873,12 +880,27 @@ class Relay:
             self._lists.observe_request(message)
         state = self._new_state()
         self._open(session, message, state)
+        original: dict[str, Any] | None = None
         if method == "tools/call" and not self.passthrough:
             checked = await self._check_call(request, message, session)
             if isinstance(checked, Response):
                 self._record(session, message, state, None, kind="refused")
                 return checked
+            if checked != message:
+                original = message  # S4.1: forwarded changed; the client's own is the fallback
             message = checked
+        return await self._send_call(request, message, session, state, method, original)
+
+    async def _send_call(
+        self,
+        request: Request,
+        message: dict[str, Any],
+        session: Session | None,
+        state: dict[str, Any],
+        method: str,
+        original: dict[str, Any] | None = None,
+    ) -> Response:
+        """Send *message* and answer the client; *original*: the client's own call, if repaired."""
         sent, keyed, tool = self._keyed(message)
         if (
             self.deadline is not None
@@ -886,6 +908,8 @@ class Relay:
             and self._recoverable(method, tool, keyed)
         ):
             raced = await self._race(request, message, sent, session, keyed, tool, state)
+            if original is not None and self._falls_back(raced, message.get("id"), tool):
+                return await self._send_call(request, original, session, state, method)
             self._record(session, sent, state, raced)
             return self._json_answer(method, raced, session)
         first = await self._attempt(request, sent, session, state)
@@ -902,8 +926,51 @@ class Relay:
             events = self._stream(request, message, sent, session, state, first, keyed, tool)
             return StreamingResponse(_released(events, self, session, sent, state), headers=out)
         final = await self._settle(request, message, sent, session, state, first, keyed, tool)
+        if original is not None and self._falls_back(final, message.get("id"), tool):
+            return await self._send_call(request, original, session, state, method)
         self._record(session, sent, state, final)
         return self._json_answer(method, final, session)
+
+    def _falls_back(
+        self, final: dict[str, Any] | Response, client_id: Any, tool: str | None
+    ) -> bool:
+        """
+        S4.1: the server rejected a call StateGuard repaired (a JSON answer). Send the client's
+        own call instead, once, only where that cannot run anything twice: the server refused
+        the arguments themselves (JSON-RPC -32602, saying nothing ran), or the operator
+        declared the tool safe to repeat. An event-stream answer is delivered as sent.
+        """
+        if self.shadow or not isinstance(final, dict):
+            return False
+        error, result = final.get("error"), final.get("result")
+        if not (isinstance(error, dict) or (isinstance(result, dict) and result.get("isError"))):
+            return False
+        data = error.get("data") if isinstance(error, dict) else None
+        says_what_ran = isinstance(data, dict) and (
+            IDEMPOTENCY_OUTCOME in data or EXECUTION_STATE in data
+        )
+        rejected = (
+            isinstance(error, dict) and error.get("code") == INVALID_PARAMS and not says_what_ran
+        )
+        declaration = self._declaration(tool)
+        repeatable = bool(declaration.declared and declaration.effect.repeatable)
+        acted = rejected or repeatable
+        self.log(
+            "repair_fallback",
+            category="A",
+            id=client_id,
+            tool=tool,
+            acted=acted,
+            reason=(
+                "invalid params: the server ran nothing; the client's own call is sent"
+                if rejected
+                else f"declared {declaration.effect.value}: the client's own call is sent"
+                if repeatable
+                else "the server rejected the repaired call and it may have run (not -32602, "
+                "not declared safe to repeat): its answer is delivered as sent"
+            ),
+        )
+        return acted
 
     def _json_answer(
         self, method: str, final: dict[str, Any] | Response, session: Session | None
@@ -1494,6 +1561,24 @@ class Relay:
             if outcome is None:
                 return message
             listing = "confirmed"
+        elif not self.shadow and intervenes(call, outcome):
+            # S4.1: refresh is off, so nothing confirms this listing is the server's current
+            # one; a repair or refusal from a stale listing turns a correct call into a wrong
+            # one. Withheld: the call goes as the client sent it, and the proposal is logged.
+            self.log(
+                "call",
+                id=call.id,
+                tool=call.name,
+                action="unvalidated",
+                auto_action=(outcome.auto_action or outcome.action).value,
+                reason="refresh is off: the listing cannot be confirmed current, so StateGuard "
+                "neither repairs nor refuses on it; forwarded unchanged",
+                listing="unconfirmed",
+                would_modify=False,
+                proposal="withheld",
+                withheld=proposal(call, outcome),
+            )
+            return message
         self.log(
             "call",
             id=call.id,
