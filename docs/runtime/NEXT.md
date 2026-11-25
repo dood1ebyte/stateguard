@@ -69,6 +69,16 @@ for CI only.
   - run 59 (S2.3) passed 10 of 11 jobs. macOS 3.13 died in the runner's action download, with
     no step of ours run, and was re-run once;
   - see "S2 result".
+- **S3 and S4 (2026-11-23, 11-25):**
+  - **Run 61** (`a9d1c7a`): macOS 3.14 failed in `test_real_capture`, the deadline-thread
+    race. Fixed in `7022ff3`; run 62 was green.
+  - **Run 63** (`78e7b94`, evidence and docs only): macOS 3.14 failed in a reconciliation
+    test that read the audit log before the relay's `reconcile_answered` line.
+    - Reproduced with a 0.3 s delay, 3/3 failures; fixed in the test (`3cc063d`). The relay is
+      unchanged.
+  - **Run 64** (`290ba5d`, S4.1): green.
+  - **`netem.yml` run 1** (`0dd8604`): green; its results are in NR1.
+  - See "S4 result" for the session's last runs.
 
 **Approvals:**
 - A1, A2, A3 and A4: approved (A4's boundary is kept; no developer data is expected).
@@ -330,6 +340,57 @@ allowed. Early completion or idle capacity never advances the schedule.
       instruction, as Phase 2 S1 (see "Phase 2" above).
     - Phase 2 is authorised and runs from `PHASE2_PLAN.md`.
 - **The 14:00 IST end** is enforced by each session's own clock checks, not by the platform.
+
+### S3 result (Mon 2026-11-23, 09:00 to about 09:10 IST): interrupted, finished in S4
+
+- **Done on 2026-11-23:**
+  - S3.1, the Python cooperating notes server and its tests (`a9d1c7a`);
+  - CW1's plan and drivers (`6b0de13`).
+- **The interruption.** The session stopped at about 09:10 IST, before CW1 ran, before the
+  contract update, and before any handoff.
+  - The cause was not recorded. No commit or note after `6b0de13` says why, and nothing was
+    lost: both commits were on origin.
+  - CI run 61 (`a9d1c7a`) failed on macOS 3.14 (`test_real_capture`, the deadline-thread race).
+    It was fixed in S4 (`7022ff3`).
+- **Finished in S4 (2026-11-25), never-cut items first:**
+  - **CW1** (`78e7b94`): on the Python cooperating server, keyed, 0/36 unresolved with 0
+    duplicates on each relay. Non-cooperating crash cells are identical to Phase 1.
+  - **`SERVER_IDEMPOTENCY_CONTRACT.md` §4.5:** the replay rule and the boundary.
+  - **Then, as deferred items:**
+    - S3.2, the recovery-check hook (`7643452` for Python, `f1e0490` for TypeScript);
+    - S3.3, the TypeScript cooperating server (`e22ce8e`), with CW2.
+  - See "S4 result".
+
+### S5 starting checklist (Fri 2026-11-27, 09:00 IST)
+
+1. **Check the environment.**
+   - Run `TZ=Asia/Kolkata date`; check git is `0 0` with origin.
+   - Check the toolchain. On 2026-11-25 these were present:
+     - `.venv`, `/tmp/mcp1`, `/tmp/venv311`, `/tmp/venv312`, `/tmp/venv314b`;
+     - `/tmp/sgpy` (the git and fetch servers), `/tmp/sgtime` (`mcp-server-time` 2026.10.10);
+     - node v22.23.4;
+     - `/opt/sg-servers/{everything,filesystem,memory,seqthink}`;
+     - `adapters/typescript/node_modules`.
+   - A new container needs them reinstalled, at the pinned versions in
+     `benchmarks/evidence/compat/M1/PLAN.md`.
+2. **CI:** confirm the last run on PR #19 is green, including `netem.yml` if the HTTP relay
+   changed. Re-run once only if a job died before any test body ran.
+3. **Do S5 per `PHASE2_PLAN.md`:**
+   - S5.1 `stateguard trial`;
+   - S5.2 onboarding snippets and `doctor`, with the clean-machine timing;
+   - S5.3 release candidates, **not published**;
+   - S5.4 reproducible benchmark materials and the **frozen recommended configuration**;
+   - S5.5 the Track B workflow and the first GitHub pass.
+   - Fallback, in order: `doctor`; then Track B limited to GitHub.
+   - Never cut: S5.1, the frozen configuration, no publishing, the Track B schema and the first
+     GitHub pass.
+4. **For the frozen configuration (S5.4), note:**
+   - `--serialize-tools` is opt-in, per server: name a server's tools in it only if the server
+     is known to lose concurrent writes, as server-memory does (SER1).
+   - `STATEGUARD_RECOVERY_CHECK` is operator code, so it is not part of a default
+     configuration.
+   - The HTTP relay's event-stream drain is always on.
+5. **Track B:** public information only, no contact, never used for rates (PHASE2_PLAN §10–11).
 
 ## Handoff (end of S2, Fri 2026-11-20 about 10:20 IST)
 
