@@ -32,3 +32,14 @@ Synthetic fault injection; not production traffic.
   - Those rows are kept as `rows_notes_interrupted.jsonl`, are not used in any comparison, and
     were run under double load.
   - The part is re-run from the start as `notes_r2` once B8 and S11 have finished.
+
+## Commit changed before any row of this batch: `d429817`, not `0dd8604`
+
+Recorded at 10:05 IST on 2026-11-25, before any row of this batch.
+- After the plan was written, S3.2 changed the injector and the preload: the recovery-check
+  hook, inert unless `STATEGUARD_RECOVERY_CHECK` is set. S3.3 added the TypeScript cooperating
+  server, a new file.
+- The keyed arms here run those adapters, so the batch runs on the session's final code,
+  `d429817`.
+- The relays are unchanged since `0dd8604`.
+- The prediction is unchanged.

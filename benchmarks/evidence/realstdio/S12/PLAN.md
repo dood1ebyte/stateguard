@@ -17,3 +17,14 @@ S12 checks that the matrix does not change on the final code `0dd8604`.
 `filesystem_r2`), with 0 unsafe outcomes.
 
 Synthetic fault injection on pinned servers; not production traffic.
+
+## Commit changed before any row of this batch: `d429817`, not `0dd8604`
+
+Recorded at 10:05 IST on 2026-11-25, before any row of this batch.
+- After the plan was written, S3.2 changed the injector and the preload: the recovery-check
+  hook, inert unless `STATEGUARD_RECOVERY_CHECK` is set. S3.3 added the TypeScript cooperating
+  server, a new file.
+- The keyed arms here run those adapters, so the batch runs on the session's final code,
+  `d429817`.
+- The relays are unchanged since `0dd8604`.
+- The prediction is unchanged.
