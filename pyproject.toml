@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sguard"
-version = "0.1.0"
+version = "0.2.0rc1"
 description = "Runtime contract reliability SDK for AI system components."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -64,6 +64,19 @@ packages = ["src/stateguard"]
 # (stateguard/relay/keys.py finds it here; a checkout uses adapters/typescript/src directly).
 [tool.hatch.build.targets.wheel.force-include]
 "adapters/typescript/src" = "stateguard/relay/ts"
+
+# The source distribution: the package and what the wheel is built from, nothing else (no
+# evidence, benchmarks, node_modules or caches).
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/stateguard",
+    "/adapters/typescript/src",
+    "/adapters/typescript/package.json",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+]
+exclude = ["**/__pycache__", "**/node_modules"]
 
 # ---------------------------------------------------------------------------
 # Pytest

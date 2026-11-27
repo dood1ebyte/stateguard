@@ -1,18 +1,27 @@
 {
   "name": "@stateguard/mcp-idempotency",
-  "version": "0.1.0",
+  "version": "0.2.0-rc.1",
   "private": true,
   "description": "StateGuard's MCP idempotency-key contract, server side, for the TypeScript MCP SDK (1.x). Same wire contract and store schema as stateguard.adapters.mcp.idempotency (Python).",
   "type": "module",
-  "engines": { "node": ">=22.18" },
+  "engines": {
+    "node": ">=22.18"
+  },
   "exports": {
-    ".": "./src/index.ts",
-    "./preload": "./src/preload.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./preload": {
+      "types": "./dist/preload.d.ts",
+      "default": "./dist/preload.js"
+    }
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test --test-concurrency=1 'test/*.test.ts'",
-    "build": "tsc -p tsconfig.build.json"
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": "1.32.1"
@@ -22,5 +31,11 @@
     "@types/node": "22.20.5",
     "typescript": "6.0.2",
     "zod": "4.6.7"
-  }
+  },
+  "files": [
+    "dist",
+    "src",
+    "examples",
+    "README.md"
+  ]
 }
