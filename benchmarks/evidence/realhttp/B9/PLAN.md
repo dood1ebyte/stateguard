@@ -43,3 +43,12 @@ Recorded at 10:05 IST on 2026-11-25, before any row of this batch.
   `d429817`.
 - The relays are unchanged since `0dd8604`.
 - The prediction is unchanged.
+
+## Run log (continued)
+
+- **2026-11-25, about 10:31 IST:** S4 stopped while the `notes_control` part was running, with
+  223 rows written. The container was later replaced, and the cause was not recorded.
+  - The rows are kept as `rows_notes_control_interrupted.jsonl` and are not used.
+  - `notes_r2` had finished and is committed.
+- **2026-11-27 (S5):** the remaining parts, from `notes_control` on, are re-run on the same
+  commit `d429817`, in the background.
