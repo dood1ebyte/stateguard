@@ -1,0 +1,134 @@
+{
+ "fastmcp": {
+  "cells": {
+   "keys/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "keys_advertised": [],
+    "keys_not_advertised": [],
+    "keys_plan": [
+     {
+      "adapter": "python-injector",
+      "db": "/tmp/realhttp-M2-mhmpyjdz/runs/fastmcp-keys-auto--41000-3c937dfc/keys.db",
+      "keyed_tools": [
+       "add"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "fastmcp"
+     },
+     {
+      "adapter": "python-injector",
+      "db": "/tmp/realhttp-M2-mhmpyjdz/runs/fastmcp-keys-auto--41001-23a2d296/keys.db",
+      "keyed_tools": [
+       "add"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "fastmcp"
+     },
+     {
+      "adapter": "python-injector",
+      "db": "/tmp/realhttp-M2-mhmpyjdz/runs/fastmcp-keys-auto--41002-124bc5e6/keys.db",
+      "keyed_tools": [
+       "add"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "fastmcp"
+     }
+    ],
+    "kinds": {
+     "surfaced_unknown": 3
+    },
+    "server_outcomes": {
+     "None": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "listing_identical": 3,
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/direct": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/shadow": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "listing_identical": 3,
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/hang/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {
+     "surfaced_unknown": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/kill_before/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {
+     "surfaced_unknown": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/lost_exit/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {
+     "surfaced_unknown": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/none/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {
+     "surfaced_unknown": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/none/shadow": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {
+     "error_answer": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   }
+  },
+  "direct_listings": 1,
+  "driver_errors": 0,
+  "rows": 27,
+  "tools": null,
+  "unsafe": 0
+ }
+}

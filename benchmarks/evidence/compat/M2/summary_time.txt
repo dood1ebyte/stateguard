@@ -1,0 +1,10 @@
+===== time  rows 27  unsafe 0  driver_errors 0  tools 3
+  keys/auto                    3/3  fired 0  unsafe 0  kinds {}  adapter ['python-injector'] advertised ['convert_time'] not_advertised [] outcomes {'executed': 3}
+  list/auto                    3/3  fired 0  unsafe 0  kinds {}  listing identical 3/3
+  list/direct                  3/3  fired 0  unsafe 0  kinds {}
+  list/shadow                  3/3  fired 0  unsafe 0  kinds {}  listing identical 3/3
+  read/hang/auto               3/3  fired 3  unsafe 0  kinds {}
+  read/kill_before/auto        3/3  fired 3  unsafe 0  kinds {}
+  read/lost_exit/auto          3/3  fired 3  unsafe 0  kinds {}
+  read/none/auto               3/3  fired 0  unsafe 0  kinds {}
+  read/none/shadow             3/3  fired 0  unsafe 0  kinds {}

@@ -1,0 +1,2 @@
+===== filesystem  rows 3  unsafe 0  driver_errors 0  tools ?
+  keys/auto                    3/3  fired 0  unsafe 0  kinds {}  adapter ['None'] advertised [] not_advertised [] outcomes {'None': 3} unkeyed: ['no @modelcontextprotocol/sdk (1.x) above /opt/sg-servers-latest/filesystem/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js: the server is not built on the TypeScript SDK 1.x the preload wraps (an SDK v2 server, perhaps)']

@@ -29,6 +29,22 @@ status says what was observed in these cells. It does not certify the server.
 | 10 | TypeScript SDK `simpleStreamableHttp` example (@modelcontextprotocol/sdk 1.32.2) | Streamable HTTP | **Pass with a documented limitation** | `--keys auto` does not apply over HTTP. No write. An SDK example. |
 | — | a browser server (puppeteer or playwright) | — | **Not attempted** | Optional and last in the plan. Out of time in S4. |
 
+## The current releases (M2, 2026-11-27; `benchmarks/evidence/compat/M2/`)
+
+On 2026-11-18 the reference servers moved to the TypeScript SDK v2 (Node) and mcp 2.3.0
+(Python). M2 re-ran these cells on the current releases, with 0 unsafe outcomes:
+- **Listing, no-fault calls and faulted reads:** as above on every server.
+- **The Python servers** (git, fetch and time 2026.11.18): keyed by `--keys auto`, as before.
+- **The Node servers on the SDK v2** (filesystem 2.4.0, memory 2.2.1, everything 2.3.1,
+  sequential-thinking 2.2.0):
+  - `--keys auto` runs them **unkeyed**, with the reason (since `e76475c`), because the preload
+    wraps the TypeScript SDK 1.x only;
+  - before `e76475c`, `--keys auto` stopped them from starting;
+  - keying them needs a preload for the SDK v2, which is future work.
+- **server-memory 2.2.1:** lost 0 of 80 concurrent writes with no relay, so the limitation in
+  row 2 is the pinned 2026.8.31's.
+- **The FastMCP quickstart:** a 1.x example; it does not run on mcp 2.x.
+
 ## What held on every attempted server
 
 - **0 unsafe outcomes in 315 rows:** no duplicate effect, false success, false failure, wrong

@@ -1,0 +1,38 @@
+{
+ "raw": {
+  "calls": 80,
+  "told_ok": 80,
+  "present": 80,
+  "lost": 0,
+  "duplicates": 0,
+  "not_ok": 0,
+  "trials": 5,
+  "trials_with_loss": 0,
+  "seconds_median": 1.059,
+  "driver_errors": 0
+ },
+ "sg": {
+  "calls": 80,
+  "told_ok": 80,
+  "present": 80,
+  "lost": 0,
+  "duplicates": 0,
+  "not_ok": 0,
+  "trials": 5,
+  "trials_with_loss": 0,
+  "seconds_median": 1.266,
+  "driver_errors": 0
+ },
+ "sg_serial": {
+  "calls": 80,
+  "told_ok": 80,
+  "present": 80,
+  "lost": 0,
+  "duplicates": 0,
+  "not_ok": 0,
+  "trials": 5,
+  "trials_with_loss": 0,
+  "seconds_median": 1.219,
+  "driver_errors": 0
+ }
+}
