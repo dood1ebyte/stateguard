@@ -10,8 +10,9 @@ for kind in whl tar.gz; do
   "v_$kind/bin/pip" install -q "$DIR"/sguard-*."$kind"
   echo "== $kind"
   "v_$kind/bin/stateguard" --version
-  "v_$kind/bin/stateguard" relay stdio --help | head -1
-  "v_$kind/bin/stateguard" trial --help | head -1
+  help=$("v_$kind/bin/stateguard" relay stdio --help); echo "${help%%$'\n'*}"
+  help=$("v_$kind/bin/stateguard" trial --help); echo "${help%%$'\n'*}"
+  help=$("v_$kind/bin/stateguard" doctor); echo "doctor: ${help##*$'\n'}"
   "v_$kind/bin/python" -c "import stateguard, pathlib; p = pathlib.Path(stateguard.__file__).parent / 'relay' / 'ts' / 'preload.ts'; print('preload in package:', p.exists())"
 done
 mkdir npm && cd npm && npm init -y >/dev/null
