@@ -1,0 +1,26 @@
+{
+ "batch": "B9",
+ "part": "crash_tsnotes",
+ "started": "2026-11-27T04:00:04.581890+00:00",
+ "commit": "d4298176605ef425357d962369ec41a8a886c73b",
+ "harness_commit": "d49df75168a7a6617f58adc3462492c355acdd15",
+ "harness_dirty": false,
+ "driver": "driver.py",
+ "driver_args": [
+  "tsnotes",
+  "12",
+  "write/after_begin,write/after_effect,write/after_record"
+ ],
+ "trial_offset": "11000",
+ "python": "3.13.18",
+ "mcp": "2.3.0",
+ "node": "v22.23.4",
+ "typescript_sdk": "1.32.1",
+ "typescript_lockfile_sha256": "ffdaebb2f832db1ec9f116eec1b458c2d5b444f8a1f24b56a5173c2788c471cd",
+ "everything_tree_sha256": "823e40005f94f353567c7b9bce56146516c8038ff3a15d44cbeef53b60a99778",
+ "platform": "Linux-6.18.44-fc-v880-x86_64-with-glibc2.39",
+ "cpus": 4,
+ "driver_exit": 0,
+ "finished": "2026-11-27T04:02:02.733151+00:00",
+ "everything_tree_sha256_after": "823e40005f94f353567c7b9bce56146516c8038ff3a15d44cbeef53b60a99778"
+}
