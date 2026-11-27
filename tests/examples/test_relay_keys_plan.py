@@ -53,6 +53,13 @@ def _program(tmp_path: Path, name: str, text: str = "") -> Path:
     return path
 
 
+def _sdk(root: Path, version: str = "1.32.1", package: str = "sdk") -> None:
+    """A TypeScript SDK package where a server's entry resolves it (its node_modules)."""
+    pkg = root / "node_modules" / "@modelcontextprotocol" / package / "package.json"
+    pkg.parent.mkdir(parents=True, exist_ok=True)
+    pkg.write_text(json.dumps({"name": f"@modelcontextprotocol/{package}", "version": version}))
+
+
 def test_python_module_and_script_run_under_the_injector(tmp_path: Path) -> None:
     probe = FakeProbe()
     for rest in (["-m", "my_server", "--flag"], ["server.py", "--flag"]):
@@ -107,6 +114,7 @@ def test_an_env_shebang_is_resolved_on_the_servers_path(tmp_path: Path) -> None:
 def test_an_npm_installed_node_bin_runs_with_the_preload(tmp_path: Path) -> None:
     node = _program(tmp_path, "node", "\x7fELF")
     script = _program(tmp_path, "mcp-server-memory", "#!/usr/bin/env node\n")
+    _sdk(tmp_path)  # resolved from the bin's directory, upwards, as the preload does
     launch = keys.plan(
         ["mcp-server-memory"],
         ["add_observations"],
@@ -120,8 +128,12 @@ def test_an_npm_installed_node_bin_runs_with_the_preload(tmp_path: Path) -> None
 
 def test_node_runs_with_the_preload(tmp_path: Path) -> None:
     node = _program(tmp_path, "node")
+    entry = tmp_path / "server" / "dist" / "index.js"
+    entry.parent.mkdir(parents=True)
+    entry.write_text("")
+    _sdk(tmp_path / "server")
     launch = keys.plan(
-        ["node", "--no-warnings", "dist/index.js", "/data"],
+        ["node", "--no-warnings", str(entry), "/data"],
         ["move_file"],
         db=tmp_path / "keys.db",
         environ=_env(tmp_path),
@@ -135,11 +147,45 @@ def test_node_runs_with_the_preload(tmp_path: Path) -> None:
         "--import",
         str(preload),
         "--no-warnings",
-        "dist/index.js",
+        str(entry),
         "/data",
     ]
     assert launch.adapter == "node-preload"
     assert node.exists()
+
+
+@pytest.mark.parametrize(
+    ("layout", "reason"),
+    [
+        ("v2", "no @modelcontextprotocol/sdk (1.x) above"),  # the SDK v2 packages only
+        ("sdk2", "the preload wraps the TypeScript SDK 1.x only"),
+        ("none", "no @modelcontextprotocol/sdk (1.x) above"),
+        ("missing", "the entry script was not found"),
+    ],
+)
+def test_a_node_server_not_on_the_typescript_sdk_1_runs_unkeyed(
+    tmp_path: Path, layout: str, reason: str
+) -> None:
+    """
+    M2 (2026-11-27): the reference servers moved to the TypeScript SDK v2. The preload wraps
+    SDK 1.x and would stop such a server from starting, so the plan runs it unkeyed.
+    """
+    _program(tmp_path, "node")
+    entry = tmp_path / "server" / "dist" / "index.js"
+    if layout != "missing":
+        entry.parent.mkdir(parents=True)
+        entry.write_text("")
+    if layout == "v2":
+        _sdk(tmp_path / "server", "2.4.0", package="server")
+        _sdk(tmp_path / "server", "2.4.0", package="core")
+    if layout == "sdk2":
+        _sdk(tmp_path / "server", "2.0.0")
+    launch = keys.plan(
+        ["node", "--import", "x.mjs", str(entry)], ["write"], db=tmp_path / "keys.db",
+        environ=_env(tmp_path), probe=FakeProbe(stdout="v22.18.0\n"),
+    )  # fmt: skip
+    assert isinstance(launch, keys.Unkeyed), launch
+    assert reason in launch.reason
 
 
 @pytest.mark.parametrize(

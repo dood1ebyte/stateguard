@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -313,6 +314,9 @@ def _node_launch(
     why = _node_ready(node, env, probe)
     if why is not None:
         return Unkeyed(why)
+    why = _sdk_one_above(rest)
+    if why is not None:
+        return Unkeyed(why)
     preload = preload_path()
     if preload is None:
         return Unkeyed(
@@ -327,6 +331,62 @@ def _node_launch(
         db=str(store),
         scope=key_scope,
     )
+
+
+#: Node options that take the next argument as their value (``node --import X entry.js``).
+_NODE_VALUE_OPTIONS = frozenset({"--import", "--require", "-r", "--loader", "--env-file", "-e"})
+
+
+def _node_entry(rest: Sequence[str]) -> str | None:
+    """The entry script in ``node [options] ENTRY [args]``, or None."""
+    skip = False
+    for arg in rest:
+        if skip:
+            skip = False
+            continue
+        if arg in _NODE_VALUE_OPTIONS:
+            skip = True
+            continue
+        if arg.startswith("-"):
+            continue
+        return arg
+    return None
+
+
+def _sdk_one_above(rest: Sequence[str]) -> str | None:
+    """
+    Why the preload cannot wrap this server, or None. The preload wraps the TypeScript SDK
+    1.x (``@modelcontextprotocol/sdk``) that the server's own entry resolves; a server built on
+    the SDK v2 (``@modelcontextprotocol/server``) has none, and the preload would stop it from
+    starting (M2, 2026-11-27). So the plan looks where the preload will, and runs it unkeyed
+    when it is not there.
+    """
+    entry = _node_entry(rest)
+    if entry is None:
+        return "no entry script found in the node command"
+    path = Path(entry)
+    if not path.is_file():
+        return f"{entry}: the entry script was not found, so its TypeScript SDK cannot be checked"
+    directory = path.resolve().parent
+    while True:
+        package = directory / "node_modules" / "@modelcontextprotocol" / "sdk" / "package.json"
+        if package.is_file():
+            try:
+                version = str(json.loads(package.read_text(encoding="utf-8")).get("version", ""))
+            except (OSError, ValueError):
+                return f"{package}: unreadable"
+            if version.split(".")[0] != "1":
+                return (
+                    f"the server uses @modelcontextprotocol/sdk {version}; the preload wraps "
+                    "the TypeScript SDK 1.x only"
+                )
+            return None
+        if directory.parent == directory:
+            return (
+                f"no @modelcontextprotocol/sdk (1.x) above {entry}: the server is not built on "
+                "the TypeScript SDK 1.x the preload wraps (an SDK v2 server, perhaps)"
+            )
+        directory = directory.parent
 
 
 def _python_launch(
