@@ -880,6 +880,12 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
+    # -- doctor --------------------------------------------------------------
+    sub.add_parser(
+        "doctor",
+        help="Check this machine for StateGuard; 'doctor -- SERVER...' also tries one server.",
+    )
+
     # -- trial ---------------------------------------------------------------
     sub.add_parser(
         "trial",
@@ -1120,6 +1126,10 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(_cmd_relay(raw[1:]))
     if raw[:1] == ["capture"]:
         sys.exit(_cmd_capture(raw[1:]))
+    if raw[:1] == ["doctor"]:
+        from stateguard import doctor  # noqa: PLC0415 -- only when asked
+
+        sys.exit(doctor.main(raw[1:]))
     if raw[:1] == ["trial"]:
         from stateguard import trial  # noqa: PLC0415 -- only when asked
 
