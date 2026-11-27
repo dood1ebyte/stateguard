@@ -49,11 +49,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Python one. Its note and its key's record commit in one transaction. Keyed crash cells
   gave 0/36 unresolved with 0 duplicates on each relay
   (`benchmarks/evidence/{realhttp,realstdio}/CW2/`).
+- **`stateguard trial`.** It runs the same scripted calls in shadow, then in auto, and writes a
+  before/after report beside two redacted capture bundles, kept locally.
+  - `--sandbox` gives each run a fresh copy of the server's data.
+  - TEST-ONLY `--fault`, refused without `--sandbox`, cuts one call.
+  - It was shown on filesystem, sqlite and git (`benchmarks/evidence/trial/T1/`).
+- **`stateguard doctor [-- SERVER...]`.** It checks Python, the HTTP extra, Node, the preload
+  and the key store. Given a server, it lists the server through a shadow relay and shows
+  `--keys auto`'s plan for it.
+- **Onboarding** (`docs/runtime/ONBOARDING.md`): `mcpServers` snippets for Claude Desktop, Cursor
+  and Claude Code. A scripted clean environment reached its first protected call in about 10 s
+  (`benchmarks/evidence/onboarding/O1/`).
+- **Reproducible benchmark materials** (`docs/runtime/REPRODUCE.md`, `scripts/reproduce.sh`):
+  - `scripts/reproduce.sh` rebuilds the environment and re-runs a recorded matrix part from a
+    clean checkout;
+  - **the frozen recommended configuration** is in `docs/runtime/RECOMMENDED_CONFIG.md`.
+- **Track B tooling** (`research/pfi/`): the record schema and its validator, deduplication,
+  counts (never rates), the documented queries, the access log, and a first GitHub pass.
 - **A published compatibility matrix:** `docs/runtime/COMPATIBILITY_MATRIX.md`. Ten pinned
   public servers were attempted through the relays, with a status for each and 0 unsafe
   outcomes in 315 rows. The harness is `benchmarks/runtime/compat/`.
 
 ### Changed
+- **Release candidates 0.2.0rc1 (Python) and 0.2.0-rc.1 (npm)** were built and verified, and
+  **not published** (`docs/runtime/RELEASE_CANDIDATES.md`).
+  - The sdist now holds only the package.
+  - The npm package ships compiled `dist/`, and stays private.
 - **With `--no-listing-refresh`, the relays no longer repair or refuse a call on an
   unconfirmed listing.** Both relays forward the client's call unchanged. The `call` event
   carries `listing: "unconfirmed"`, `proposal: "withheld"` and what auto mode would have
