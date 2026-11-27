@@ -1,0 +1,100 @@
+{
+ "new": "benchmarks/evidence/realhttp/B9/summary_everything.json",
+ "refs": [
+  "benchmarks/evidence/realhttp/B7/summary_everything.json"
+ ],
+ "arms": [
+  {
+   "server": "everything",
+   "arm": "naive",
+   "kind": "baseline",
+   "ref": "benchmarks/evidence/realhttp/B7/summary_everything.json",
+   "ref_arm": "naive",
+   "cells": 8,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    0,
+    96
+   ],
+   "ref_total": [
+    0,
+    96
+   ]
+  },
+  {
+   "server": "everything",
+   "arm": "raw",
+   "kind": "baseline",
+   "ref": "benchmarks/evidence/realhttp/B7/summary_everything.json",
+   "ref_arm": "raw",
+   "cells": 8,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    72,
+    96
+   ],
+   "ref_total": [
+    72,
+    96
+   ]
+  },
+  {
+   "server": "everything",
+   "arm": "sg",
+   "kind": "stateguard",
+   "ref": "benchmarks/evidence/realhttp/B7/summary_everything.json",
+   "ref_arm": "sg",
+   "cells": 8,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    12,
+    96
+   ],
+   "ref_total": [
+    12,
+    96
+   ]
+  },
+  {
+   "server": "everything",
+   "arm": "sg_deadline",
+   "kind": "stateguard",
+   "ref": "benchmarks/evidence/realhttp/B7/summary_everything.json",
+   "ref_arm": "sg_deadline",
+   "cells": 8,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    0,
+    96
+   ],
+   "ref_total": [
+    0,
+    96
+   ]
+  }
+ ]
+}

@@ -1,0 +1,123 @@
+{
+ "new": "benchmarks/evidence/realhttp/B9/summary_notes_r2.json",
+ "refs": [
+  "benchmarks/evidence/realhttp/B7/summary_notes.json"
+ ],
+ "arms": [
+  {
+   "server": "notes",
+   "arm": "naive",
+   "kind": "baseline",
+   "ref": "benchmarks/evidence/realhttp/B7/summary_notes.json",
+   "ref_arm": "naive",
+   "cells": 16,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 48,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    48,
+    192
+   ],
+   "ref_total": [
+    48,
+    192
+   ]
+  },
+  {
+   "server": "notes",
+   "arm": "raw",
+   "kind": "baseline",
+   "ref": "benchmarks/evidence/realhttp/B7/summary_notes.json",
+   "ref_arm": "raw",
+   "cells": 16,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 24,
+    "wrong_content": 0
+   },
+   "new_total": [
+    168,
+    192
+   ],
+   "ref_total": [
+    168,
+    192
+   ]
+  },
+  {
+   "server": "notes",
+   "arm": "sg",
+   "kind": "stateguard",
+   "ref": "benchmarks/evidence/realhttp/B7/summary_notes.json",
+   "ref_arm": "sg",
+   "cells": 16,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    84,
+    192
+   ],
+   "ref_total": [
+    84,
+    192
+   ]
+  },
+  {
+   "server": "notes",
+   "arm": "sg_keyed",
+   "kind": "stateguard",
+   "ref": "benchmarks/evidence/realhttp/B7/summary_notes.json",
+   "ref_arm": "sg_keyed",
+   "cells": 16,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    24,
+    192
+   ],
+   "ref_total": [
+    24,
+    192
+   ]
+  },
+  {
+   "server": "notes",
+   "arm": "sg_keyed_deadline",
+   "kind": "stateguard",
+   "ref": "benchmarks/evidence/realhttp/B7/summary_notes.json",
+   "ref_arm": "sg_keyed_deadline",
+   "cells": 16,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    0,
+    192
+   ],
+   "ref_total": [
+    0,
+    192
+   ]
+  }
+ ]
+}
