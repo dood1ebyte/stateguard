@@ -47,3 +47,14 @@ current release still loses concurrent writes.
 - **0 unsafe outcomes** in every StateGuard cell.
 
 Synthetic fault injection on public servers; not production traffic.
+
+## Addendum (written after the first rows, before the re-run's rows)
+
+The first rows show the predicted gap, and worse: under `--keys auto` the four SDK v2 Node
+servers did not start at all. The preload threw "no @modelcontextprotocol/sdk above <entry>",
+so every call ended UNKNOWN and none ran.
+
+`e76475c` makes the plan run such a server unkeyed, with the reason. The `keys/auto` cell of
+the four Node servers is re-run on `e76475c` (parts `keys_<server>_fixed`, TRIAL_OFFSET 41500).
+
+**Prediction:** each call succeeds unkeyed (outcome none, the reason logged), 0 unsafe.
