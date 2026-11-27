@@ -880,6 +880,13 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
+    # -- trial ---------------------------------------------------------------
+    sub.add_parser(
+        "trial",
+        help="Try StateGuard on a server: the same scripted calls in shadow, then auto, "
+        "with a before/after report (kept locally).",
+    )
+
     # -- relay ---------------------------------------------------------------
     # Listed here for --help; main() hands everything after the transport to the
     # relay's own parser (see _cmd_relay), so the relay options are never parsed twice.
@@ -1113,6 +1120,13 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(_cmd_relay(raw[1:]))
     if raw[:1] == ["capture"]:
         sys.exit(_cmd_capture(raw[1:]))
+    if raw[:1] == ["trial"]:
+        from stateguard import trial  # noqa: PLC0415 -- only when asked
+
+        if raw[1:2] in (["-h"], ["--help"]):
+            print(trial.USAGE)
+            sys.exit(_EXIT_OK)
+        sys.exit(trial.main(raw[1:]))
 
     parser = _build_parser()
     args = parser.parse_args(argv)

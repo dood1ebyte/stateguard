@@ -169,6 +169,7 @@ def main(argv: list[str]) -> int:
         "../capture_workloads.py": "../capture_summary.py",
         "../compat/matrix.py": "../compat/summary.py",
         "../realstdio/concurrent_writes.py": "../realstdio/concurrent_writes.py",
+        "../trial_runs.py": "../trial_runs.py",
     }.get(args.driver, "summarize.py")
     with (out / f"summary{suffix}.txt").open("w") as summary:
         subprocess.run(
