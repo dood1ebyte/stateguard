@@ -434,6 +434,17 @@ allowed. Early completion or idle capacity never advances the schedule.
   - 30 rejected: 13 feature requests, 17 unrelated.
 - **The GitHub search API was not used.** The proxy attaches a credential to `api.github.com`,
   which would exceed the session's GitHub scope. Public pages were read instead.
+- **After the agenda, deferral-list item 2 (window rule 3): M2,** M1's cells on the servers'
+  current releases (`benchmarks/evidence/compat/M2/`). 0 unsafe.
+  - **The SDK v2 Node servers did not start under `--keys auto`:** the preload threw.
+    - **Fixed in `e76475c`:** they now run unkeyed, with the reason, and 12/12 calls succeeded
+      after the fix.
+    - Keying SDK v2 servers needs a v2 preload: future work, not done.
+  - **The Python servers on mcp 2.3.0** are keyed.
+  - **server-memory 2.2.1** lost 0 of 80 concurrent writes.
+  - **The FastMCP quickstart** does not run on mcp 2.x.
+- **A test found by the local suites:** `test_cli`'s version test hard-coded "0.1.0". It was
+  fixed in `45b684e`; CI runs 74 and 75 had failed on it, and run 76 passed.
 - **A rejected push, at about 09:32 IST.** My push and the background evidence committer's
   push ran at the same moment from the same checkout. The committer's push carried both
   commits: origin was level (`0 0`), with no divergence, no force and no rebase.
