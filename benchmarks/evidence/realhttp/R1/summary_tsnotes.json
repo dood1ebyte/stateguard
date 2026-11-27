@@ -1,0 +1,114 @@
+{
+ "n_rows": 960,
+ "driver_errors": 0,
+ "cells": {
+  "tsnotes/naive": {
+   "eligible": 240,
+   "failed": 51,
+   "unresolved": 7,
+   "failed_resolved": 44,
+   "rfr": 0.2125,
+   "ci95": [
+    0.1655,
+    0.2686
+   ],
+   "unsafe": {
+    "duplicate_effect": 39,
+    "false_success": 0,
+    "false_failure": 8,
+    "wrong_content": 0
+   },
+   "calls_faulted": 89,
+   "calls_faulted_twice_or_more": 15,
+   "failed_with_one_fault": 36,
+   "failed_with_two_or_more": 15,
+   "failed_unfaulted": 0,
+   "faults_injected": 104,
+   "trials": 10,
+   "trials_disagreeing": [],
+   "seed_intact": true,
+   "wall_s_max": 1.959
+  },
+  "tsnotes/raw": {
+   "eligible": 240,
+   "failed": 80,
+   "unresolved": 30,
+   "failed_resolved": 50,
+   "rfr": 0.3333,
+   "ci95": [
+    0.2767,
+    0.3952
+   ],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 20,
+    "wrong_content": 0
+   },
+   "calls_faulted": 80,
+   "calls_faulted_twice_or_more": 0,
+   "failed_with_one_fault": 80,
+   "failed_with_two_or_more": 0,
+   "failed_unfaulted": 0,
+   "faults_injected": 80,
+   "trials": 10,
+   "trials_disagreeing": [],
+   "seed_intact": true,
+   "wall_s_max": 1.97
+  },
+  "tsnotes/sg": {
+   "eligible": 240,
+   "failed": 80,
+   "unresolved": 70,
+   "failed_resolved": 10,
+   "rfr": 0.3333,
+   "ci95": [
+    0.2767,
+    0.3952
+   ],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "calls_faulted": 80,
+   "calls_faulted_twice_or_more": 0,
+   "failed_with_one_fault": 80,
+   "failed_with_two_or_more": 0,
+   "failed_unfaulted": 0,
+   "faults_injected": 80,
+   "trials": 10,
+   "trials_disagreeing": [],
+   "seed_intact": true,
+   "wall_s_max": 1.954
+  },
+  "tsnotes/sg_keyed": {
+   "eligible": 240,
+   "failed": 20,
+   "unresolved": 16,
+   "failed_resolved": 4,
+   "rfr": 0.0833,
+   "ci95": [
+    0.0546,
+    0.1252
+   ],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 4,
+    "wrong_content": 0
+   },
+   "calls_faulted": 83,
+   "calls_faulted_twice_or_more": 20,
+   "failed_with_one_fault": 0,
+   "failed_with_two_or_more": 20,
+   "failed_unfaulted": 0,
+   "faults_injected": 103,
+   "trials": 10,
+   "trials_disagreeing": [],
+   "seed_intact": true,
+   "wall_s_max": 2.746
+  }
+ }
+}

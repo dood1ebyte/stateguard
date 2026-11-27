@@ -15,7 +15,11 @@ Classes
 =====================  ======================================================
 ``AUTHENTICATION``     Missing, invalid or expired credentials (401-like).
 ``AUTHORIZATION``      Authenticated, but not permitted (403-like).
-``PROTOCOL``           A JSON-RPC error whose meaning is not auth.
+``PROTOCOL``           A JSON-RPC error whose meaning is not auth: the server
+                       rejected the request itself (it would again).
+``SERVER``             A JSON-RPC internal error (-32603): the server failed,
+                       which may be transient. Whether the call took effect
+                       is not established.
 ``TRANSPORT``          The connection failed and the request certainly did
                        not execute (e.g. another relay's "not sent").
 ``TOOL``               A ``CallToolResult`` with ``isError: true``.
@@ -96,6 +100,9 @@ __all__ = [
     "signal_spans",
 ]
 
+#: JSON-RPC 2.0's "Internal error": the server failed; not a rejection of the request.
+INTERNAL_ERROR_CODE = -32603
+
 #: Text beyond this many characters is not scanned (bounded work per message).
 MAX_TEXT_SCANNED = 4096
 
@@ -104,6 +111,7 @@ class FailureClass(StrEnum):
     AUTHENTICATION = "authentication"
     AUTHORIZATION = "authorization"
     PROTOCOL = "protocol"
+    SERVER = "server"
     TRANSPORT = "transport"
     TOOL = "tool"
     UNKNOWN = "unknown"
@@ -131,6 +139,7 @@ class FailureClassification:
             FailureClass.AUTHENTICATION: Observed.AUTH_ERROR,
             FailureClass.AUTHORIZATION: Observed.AUTH_ERROR,
             FailureClass.PROTOCOL: Observed.PROTOCOL_ERROR,
+            FailureClass.SERVER: Observed.SERVER_ERROR,
             FailureClass.TRANSPORT: Observed.PROTOCOL_ERROR,  # a definite answer: not retried
             FailureClass.TOOL: Observed.TOOL_ERROR,
             # An upstream relay's definite answer that the outcome is unknown:
@@ -261,7 +270,11 @@ def classify_response(message: Any) -> FailureClassification:
             return decided
         text = error.get("message")
         decided = _text([text]) if isinstance(text, str) else None
-        return decided or FailureClassification(FailureClass.PROTOCOL, "default")
+        if decided is not None:
+            return decided
+        if error.get("code") == INTERNAL_ERROR_CODE:
+            return FailureClassification(FailureClass.SERVER, "code:-32603")
+        return FailureClassification(FailureClass.PROTOCOL, "default")
     result = message.get("result")
     if not isinstance(result, Mapping):
         return FailureClassification(FailureClass.PROTOCOL, "malformed")

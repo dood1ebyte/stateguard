@@ -1,0 +1,16 @@
+rows 48  driver_errors 0
+
+===== sqlite
+
+sg_keys_auto
+  fault-free  0/12 (0.0%, ci 0.0%-24.2%)
+  faulted     24/36 (66.7%, ci 50.3%-79.8%)   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 24, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 48, mismatching ground truth 0
+  latency fault-free {'n': 12, 'mean': 2.012, 'median': 2.006, 'p95': 2.164}
+
+op/mode                        sg_keys_auto
+write/after_begin                 12/12    
+write/after_effect                12/12    
+write/after_record                 0/12    
+write/none                         0/12    

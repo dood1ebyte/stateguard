@@ -1,0 +1,374 @@
+{
+ "n_rows": 324,
+ "driver_errors": 0,
+ "servers": {
+  "sqlite": {
+   "raw": {
+    "fault_free": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 72,
+     "n": 108,
+     "rifr": 0.6667,
+     "ci95": [
+      0.5734,
+      0.7485
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 72,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {
+     "no_answer_timeout": 72
+    },
+    "server_outcomes": {},
+    "invocation_records": 0,
+    "invocation_record_mismatch": 0,
+    "invocation_record_mismatch_runs": [],
+    "latency_fault_free": null,
+    "cells": {
+     "read/duplicate": [
+      0,
+      12
+     ],
+     "read/garbage": [
+      12,
+      12
+     ],
+     "read/nonconformant": [
+      12,
+      12
+     ],
+     "read/truncated": [
+      12,
+      12
+     ],
+     "write/duplicate": [
+      0,
+      12
+     ],
+     "write/garbage": [
+      12,
+      12
+     ],
+     "write/nonconformant": [
+      12,
+      12
+     ],
+     "write/stale_listing": [
+      0,
+      12
+     ],
+     "write/truncated": [
+      12,
+      12
+     ]
+    }
+   },
+   "sg": {
+    "fault_free": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 48,
+     "n": 108,
+     "rifr": 0.4444,
+     "ci95": [
+      0.3542,
+      0.5385
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 48,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {
+     "no_answer_timeout": 48
+    },
+    "server_outcomes": {},
+    "invocation_records": 108,
+    "invocation_record_mismatch": 24,
+    "invocation_record_mismatch_runs": [
+     "sqlite-read-nonconformant-sg-16000-07861d4290",
+     "sqlite-write-nonconformant-sg-16000-2cd181766a",
+     "sqlite-read-nonconformant-sg-16001-7c2548c5ac",
+     "sqlite-write-nonconformant-sg-16001-030a08b096",
+     "sqlite-read-nonconformant-sg-16002-e0c37f32db",
+     "sqlite-write-nonconformant-sg-16002-c19a30bec9",
+     "sqlite-read-nonconformant-sg-16003-bd4eda6458",
+     "sqlite-write-nonconformant-sg-16003-8fa7567c02",
+     "sqlite-read-nonconformant-sg-16004-414fe8ed1c",
+     "sqlite-write-nonconformant-sg-16004-da50ca2278",
+     "sqlite-read-nonconformant-sg-16005-dbe25ab6b7",
+     "sqlite-write-nonconformant-sg-16005-f48809aba4",
+     "sqlite-read-nonconformant-sg-16006-f5de08656e",
+     "sqlite-write-nonconformant-sg-16006-7172b1dbb6",
+     "sqlite-read-nonconformant-sg-16007-7ee372f7b0",
+     "sqlite-write-nonconformant-sg-16007-a2bfbd99e2",
+     "sqlite-read-nonconformant-sg-16008-01c717c373",
+     "sqlite-write-nonconformant-sg-16008-320fc51a6b",
+     "sqlite-read-nonconformant-sg-16009-9dbbd74643",
+     "sqlite-write-nonconformant-sg-16009-2a2212514f"
+    ],
+    "latency_fault_free": null,
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 24,
+    "cells": {
+     "read/duplicate": [
+      0,
+      12
+     ],
+     "read/garbage": [
+      0,
+      12
+     ],
+     "read/nonconformant": [
+      12,
+      12
+     ],
+     "read/truncated": [
+      0,
+      12
+     ],
+     "write/duplicate": [
+      0,
+      12
+     ],
+     "write/garbage": [
+      12,
+      12
+     ],
+     "write/nonconformant": [
+      12,
+      12
+     ],
+     "write/stale_listing": [
+      0,
+      12
+     ],
+     "write/truncated": [
+      12,
+      12
+     ]
+    }
+   },
+   "sg_keyed": {
+    "fault_free": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "drift": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted": {
+     "fail": 24,
+     "n": 108,
+     "rifr": 0.2222,
+     "ci95": [
+      0.1541,
+      0.3094
+     ]
+    },
+    "faulted_transport": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "faulted_session": {
+     "fail": 0,
+     "n": 0,
+     "rifr": null,
+     "ci95": [
+      0.0,
+      1.0
+     ]
+    },
+    "unsafe": {
+     "duplicate_effect": 0,
+     "false_success": 0,
+     "false_failure": 0,
+     "wrong_content": 0
+    },
+    "unresolved": {
+     "surfaced_unknown": 0,
+     "surfaced_not_sent": 0,
+     "no_answer_timeout": 24,
+     "no_answer_crash": 0
+    },
+    "failure_kinds": {
+     "no_answer_timeout": 24
+    },
+    "server_outcomes": {
+     "executed": 24,
+     "replayed": 24
+    },
+    "invocation_records": 108,
+    "invocation_record_mismatch": 24,
+    "invocation_record_mismatch_runs": [
+     "sqlite-read-nonconformant-sg_keyed-16000-28177fc96f",
+     "sqlite-write-nonconformant-sg_keyed-16000-74634231e3",
+     "sqlite-read-nonconformant-sg_keyed-16001-be7e6131e8",
+     "sqlite-write-nonconformant-sg_keyed-16001-33414f2f5a",
+     "sqlite-read-nonconformant-sg_keyed-16002-bc0b15d883",
+     "sqlite-write-nonconformant-sg_keyed-16002-1645fcc6b1",
+     "sqlite-read-nonconformant-sg_keyed-16003-7f57341ccb",
+     "sqlite-write-nonconformant-sg_keyed-16003-615a841ad1",
+     "sqlite-read-nonconformant-sg_keyed-16004-73bad45dc7",
+     "sqlite-write-nonconformant-sg_keyed-16004-d9f5a402d6",
+     "sqlite-read-nonconformant-sg_keyed-16005-e8ff9a7ba5",
+     "sqlite-write-nonconformant-sg_keyed-16005-c7e9117cbb",
+     "sqlite-read-nonconformant-sg_keyed-16006-d1d5ee5e8f",
+     "sqlite-write-nonconformant-sg_keyed-16006-92b4d810fa",
+     "sqlite-read-nonconformant-sg_keyed-16007-2bbcd3f87a",
+     "sqlite-write-nonconformant-sg_keyed-16007-92d3baffd1",
+     "sqlite-read-nonconformant-sg_keyed-16008-079067872b",
+     "sqlite-write-nonconformant-sg_keyed-16008-c9fc0a0729",
+     "sqlite-read-nonconformant-sg_keyed-16009-11bb83720d",
+     "sqlite-write-nonconformant-sg_keyed-16009-5417341d0a"
+    ],
+    "latency_fault_free": null,
+    "induced_vs_raw": 0,
+    "induced": [],
+    "recovered_vs_raw": 48,
+    "cells": {
+     "read/duplicate": [
+      0,
+      12
+     ],
+     "read/garbage": [
+      0,
+      12
+     ],
+     "read/nonconformant": [
+      12,
+      12
+     ],
+     "read/truncated": [
+      0,
+      12
+     ],
+     "write/duplicate": [
+      0,
+      12
+     ],
+     "write/garbage": [
+      0,
+      12
+     ],
+     "write/nonconformant": [
+      12,
+      12
+     ],
+     "write/stale_listing": [
+      0,
+      12
+     ],
+     "write/truncated": [
+      0,
+      12
+     ]
+    }
+   }
+  }
+ }
+}

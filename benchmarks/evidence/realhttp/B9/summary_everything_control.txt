@@ -1,0 +1,32 @@
+rows 240  driver_errors 0
+
+===== everything
+
+raw
+  fault-free  0/60 (0.0%, ci 0.0%-6.0%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw -  recovered_vs_raw -
+  latency fault-free {'n': 60, 'mean': 0.847, 'median': 0.821, 'p95': 1.066}
+
+naive
+  fault-free  0/60 (0.0%, ci 0.0%-6.0%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  latency fault-free {'n': 60, 'mean': 0.846, 'median': 0.838, 'p95': 0.942}
+
+sg
+  fault-free  0/60 (0.0%, ci 0.0%-6.0%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 60, mismatching ground truth 0
+  latency fault-free {'n': 60, 'mean': 0.873, 'median': 0.851, 'p95': 1.019}
+
+sg_deadline
+  fault-free  0/60 (0.0%, ci 0.0%-6.0%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 60, mismatching ground truth 0
+  latency fault-free {'n': 60, 'mean': 0.906, 'median': 0.894, 'p95': 1.046}
+
+op/mode                                 raw              naive                 sg        sg_deadline
+read/none                          0/60               0/60               0/60               0/60    

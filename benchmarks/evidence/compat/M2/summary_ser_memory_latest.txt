@@ -1,0 +1,3 @@
+raw        trials 5  calls 80  told_ok 80  present 80  LOST 0 (trials with loss 0)  duplicates 0  not_ok 0  median 1.059 s
+sg         trials 5  calls 80  told_ok 80  present 80  LOST 0 (trials with loss 0)  duplicates 0  not_ok 0  median 1.266 s
+sg_serial  trials 5  calls 80  told_ok 80  present 80  LOST 0 (trials with loss 0)  duplicates 0  not_ok 0  median 1.219 s

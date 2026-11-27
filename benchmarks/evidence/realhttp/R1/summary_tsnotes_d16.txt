@@ -1,0 +1,2 @@
+240 rows, 0 driver errors
+tsnotes/sg_keyed: 4/240 (1.7%, CI 0.7%-4.2%); unresolved 4, failed resolved 0; unsafe 0 {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}; faulted calls 87 (19 twice+); failed with 1 fault 0, 2+ 4, none 0; disagreeing trials []

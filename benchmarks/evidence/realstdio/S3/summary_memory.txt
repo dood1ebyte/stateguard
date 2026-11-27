@@ -1,0 +1,23 @@
+rows 96  driver_errors 0
+
+===== memory
+
+sg
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     12/24 (50.0%, ci 31.4%-68.6%)   transport 12/24 (50.0%, ci 31.4%-68.6%)   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 48, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 1.332, 'median': 1.344, 'p95': 1.415}
+
+sg_keyed
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     0/24 (0.0%, ci 0.0%-13.8%)   transport 0/24 (0.0%, ci 0.0%-13.8%)   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 48, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 1.412, 'median': 1.415, 'p95': 1.471}
+
+op/mode                                  sg           sg_keyed
+read/none                          0/12               0/12    
+read/transient                     0/12               0/12    
+write/none                         0/12               0/12    
+write/transient                   12/12               0/12    

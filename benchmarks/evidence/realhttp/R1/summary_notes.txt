@@ -1,0 +1,5 @@
+960 rows, 0 driver errors
+notes/naive: 55/240 (22.9%, CI 18.1%-28.6%); unresolved 2, failed resolved 53; unsafe 55 {'duplicate_effect': 46, 'false_success': 0, 'false_failure': 9, 'wrong_content': 0}; faulted calls 91 (15 twice+); failed with 1 fault 40, 2+ 15, none 0; disagreeing trials []
+notes/raw: 80/240 (33.3%, CI 27.7%-39.5%); unresolved 30, failed resolved 50; unsafe 20 {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 20, 'wrong_content': 0}; faulted calls 80 (0 twice+); failed with 1 fault 80, 2+ 0, none 0; disagreeing trials []
+notes/sg: 80/240 (33.3%, CI 27.7%-39.5%); unresolved 70, failed resolved 10; unsafe 0 {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}; faulted calls 80 (0 twice+); failed with 1 fault 80, 2+ 0, none 0; disagreeing trials []
+notes/sg_keyed: 21/240 (8.8%, CI 5.8%-13.0%); unresolved 20, failed resolved 1; unsafe 1 {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 1, 'wrong_content': 0}; faulted calls 83 (21 twice+); failed with 1 fault 0, 2+ 21, none 0; disagreeing trials []

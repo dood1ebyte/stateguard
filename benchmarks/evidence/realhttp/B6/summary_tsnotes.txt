@@ -1,0 +1,35 @@
+rows 384  driver_errors 0
+
+===== tsnotes
+
+sg_keyed
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     24/168 (14.3%, ci 9.8%-20.4%)   transport 24/144 (16.7%, ci 11.5%-23.6%)   session 0/24 (0.0%, ci 0.0%-13.8%)
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 24, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 192, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 0.838, 'median': 0.832, 'p95': 0.921}
+
+sg_keyed_deadline
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     0/168 (0.0%, ci 0.0%-2.2%)   transport 0/144 (0.0%, ci 0.0%-2.6%)   session 0/24 (0.0%, ci 0.0%-13.8%)
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 192, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 0.829, 'median': 0.821, 'p95': 0.928}
+
+op/mode                            sg_keyed  sg_keyed_deadline
+read/cut_stream                    0/12               0/12    
+read/hang_after                   12/12               0/12    
+read/http_502_after                0/12               0/12    
+read/http_503_before               0/12               0/12    
+read/kill_before                   0/12               0/12    
+read/lost_response                 0/12               0/12    
+read/none                          0/12               0/12    
+read/session_loss                  0/12               0/12    
+write/cut_stream                   0/12               0/12    
+write/hang_after                  12/12               0/12    
+write/http_502_after               0/12               0/12    
+write/http_503_before              0/12               0/12    
+write/kill_before                  0/12               0/12    
+write/lost_response                0/12               0/12    
+write/none                         0/12               0/12    
+write/session_loss                 0/12               0/12    

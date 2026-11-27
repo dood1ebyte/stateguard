@@ -1,0 +1,6 @@
+{"label": "before_netem_0ms", "src": "/tmp/before/src", "calls": 40, "ok": 40, "answer_types": ["text/event-stream"], "connections_total": 41, "connections_during_calls": 40, "ms_p50": 4.29, "ms_p95": 4.92, "ms_mean": 4.37}
+{"label": "after_netem_0ms", "src": "src", "calls": 40, "ok": 40, "answer_types": ["text/event-stream"], "connections_total": 2, "connections_during_calls": 1, "ms_p50": 3.94, "ms_p95": 5.68, "ms_mean": 4.38}
+{"label": "before_netem_5ms", "src": "/tmp/before/src", "calls": 40, "ok": 40, "answer_types": ["text/event-stream"], "connections_total": 41, "connections_during_calls": 40, "ms_p50": 54.64, "ms_p95": 55.01, "ms_mean": 54.56}
+{"label": "after_netem_5ms", "src": "src", "calls": 40, "ok": 40, "answer_types": ["text/event-stream"], "connections_total": 1, "connections_during_calls": 0, "ms_p50": 34.31, "ms_p95": 34.85, "ms_mean": 34.35}
+{"label": "before_netem_25ms", "src": "/tmp/before/src", "calls": 40, "ok": 40, "answer_types": ["text/event-stream"], "connections_total": 41, "connections_during_calls": 40, "ms_p50": 255.61, "ms_p95": 256.22, "ms_mean": 255.66}
+{"label": "after_netem_25ms", "src": "src", "calls": 40, "ok": 40, "answer_types": ["text/event-stream"], "connections_total": 1, "connections_during_calls": 0, "ms_p50": 154.77, "ms_p95": 155.34, "ms_mean": 154.7}

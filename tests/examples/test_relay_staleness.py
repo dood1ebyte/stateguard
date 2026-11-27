@@ -112,13 +112,23 @@ def test_a_call_valid_for_the_new_schema_is_forwarded_unchanged(
 @pytest.mark.parametrize(
     ("name", "v1", "v2", "arguments"), SCENARIOS, ids=[s[0] for s in SCENARIOS]
 )
-def test_without_the_refresh_the_stale_listing_blocks_a_valid_call(
+def test_without_the_refresh_a_stale_listing_never_repairs_or_refuses_a_valid_call(
     name: str, v1: ServerTool, v2: ServerTool, arguments: Any
 ) -> None:
-    """The defect the refresh fixes, kept as a regression witness."""
+    """
+    S4.1: refresh off, nothing confirms the listing is current, so StateGuard neither repairs
+    nor refuses on it -- the call goes as the client sent it, and the proposal is logged as
+    withheld. (Before S4.1 this listing refused or rewrote the valid call: the defect the
+    refresh fixes, and the A1/A2 stale-listing cells' false successes.)
+    """
     rig, response = _run(v1, v2, arguments, refresh=False)
     try:
-        assert rig.server.executed == [] or rig.server.executed[0].arguments != arguments
+        assert response is not None and response["result"]["isError"] is False, response
+        (executed,) = rig.server.executed
+        assert executed.arguments == arguments
+        decision = [e for e in rig.audit if e.get("event") == "call"][-1]
+        assert decision["listing"] == "unconfirmed" and decision["action"] == "unvalidated"
+        assert decision["proposal"] == "withheld" and decision["withheld"] != "forward"
     finally:
         rig.close()
 

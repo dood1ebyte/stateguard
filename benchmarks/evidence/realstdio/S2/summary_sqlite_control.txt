@@ -1,0 +1,33 @@
+rows 480  driver_errors 0
+
+===== sqlite
+
+raw
+  fault-free  0/120 (0.0%, ci 0.0%-3.1%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw -  recovered_vs_raw -
+  latency fault-free {'n': 120, 'mean': 1.302, 'median': 1.302, 'p95': 1.378}
+
+naive
+  fault-free  0/120 (0.0%, ci 0.0%-3.1%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  latency fault-free {'n': 120, 'mean': 1.301, 'median': 1.298, 'p95': 1.384}
+
+sg
+  fault-free  0/120 (0.0%, ci 0.0%-3.1%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 120, mismatching ground truth 0
+  latency fault-free {'n': 120, 'mean': 1.523, 'median': 1.516, 'p95': 1.613}
+
+sg_keyed
+  fault-free  0/120 (0.0%, ci 0.0%-3.1%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 120, mismatching ground truth 0
+  latency fault-free {'n': 120, 'mean': 1.687, 'median': 1.686, 'p95': 1.78}
+
+op/mode                                 raw              naive                 sg           sg_keyed
+read/none                          0/60               0/60               0/60               0/60    
+write/none                         0/60               0/60               0/60               0/60    

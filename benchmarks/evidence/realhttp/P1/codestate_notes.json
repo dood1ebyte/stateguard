@@ -1,0 +1,28 @@
+{
+ "batch": "P1",
+ "part": "notes",
+ "started": "2026-11-06T06:22:51.968785+00:00",
+ "commit": "1852365a2ce72302b15c39549efdfbceacee6d29",
+ "harness_commit": "40bbf4ab9dc31f30ce3a091e489aa4c11ec0f23a",
+ "harness_dirty": false,
+ "driver": "driver.py",
+ "driver_args": [
+  "notes",
+  "20",
+  "read/none,write/none",
+  "raw,sg,sg_keyed_deadline",
+  "1"
+ ],
+ "trial_offset": "2000",
+ "python": "3.13.18",
+ "mcp": "2.3.0",
+ "node": "v22.23.4",
+ "typescript_sdk": "1.32.1",
+ "typescript_lockfile_sha256": "ffdaebb2f832db1ec9f116eec1b458c2d5b444f8a1f24b56a5173c2788c471cd",
+ "everything_tree_sha256": "823e40005f94f353567c7b9bce56146516c8038ff3a15d44cbeef53b60a99778",
+ "platform": "Linux-6.18.44-fc-v242-x86_64-with-glibc2.39",
+ "cpus": 4,
+ "driver_exit": 0,
+ "finished": "2026-11-06T06:26:34.999920+00:00",
+ "everything_tree_sha256_after": "823e40005f94f353567c7b9bce56146516c8038ff3a15d44cbeef53b60a99778"
+}

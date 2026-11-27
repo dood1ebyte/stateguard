@@ -1,0 +1,54 @@
+[
+ {
+  "server": "sqlite",
+  "run": "plain",
+  "exit": 0,
+  "shadow": {
+   "client": {
+    "ok": 10
+   },
+   "unknown": 0,
+   "would_retry": 0,
+   "denominators_hold": true,
+   "bundle_rebuilds": true,
+   "fault_fired": false
+  },
+  "auto": {
+   "client": {
+    "ok": 10
+   },
+   "unknown": 0,
+   "calls_resent": 0,
+   "denominators_hold": true,
+   "bundle_rebuilds": true,
+   "fault_fired": false
+  },
+  "changed_calls": [],
+  "truth": {
+   "shadow": {
+    "rows": [
+     "seed",
+     "t-0",
+     "t-1",
+     "t-2"
+    ],
+    "tables": [
+     "notes",
+     "tags"
+    ]
+   },
+   "auto": {
+    "rows": [
+     "seed",
+     "t-0",
+     "t-1",
+     "t-2"
+    ],
+    "tables": [
+     "notes",
+     "tags"
+    ]
+   }
+  }
+ }
+]

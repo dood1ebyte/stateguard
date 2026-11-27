@@ -1,0 +1,31 @@
+{
+ "new": "benchmarks/evidence/realstdio/S12/summary_keys_auto_memory.json",
+ "refs": [
+  "benchmarks/evidence/realstdio/S10/summary_keys_auto_memory.json"
+ ],
+ "arms": [
+  {
+   "server": "memory",
+   "arm": "sg_keys_auto",
+   "kind": "stateguard",
+   "ref": "benchmarks/evidence/realstdio/S10/summary_keys_auto_memory.json",
+   "ref_arm": "sg_keys_auto",
+   "cells": 4,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    24,
+    48
+   ],
+   "ref_total": [
+    24,
+    48
+   ]
+  }
+ ]
+}

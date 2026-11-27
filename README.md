@@ -206,8 +206,11 @@ silently keeping the old one. The same diff is available on its own as
 
 For a proxy that handles raw JSON-RPC, `ToolCallRequest`,
 `forward_message` and `refusal_response` change only `params.arguments`
-and preserve the request `id` and `_meta`. `examples/mcp/stdio_proxy.py`
-puts all of it together as an SDK-free stdio relay.
+and preserve the request `id` and `_meta`. `stateguard relay stdio -- <server>`
+puts all of it together as an SDK-free stdio relay (`stateguard relay http
+--upstream URL` for Streamable HTTP, with the `mcp` extra); `--keys auto`
+starts a Python or Node server with idempotency keys. See
+[`examples/mcp/`](examples/mcp/README.md#on-the-wire-the-stdio-relay).
 
 **The full guide is [`docs/mcp-adapter.md`](docs/mcp-adapter.md)** —
 outcome truth table, registry, schema changes, the JSON-RPC boundary, the

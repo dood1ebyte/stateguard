@@ -1,0 +1,141 @@
+{
+ "everything": {
+  "cells": {
+   "keys/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "keys_advertised": [],
+    "keys_not_advertised": [],
+    "keys_plan": [
+     {
+      "adapter": "node-preload",
+      "db": "/tmp/realhttp-M2-lb2kbz2l/runs/everything-keys-auto--41000-31cfbf30/keys.db",
+      "keyed_tools": [
+       "echo"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "everything"
+     },
+     {
+      "adapter": "node-preload",
+      "db": "/tmp/realhttp-M2-lb2kbz2l/runs/everything-keys-auto--41001-078f86bb/keys.db",
+      "keyed_tools": [
+       "echo"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "everything"
+     },
+     {
+      "adapter": "node-preload",
+      "db": "/tmp/realhttp-M2-lb2kbz2l/runs/everything-keys-auto--41002-badde610/keys.db",
+      "keyed_tools": [
+       "echo"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "everything"
+     }
+    ],
+    "kinds": {
+     "surfaced_unknown": 3
+    },
+    "server_outcomes": {
+     "None": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "listing_identical": 3,
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/direct": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/shadow": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "listing_identical": 3,
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/hang/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/kill_before/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/lost_exit/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/none/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/none/shadow": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   }
+  },
+  "direct_listings": 1,
+  "driver_errors": 0,
+  "rows": 27,
+  "tools": [
+   "echo",
+   "get-annotated-message",
+   "get-env",
+   "get-header-params",
+   "get-resource-links",
+   "get-resource-reference",
+   "get-structured-content",
+   "get-sum",
+   "get-tiny-image",
+   "gzip-file-as-resource",
+   "toggle-simulated-logging",
+   "toggle-subscriber-updates",
+   "trigger-list-changed",
+   "trigger-log-messages",
+   "trigger-long-running-operation",
+   "trigger-resource-update"
+  ],
+  "unsafe": 0
+ }
+}

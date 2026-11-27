@@ -1,0 +1,4 @@
+MATCH filesystem  naive                baseline   new 48/156  ref(S8) 48/156  cells 13  unsafe 48
+MATCH filesystem  raw                  baseline   new 132/156  ref(S8) 132/156  cells 13  unsafe 36
+MATCH filesystem  sg                   stateguard new 84/156  ref(S8) 84/156  cells 13  unsafe 0
+MATCH filesystem  sg_keyed             stateguard new 24/156  ref(S9) 24/156  cells 13  unsafe 0

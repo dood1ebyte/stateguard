@@ -1,0 +1,14 @@
+===== sqlite  rows 39  unsafe 0  driver_errors 0  tools 6
+  keys/auto                    3/3  fired 0  unsafe 0  kinds {}  adapter ['python-injector'] advertised ['write_query'] not_advertised [] outcomes {'executed': 3}
+  list/auto                    3/3  fired 0  unsafe 0  kinds {}  listing identical 3/3
+  list/direct                  3/3  fired 0  unsafe 0  kinds {}
+  list/shadow                  3/3  fired 0  unsafe 0  kinds {}  listing identical 3/3
+  read/hang/auto               3/3  fired 3  unsafe 0  kinds {}
+  read/kill_before/auto        3/3  fired 3  unsafe 0  kinds {}
+  read/lost_exit/auto          3/3  fired 3  unsafe 0  kinds {}
+  read/none/auto               3/3  fired 0  unsafe 0  kinds {}
+  read/none/shadow             3/3  fired 0  unsafe 0  kinds {}
+  write/hang/auto              0/3  fired 3  unsafe 0  kinds {'no_answer_timeout': 3}
+  write/kill_before/auto       0/3  fired 3  unsafe 0  kinds {'surfaced_unknown': 3, 'not_executed': 3}
+  write/lost_exit/auto         0/3  fired 3  unsafe 0  kinds {'surfaced_unknown': 3}
+  write/none/auto              3/3  fired 0  unsafe 0  kinds {}

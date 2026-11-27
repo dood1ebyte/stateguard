@@ -176,10 +176,87 @@ def _agree(field: dict[str, Any], value: Any) -> None:
     assert ours.is_valid == reference, (field, value, ours.violations)
 
 
+def _json_equal(a: Any, b: Any) -> bool:
+    """
+    JSON equality as JSON Schema 2020-12 ``uniqueItems`` defines it: JSON booleans
+    are **not** JSON numbers (``true`` != ``1``), ``1 == 1.0``, arrays compare
+    element-wise, objects by key set and value, strings/null by value. Derived from
+    the spec, independent of StateGuard's implementation (so it is a genuine oracle).
+    """
+    a_bool, b_bool = isinstance(a, bool), isinstance(b, bool)
+    if a_bool or b_bool:
+        return a_bool and b_bool and a == b
+    a_num, b_num = isinstance(a, (int, float)), isinstance(b, (int, float))
+    if a_num or b_num:
+        return a_num and b_num and float(a) == float(b)
+    if isinstance(a, list) or isinstance(b, list):
+        return (
+            isinstance(a, list)
+            and isinstance(b, list)
+            and len(a) == len(b)
+            and all(_json_equal(x, y) for x, y in zip(a, b, strict=True))
+        )
+    if isinstance(a, dict) or isinstance(b, dict):
+        return (
+            isinstance(a, dict)
+            and isinstance(b, dict)
+            and a.keys() == b.keys()
+            and all(_json_equal(a[k], b[k]) for k in a)
+        )
+    return type(a) is type(b) and a == b  # strings, null
+
+
+def _unique_items_expected(items: list[Any]) -> bool:
+    """
+    Sound ground truth for ``uniqueItems``: all items distinct under JSON equality,
+    by O(n^2) pairwise comparison. Used instead of the reference validator because
+    ``jsonschema._utils.uniq`` sorts then compares only *adjacent* items, so it
+    misses non-adjacent duplicates in arrays mixing JSON booleans and numbers
+    (Python's ``<`` treats ``True`` and ``1`` as equal and interleaves them). See
+    ``docs/runtime/WEEK4H_REGRESSION_AND_HARDENING_GATE.md``.
+    """
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            if _json_equal(items[i], items[j]):
+                return False
+    return True
+
+
 @settings(max_examples=500, deadline=None)
 @given(value=st.lists(JSON, max_size=5))
+# The exact Week 4G counterexample, pinned so the regression is covered forever:
+# elements 0 and 2 are the identical JSON value, so the array is NOT unique.
+@example(value=[[[True, True, True], None], [[True, True, 1], None], [[True, True, True], None]])
 def test_differential_unique_items(value: list[Any]) -> None:
-    _agree({"type": "array", "uniqueItems": True}, value)
+    # Compared against a sound oracle, NOT jsonschema's reference uniq() (unsound for
+    # bool/number-mixed arrays; see _unique_items_expected and WEEK4H). StateGuard's
+    # own uniqueItems check is spec-correct and must match the sound ground truth.
+    schema = {"type": "object", "properties": {"a": {"type": "array", "uniqueItems": True}}}
+    ours = ContractGuard.with_mcp().validate({"name": "t", "inputSchema": schema}, {"a": value})
+    assert ours.is_valid == _unique_items_expected(value), (value, ours.violations)
+
+
+def test_unique_items_bool_number_duplicate_where_reference_is_unsound() -> None:
+    """
+    Regression (Week 4H): an array whose JSON-identical elements are non-adjacent
+    after sorting. StateGuard correctly rejects it; the reference ``jsonschema``
+    validator wrongly accepts it (its sort+adjacent ``uniq`` misses the duplicate).
+    Pins that StateGuard is sound here and documents the reference's limitation so
+    the differential oracle choice above is never silently reverted.
+    """
+    value = [[[True, True, True], None], [[True, True, 1], None], [[True, True, True], None]]
+    assert value[0] == value[2], "elements 0 and 2 are the same JSON value"
+    assert _unique_items_expected(value) is False  # the sound ground truth: not unique
+    schema = {"type": "object", "properties": {"a": {"type": "array", "uniqueItems": True}}}
+    ours = ContractGuard.with_mcp().validate({"name": "t", "inputSchema": schema}, {"a": value})
+    assert ours.is_valid is False, "StateGuard must flag the duplicate"
+    # The reference is unsound for this input class; recorded, not relied upon.
+    reference = jsonschema.Draft202012Validator(schema).is_valid({"a": value})
+    assert reference is True, "demonstrates the reference validator's known unsoundness"
+    # true != 1 (booleans are not numbers), but 1 == 1.0 (numbers compare equal):
+    assert _json_equal(True, 1) is False
+    assert _json_equal(1, 1.0) is True
+    assert _json_equal(True, False) is False
 
 
 @settings(max_examples=500, deadline=None)

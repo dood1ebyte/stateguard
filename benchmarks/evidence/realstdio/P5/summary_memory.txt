@@ -1,0 +1,13 @@
+3000 calls, 0 session errors, 0 failed calls
+memory  read   first  raw       {'n': 20, 'mean_ms': 8.6, 'median_ms': 6.87, 'p95_ms': 8.78}  
+memory  read   first  sg        {'n': 20, 'mean_ms': 8.46, 'median_ms': 8.14, 'p95_ms': 10.24}  vs raw {'pairs': 20, 'mean_ms': -0.14, 'ci95_ms': [-3.4, 3.13]}
+memory  read   first  sg_keyed  {'n': 20, 'mean_ms': 8.65, 'median_ms': 8.29, 'p95_ms': 11.04}  vs raw {'pairs': 20, 'mean_ms': 0.05, 'ci95_ms': [-3.21, 3.32]}
+memory  read   warm   raw       {'n': 480, 'mean_ms': 1.51, 'median_ms': 1.45, 'p95_ms': 2.03}  
+memory  read   warm   sg        {'n': 480, 'mean_ms': 2.39, 'median_ms': 2.3, 'p95_ms': 3.11}  vs raw {'pairs': 480, 'mean_ms': 0.88, 'ci95_ms': [0.83, 0.94]}
+memory  read   warm   sg_keyed  {'n': 480, 'mean_ms': 2.62, 'median_ms': 2.51, 'p95_ms': 3.73}  vs raw {'pairs': 480, 'mean_ms': 1.11, 'ci95_ms': [1.05, 1.17]}
+memory  write  first  raw       {'n': 20, 'mean_ms': 4.45, 'median_ms': 4.17, 'p95_ms': 6.04}  
+memory  write  first  sg        {'n': 20, 'mean_ms': 6.23, 'median_ms': 5.77, 'p95_ms': 6.99}  vs raw {'pairs': 20, 'mean_ms': 1.78, 'ci95_ms': [0.78, 2.78]}
+memory  write  first  sg_keyed  {'n': 20, 'mean_ms': 12.27, 'median_ms': 11.92, 'p95_ms': 14.23}  vs raw {'pairs': 20, 'mean_ms': 7.82, 'ci95_ms': [7.12, 8.52]}
+memory  write  warm   raw       {'n': 480, 'mean_ms': 2.24, 'median_ms': 2.02, 'p95_ms': 2.9}  
+memory  write  warm   sg        {'n': 480, 'mean_ms': 2.97, 'median_ms': 2.88, 'p95_ms': 3.66}  vs raw {'pairs': 480, 'mean_ms': 0.73, 'ci95_ms': [0.57, 0.89]}
+memory  write  warm   sg_keyed  {'n': 480, 'mean_ms': 6.85, 'median_ms': 6.7, 'p95_ms': 8.72}  vs raw {'pairs': 480, 'mean_ms': 4.62, 'ci95_ms': [4.44, 4.79]}

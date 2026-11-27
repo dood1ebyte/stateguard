@@ -1,0 +1,44 @@
+rows 300  driver_errors 0
+
+===== notes
+
+raw
+  fault-free  -
+  drift       60/60 (100.0%, ci 94.0%-100.0%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw -  recovered_vs_raw -
+  latency fault-free None
+
+naive
+  fault-free  -
+  drift       60/60 (100.0%, ci 94.0%-100.0%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  latency fault-free None
+
+sg
+  fault-free  -
+  drift       0/60 (0.0%, ci 0.0%-6.0%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 60
+  relay invocation records 60, mismatching ground truth 0
+  latency fault-free None
+
+sg_keyed
+  fault-free  -
+  drift       0/60 (0.0%, ci 0.0%-6.0%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 60
+  relay invocation records 60, mismatching ground truth 0
+  latency fault-free None
+
+sg_keyed_deadline
+  fault-free  -
+  drift       0/60 (0.0%, ci 0.0%-6.0%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 60
+  relay invocation records 60, mismatching ground truth 0
+  latency fault-free None
+
+op/mode                                 raw              naive                 sg           sg_keyed  sg_keyed_deadline
+drift/none                        60/60              60/60               0/60               0/60               0/60    

@@ -1,0 +1,31 @@
+{
+ "memory": {
+  "cells": {
+   "keys/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "keys_advertised": [],
+    "keys_not_advertised": [],
+    "keys_plan": [
+     {
+      "adapter": null,
+      "keys": "auto",
+      "unkeyed_reason": "no @modelcontextprotocol/sdk (1.x) above /opt/sg-servers-latest/memory/node_modules/@modelcontextprotocol/server-memory/dist/index.js: the server is not built on the TypeScript SDK 1.x the preload wraps (an SDK v2 server, perhaps)"
+     }
+    ],
+    "kinds": {},
+    "server_outcomes": {
+     "None": 3
+    },
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   }
+  },
+  "direct_listings": 0,
+  "driver_errors": 0,
+  "rows": 3,
+  "tools": null,
+  "unsafe": 0
+ }
+}

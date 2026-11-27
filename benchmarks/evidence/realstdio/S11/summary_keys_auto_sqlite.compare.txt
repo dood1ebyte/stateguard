@@ -1,0 +1,1 @@
+MATCH sqlite      sg_keys_auto         stateguard new 24/48  ref(S10) 24/48  cells 4  unsafe 0

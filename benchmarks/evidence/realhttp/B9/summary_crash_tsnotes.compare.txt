@@ -1,0 +1,5 @@
+MATCH tsnotes     naive                baseline   new 36/36  ref(B7) 36/36  cells 3  unsafe 0
+MATCH tsnotes     raw                  baseline   new 36/36  ref(B7) 36/36  cells 3  unsafe 12
+MATCH tsnotes     sg                   stateguard new 36/36  ref(B7) 36/36  cells 3  unsafe 0
+MATCH tsnotes     sg_keyed             stateguard new 24/36  ref(B7) 24/36  cells 3  unsafe 0
+MATCH tsnotes     sg_keyed_deadline    stateguard new 24/36  ref(B7) 24/36  cells 3  unsafe 0

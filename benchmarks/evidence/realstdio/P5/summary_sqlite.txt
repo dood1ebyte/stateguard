@@ -1,0 +1,13 @@
+3000 calls, 0 session errors, 0 failed calls
+sqlite  read   first  raw       {'n': 20, 'mean_ms': 2.23, 'median_ms': 2.05, 'p95_ms': 2.92}  
+sqlite  read   first  sg        {'n': 20, 'mean_ms': 3.11, 'median_ms': 2.83, 'p95_ms': 5.81}  vs raw {'pairs': 20, 'mean_ms': 0.87, 'ci95_ms': [0.31, 1.43]}
+sqlite  read   first  sg_keyed  {'n': 20, 'mean_ms': 3.38, 'median_ms': 3.07, 'p95_ms': 6.41}  vs raw {'pairs': 20, 'mean_ms': 1.15, 'ci95_ms': [0.54, 1.76]}
+sqlite  read   warm   raw       {'n': 480, 'mean_ms': 1.6, 'median_ms': 1.55, 'p95_ms': 2.02}  
+sqlite  read   warm   sg        {'n': 480, 'mean_ms': 2.11, 'median_ms': 2.02, 'p95_ms': 2.67}  vs raw {'pairs': 480, 'mean_ms': 0.52, 'ci95_ms': [0.47, 0.56]}
+sqlite  read   warm   sg_keyed  {'n': 480, 'mean_ms': 2.22, 'median_ms': 2.17, 'p95_ms': 2.7}  vs raw {'pairs': 480, 'mean_ms': 0.63, 'ci95_ms': [0.59, 0.66]}
+sqlite  write  first  raw       {'n': 20, 'mean_ms': 3.38, 'median_ms': 3.35, 'p95_ms': 4.05}  
+sqlite  write  first  sg        {'n': 20, 'mean_ms': 4.17, 'median_ms': 3.95, 'p95_ms': 6.54}  vs raw {'pairs': 20, 'mean_ms': 0.79, 'ci95_ms': [0.34, 1.24]}
+sqlite  write  first  sg_keyed  {'n': 20, 'mean_ms': 8.46, 'median_ms': 7.96, 'p95_ms': 10.64}  vs raw {'pairs': 20, 'mean_ms': 5.08, 'ci95_ms': [4.44, 5.72]}
+sqlite  write  warm   raw       {'n': 480, 'mean_ms': 2.78, 'median_ms': 2.66, 'p95_ms': 3.53}  
+sqlite  write  warm   sg        {'n': 480, 'mean_ms': 3.19, 'median_ms': 3.14, 'p95_ms': 3.93}  vs raw {'pairs': 480, 'mean_ms': 0.41, 'ci95_ms': [0.34, 0.49]}
+sqlite  write  warm   sg_keyed  {'n': 480, 'mean_ms': 6.88, 'median_ms': 6.73, 'p95_ms': 8.38}  vs raw {'pairs': 480, 'mean_ms': 4.1, 'ci95_ms': [4.0, 4.2]}

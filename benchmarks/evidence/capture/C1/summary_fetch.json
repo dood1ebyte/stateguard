@@ -1,0 +1,226 @@
+{
+ "rows": 8,
+ "label": "real server, scripted workload",
+ "groups": {
+  "fetch/auto": {
+   "sessions": 4,
+   "invalid_sessions": [],
+   "client_tool_calls": 200,
+   "relay_tool_calls": 200,
+   "records": 200,
+   "answered": 200,
+   "unfinished": 0,
+   "checks_hold": true,
+   "client_equals_relay": true,
+   "client_tool_errors_equal_report": true,
+   "rebuilt_equal": true,
+   "calls": 200,
+   "succeeded": {
+    "k": 192,
+    "ci95": [
+     0.9231,
+     0.9796
+    ]
+   },
+   "tool_error": {
+    "k": 8,
+    "ci95": [
+     0.0204,
+     0.0769
+    ]
+   },
+   "failed": {
+    "k": 0,
+    "ci95": [
+     0.0,
+     0.0188
+    ]
+   },
+   "unknown": {
+    "k": 0,
+    "ci95": [
+     0.0,
+     0.0188
+    ]
+   },
+   "not_successful": {
+    "k": 8,
+    "ci95": [
+     0.0204,
+     0.0769
+    ]
+   },
+   "retries_made": 8,
+   "would_retry": 0,
+   "latency_p50_ms_median_of_sessions": 492.0,
+   "latency_p95_ms_max_of_sessions": 563.0,
+   "overhead_p50_ms_median_of_sessions": 1.3,
+   "overhead_p95_ms_max_of_sessions": 11.7,
+   "overhead_calls": 200,
+   "client_noise_lines": 0
+  },
+  "fetch/shadow": {
+   "sessions": 4,
+   "invalid_sessions": [],
+   "client_tool_calls": 200,
+   "relay_tool_calls": 200,
+   "records": 200,
+   "answered": 200,
+   "unfinished": 0,
+   "checks_hold": true,
+   "client_equals_relay": true,
+   "client_tool_errors_equal_report": true,
+   "rebuilt_equal": true,
+   "calls": 200,
+   "succeeded": {
+    "k": 192,
+    "ci95": [
+     0.9231,
+     0.9796
+    ]
+   },
+   "tool_error": {
+    "k": 8,
+    "ci95": [
+     0.0204,
+     0.0769
+    ]
+   },
+   "failed": {
+    "k": 0,
+    "ci95": [
+     0.0,
+     0.0188
+    ]
+   },
+   "unknown": {
+    "k": 0,
+    "ci95": [
+     0.0,
+     0.0188
+    ]
+   },
+   "not_successful": {
+    "k": 8,
+    "ci95": [
+     0.0204,
+     0.0769
+    ]
+   },
+   "retries_made": 0,
+   "would_retry": 8,
+   "latency_p50_ms_median_of_sessions": 495.0,
+   "latency_p95_ms_max_of_sessions": 570.0,
+   "overhead_p50_ms_median_of_sessions": 1.2,
+   "overhead_p95_ms_max_of_sessions": 2.9,
+   "overhead_calls": 200,
+   "client_noise_lines": 0
+  }
+ },
+ "pairs": [
+  {
+   "server": "fetch",
+   "seed": 1,
+   "paired": true,
+   "same_workload": true,
+   "shadow_auto": {
+    "succeeded": [
+     49,
+     49
+    ],
+    "tool_error": [
+     1,
+     1
+    ],
+    "failed": [
+     0,
+     0
+    ],
+    "unknown": [
+     0,
+     0
+    ]
+   },
+   "equal": true
+  },
+  {
+   "server": "fetch",
+   "seed": 2,
+   "paired": true,
+   "same_workload": true,
+   "shadow_auto": {
+    "succeeded": [
+     45,
+     45
+    ],
+    "tool_error": [
+     5,
+     5
+    ],
+    "failed": [
+     0,
+     0
+    ],
+    "unknown": [
+     0,
+     0
+    ]
+   },
+   "equal": true
+  },
+  {
+   "server": "fetch",
+   "seed": 3,
+   "paired": true,
+   "same_workload": true,
+   "shadow_auto": {
+    "succeeded": [
+     49,
+     49
+    ],
+    "tool_error": [
+     1,
+     1
+    ],
+    "failed": [
+     0,
+     0
+    ],
+    "unknown": [
+     0,
+     0
+    ]
+   },
+   "equal": true
+  },
+  {
+   "server": "fetch",
+   "seed": 4,
+   "paired": true,
+   "same_workload": true,
+   "shadow_auto": {
+    "succeeded": [
+     49,
+     49
+    ],
+    "tool_error": [
+     1,
+     1
+    ],
+    "failed": [
+     0,
+     0
+    ],
+    "unknown": [
+     0,
+     0
+    ]
+   },
+   "equal": true
+  }
+ ],
+ "total_tool_calls": 400,
+ "servers": [
+  "fetch"
+ ]
+}

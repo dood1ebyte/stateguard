@@ -1,0 +1,46 @@
+[
+ {
+  "server": "filesystem",
+  "run": "plain",
+  "exit": 0,
+  "shadow": {
+   "client": {
+    "ok": 9,
+    "tool_error": 1
+   },
+   "unknown": 0,
+   "would_retry": 1,
+   "denominators_hold": true,
+   "bundle_rebuilds": true,
+   "fault_fired": false
+  },
+  "auto": {
+   "client": {
+    "ok": 9,
+    "tool_error": 1
+   },
+   "unknown": 0,
+   "calls_resent": 1,
+   "denominators_hold": true,
+   "bundle_rebuilds": true,
+   "fault_fired": false
+  },
+  "changed_calls": [],
+  "truth": {
+   "shadow": {
+    "files": [
+     "a.md",
+     "c.md"
+    ],
+    "a_edited": true
+   },
+   "auto": {
+    "files": [
+     "a.md",
+     "c.md"
+    ],
+    "a_edited": true
+   }
+  }
+ }
+]

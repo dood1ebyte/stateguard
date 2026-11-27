@@ -7,7 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The relays are package commands.** `stateguard relay stdio [opts] -- <server>`
+  (`stateguard.relay.stdio`) and `stateguard relay http --upstream URL [opts]`
+  (`stateguard.relay.http`, needs the `mcp` extra); `python -m stateguard` runs the CLI.
+  `examples/mcp/stdio_proxy.py` and `http_proxy.py` remain as thin wrappers (imported,
+  they are the package modules themselves).
+- **`stateguard relay stdio --keys auto`** (default off) starts a Python server under
+  the injector and a Node server with the TypeScript preload, detected from the server
+  command, so the keyed tools (`--keyed-tools`, plus tools declared `non_idempotent` or
+  `idempotent` in `--effects`) honour idempotency keys. A command it cannot read with
+  certainty runs unkeyed and the relay says why. The wheel ships the preload
+  (`stateguard/relay/ts/`).
+- **`stateguard capture stdio|http` and `stateguard report`.** A relay session recorded
+  into a shareable bundle (mask-redacted recording with numbers masked, allowlisted
+  invocation records, key-store counts, manifest with SHA-256s) and a report rebuilt from
+  the bundle alone (`--check`): outcomes per call with Wilson intervals, UNKNOWN, retries,
+  latency and relay-overhead percentiles, denominator checks, duplicates from the key store.
+  See `docs/runtime/REAL_CAPTURE.md`.
+- **`stateguard relay http --record`**, shadow mode only, under the stdio relay's privacy
+  rules; `--record-mask-numbers` on both relays.
+- **`stateguard relay stdio --serialize-tools LIST`** (default: none). Calls to the listed
+  tools go to the server one at a time, in arrival order. Use it for servers that lose
+  concurrent writes; server-memory lost 149 of 160 concurrent writes without it and 0 with
+  it (`benchmarks/evidence/realstdio/SER1/`).
+  - A call is sent only when the server has answered the previous one (or the relay has
+    reaped that server process) and the previous client request has its answer.
+  - A call still waiting after `--serialize-wait` (default 30 s) is answered "not sent". It
+    never ran.
+  - Shadow mode only logs `serialize_would_apply`.
+  - Not available on the HTTP relay.
+- **`STATEGUARD_RECOVERY_CHECK`** in the injector (`module:function`) and the TypeScript
+  preload (`module#export`). It is only accepted with `STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1`.
+  - It is the operator's check, `check(tool, key, arguments)`, for an abandoned attempt of a
+    keyed tool:
+    - found: recorded and answered `recovered`;
+    - absent: the call runs once;
+    - otherwise: in doubt, never re-run.
+  - See `SERVER_IDEMPOTENCY_CONTRACT.md` §4.5 for the replay rule it is held to.
+- **The TypeScript cooperating notes server** (`adapters/typescript/examples/`), the twin of
+  the Python one. Its note and its key's record commit in one transaction. Keyed crash cells
+  gave 0/36 unresolved with 0 duplicates on each relay
+  (`benchmarks/evidence/{realhttp,realstdio}/CW2/`).
+- **`stateguard trial`.** It runs the same scripted calls in shadow, then in auto, and writes a
+  before/after report beside two redacted capture bundles, kept locally.
+  - `--sandbox` gives each run a fresh copy of the server's data.
+  - TEST-ONLY `--fault`, refused without `--sandbox`, cuts one call.
+  - It was shown on filesystem, sqlite and git (`benchmarks/evidence/trial/T1/`).
+- **`stateguard doctor [-- SERVER...]`.** It checks Python, the HTTP extra, Node, the preload
+  and the key store. Given a server, it lists the server through a shadow relay and shows
+  `--keys auto`'s plan for it.
+- **Onboarding** (`docs/runtime/ONBOARDING.md`): `mcpServers` snippets for Claude Desktop, Cursor
+  and Claude Code. A scripted clean environment reached its first protected call in about 10 s
+  (`benchmarks/evidence/onboarding/O1/`).
+- **Reproducible benchmark materials** (`docs/runtime/REPRODUCE.md`, `scripts/reproduce.sh`):
+  - `scripts/reproduce.sh` rebuilds the environment and re-runs a recorded matrix part from a
+    clean checkout;
+  - **the frozen recommended configuration** is in `docs/runtime/RECOMMENDED_CONFIG.md`.
+- **Track B tooling** (`research/pfi/`): the record schema and its validator, deduplication,
+  counts (never rates), the documented queries, the access log, and a first GitHub pass.
+- **A published compatibility matrix:** `docs/runtime/COMPATIBILITY_MATRIX.md`. Ten pinned
+  public servers were attempted through the relays, with a status for each and 0 unsafe
+  outcomes in 315 rows. The harness is `benchmarks/runtime/compat/`.
+
 ### Changed
+- **Release candidates 0.2.0rc1 (Python) and 0.2.0-rc.1 (npm)** were built and verified, and
+  **not published** (`docs/runtime/RELEASE_CANDIDATES.md`).
+  - The sdist now holds only the package.
+  - The npm package ships compiled `dist/`, and stays private.
+- **With `--no-listing-refresh`, the relays no longer repair or refuse a call on an
+  unconfirmed listing.** Both relays forward the client's call unchanged. The `call` event
+  carries `listing: "unconfirmed"`, `proposal: "withheld"` and what auto mode would have
+  done. (Phase 1 A1: a stale listing "repaired" correct calls into wrong ones.)
+- **A repaired call the server rejects falls back to the client's own call,** once, and only
+  where that cannot run anything twice:
+  - the server answered JSON-RPC `-32602` and nothing says the call ran;
+  - or the tool is declared `read_only` or `idempotent`.
+  Otherwise the server's error is delivered. Each decision is logged (`repair_fallback`). The
+  HTTP relay does this for JSON answers only.
+- **The HTTP relay reuses its connection after an event-stream answer.** The rest of the
+  stream is read in the background, bounded (2 s, 64 KiB), instead of closing the stream at
+  the answer event.
+  - Before: one new TCP connection per call answered over an event stream.
+  - Measured under netem on a GitHub runner (`benchmarks/evidence/realhttp/NR1/`): 40 → 0
+    new connections in 40 calls, with p50 per call 54.6 → 34.3 ms at 5 ms one-way delay.
+  - Caveat: a server that does not set TCP_NODELAY can stall about 40 ms on a reused
+    connection.
 - **Three exact-but-wrong casts are held for confirmation instead of applied.**
   `TypeCoercionStrategy` records a semantic objection (`evidence.contradiction`,
   the mechanism opposed-name renames already use) on:
@@ -77,6 +162,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     executions stay 0.
 
 ### Fixed
+- **`--keys auto` no longer stops a Node server that is not on the TypeScript SDK 1.x from
+  starting.** The preload wraps `@modelcontextprotocol/sdk` 1.x. On a server built on the
+  SDK v2 (`@modelcontextprotocol/server`), as the reference servers' current releases are,
+  it threw at start, so every call ended "outcome unknown". The plan now looks for the SDK
+  above the server's entry script. With no SDK, another major version, or no entry file, the
+  server runs unkeyed and the relay and `stateguard doctor` say why. Servers on SDK 1.x are
+  keyed as before. Found by M2 (`benchmarks/evidence/compat/M2/`).
+- `stateguard relay http` now returns (exit 0) after a graceful SIGINT/SIGTERM shutdown
+  instead of dying with the signal uvicorn raises again, so its recording is closed.
 - **A repair that changed only a value's JSON type was forwarded unrepaired.**
   Payload-change detection used Python `==` (`2 == 2.0`, `True == 1`), so
   auto mode sent the original `2.0` after coercing it to `2`, and shadow

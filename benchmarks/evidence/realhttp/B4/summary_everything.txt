@@ -1,0 +1,20 @@
+rows 96  driver_errors 0
+
+===== everything
+
+sg_deadline
+  fault-free  0/12 (0.0%, ci 0.0%-24.2%)
+  faulted     0/84 (0.0%, ci 0.0%-4.4%)   transport 0/72 (0.0%, ci 0.0%-5.1%)   session 0/12 (0.0%, ci 0.0%-24.2%)
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 96, mismatching ground truth 0
+  latency fault-free {'n': 12, 'mean': 0.862, 'median': 0.861, 'p95': 0.898}
+
+op/mode                         sg_deadline
+read/cut_stream                    0/12    
+read/hang_after                    0/12    
+read/http_502_after                0/12    
+read/http_503_before               0/12    
+read/kill_before                   0/12    
+read/lost_response                 0/12    
+read/none                          0/12    
+read/session_loss                  0/12    

@@ -1,0 +1,8 @@
+memory     read   sg                 pairs 20  unpaired 0  mean_s 0.269  ci95_s [0.236, 0.301]  median_s 0.253  raw_mean_s 0.97
+memory     read   sg_keyed           pairs 20  unpaired 0  mean_s 0.295  ci95_s [0.269, 0.322]  median_s 0.289  raw_mean_s 0.97
+memory     write  sg                 pairs 20  unpaired 0  mean_s 0.2  ci95_s [0.172, 0.227]  median_s 0.201  raw_mean_s 0.986
+memory     write  sg_keyed           pairs 20  unpaired 0  mean_s 0.278  ci95_s [0.25, 0.306]  median_s 0.284  raw_mean_s 0.986
+sqlite     read   sg                 pairs 20  unpaired 0  mean_s 0.209  ci95_s [0.174, 0.244]  median_s 0.203  raw_mean_s 1.224
+sqlite     read   sg_keyed           pairs 20  unpaired 0  mean_s 0.37  ci95_s [0.331, 0.409]  median_s 0.371  raw_mean_s 1.224
+sqlite     write  sg                 pairs 20  unpaired 0  mean_s 0.229  ci95_s [0.197, 0.262]  median_s 0.229  raw_mean_s 1.208
+sqlite     write  sg_keyed           pairs 20  unpaired 0  mean_s 0.34  ci95_s [0.312, 0.368]  median_s 0.343  raw_mean_s 1.208

@@ -1,0 +1,25 @@
+{
+ "batch": "S11",
+ "part": "memory",
+ "started": "2026-11-25T04:36:05.506272+00:00",
+ "commit": "290ba5d5d4f27327c5446c477e274e69530c5e38",
+ "harness_commit": "1d0467c4c721d68a02b3034ea109474d7dc02a13",
+ "harness_dirty": false,
+ "driver": "../realstdio/driver.py",
+ "driver_args": [
+  "memory",
+  "12"
+ ],
+ "trial_offset": "22000",
+ "python": "3.13.18",
+ "mcp": "2.3.0",
+ "node": "v22.23.4",
+ "typescript_sdk": "1.32.1",
+ "typescript_lockfile_sha256": "ffdaebb2f832db1ec9f116eec1b458c2d5b444f8a1f24b56a5173c2788c471cd",
+ "everything_tree_sha256": "823e40005f94f353567c7b9bce56146516c8038ff3a15d44cbeef53b60a99778",
+ "platform": "Linux-6.18.44-fc-v880-x86_64-with-glibc2.39",
+ "cpus": 4,
+ "driver_exit": 0,
+ "finished": "2026-11-25T04:41:28.596851+00:00",
+ "everything_tree_sha256_after": "823e40005f94f353567c7b9bce56146516c8038ff3a15d44cbeef53b60a99778"
+}

@@ -1,0 +1,1305 @@
+{
+ "items": [
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3894",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0001",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3891",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0002",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3877",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0003",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3851",
+   "labels": [
+    "bug",
+    "spec-2026-07-28v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0004",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3849",
+   "labels": [
+    "bug",
+    "spec-2026-07-28v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0005",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3846",
+   "labels": [
+    "documentation"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "documentation"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3810",
+   "labels": [
+    "bug",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0006",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3808",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0007",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3806",
+   "labels": [
+    "bug",
+    "spec-2026-07-28v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0008",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3804",
+   "labels": [
+    "bug"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1",
+    "GH-2"
+   ],
+   "kept": true,
+   "record": "PFI-0009",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3803",
+   "labels": [
+    "bug",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1",
+    "GH-2"
+   ],
+   "kept": true,
+   "record": "PFI-0010",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3792",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0011",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3788",
+   "labels": [
+    "bug",
+    "v1"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0012",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3747",
+   "labels": [
+    "bug",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0013",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3736",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0014",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3714",
+   "labels": [
+    "bug",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0015",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3707",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1",
+    "GH-2"
+   ],
+   "kept": true,
+   "record": "PFI-0016",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3692",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0017",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3674",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0018",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3639",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0019",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3605",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0020",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3601",
+   "labels": [
+    "spec-2026-07-28v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0021",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3586",
+   "labels": [
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0022",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3560",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1",
+    "GH-2"
+   ],
+   "kept": true,
+   "record": "PFI-0023",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3557",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-1"
+   ],
+   "kept": true,
+   "record": "PFI-0024",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3791",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-2"
+   ],
+   "kept": true,
+   "record": "PFI-0025",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3522",
+   "labels": [
+    "bug",
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-2"
+   ],
+   "kept": true,
+   "record": "PFI-0026",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3487",
+   "labels": [
+    "v1"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-2"
+   ],
+   "kept": true,
+   "record": "PFI-0027",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/python-sdk/issues/3441",
+   "labels": [
+    "bug",
+    "v1"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-2"
+   ],
+   "kept": true,
+   "record": "PFI-0028",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3238",
+   "labels": [],
+   "state": "open",
+   "queries": [
+    "GH-3",
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0029",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3236",
+   "labels": [
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": true,
+   "record": "PFI-0030",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3194",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3",
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0031",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3193",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3",
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0032",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3173",
+   "labels": [
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3",
+    "GH-4"
+   ],
+   "kept": false,
+   "classification": "feature request",
+   "why": "a new auth capability"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3170",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "a test-suite problem"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3168",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": false,
+   "classification": "feature request",
+   "why": "a new client feature"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3148",
+   "labels": [
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3",
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0033",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3144",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3",
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0034",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3136",
+   "labels": [
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": true,
+   "record": "PFI-0035",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3133",
+   "labels": [
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3",
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0036",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3131",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": true,
+   "record": "PFI-0037",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3097",
+   "labels": [
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": true,
+   "record": "PFI-0038",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3090",
+   "labels": [
+    "v1"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": true,
+   "record": "PFI-0039",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3078",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3",
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0040",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3061",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": false,
+   "classification": "feature request",
+   "why": "a new API"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3060",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": false,
+   "classification": "feature request",
+   "why": "a new API"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3056",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3",
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0041",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3053",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3",
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0042",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3045",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "a flaky test"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3043",
+   "labels": [
+    "v1"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": true,
+   "record": "PFI-0043",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3036",
+   "labels": [
+    "enhancement",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3",
+    "GH-4"
+   ],
+   "kept": false,
+   "classification": "feature request",
+   "why": "a new option"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3027",
+   "labels": [
+    "v1"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": false,
+   "classification": "feature request",
+   "why": "a new option"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3025",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": true,
+   "record": "PFI-0044",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/2971",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-3"
+   ],
+   "kept": false,
+   "classification": "feature request",
+   "why": "a new API"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3211",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0045",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3201",
+   "labels": [
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0046",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3199",
+   "labels": [
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0047",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3195",
+   "labels": [
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0048",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3191",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": false,
+   "classification": "feature request",
+   "why": "security guidance asked for"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3159",
+   "labels": [
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0049",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3124",
+   "labels": [
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0050",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3058",
+   "labels": [
+    "v1"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0051",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3037",
+   "labels": [
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": false,
+   "classification": "feature request",
+   "why": "a feature (resumability)"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3032",
+   "labels": [
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0052",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/3026",
+   "labels": [
+    "enhancement",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": false,
+   "classification": "feature request",
+   "why": "a new capability"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/2997",
+   "labels": [
+    "v1",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0053",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/2969",
+   "labels": [
+    "v1"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0054",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/typescript-sdk/issues/2964",
+   "labels": [
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-4"
+   ],
+   "kept": true,
+   "record": "PFI-0055",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5655",
+   "labels": [
+    "bug",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": true,
+   "record": "PFI-0056",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5654",
+   "labels": [
+    "bug",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": true,
+   "record": "PFI-0057",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5653",
+   "labels": [
+    "bug",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": true,
+   "record": "PFI-0058",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5648",
+   "labels": [],
+   "state": "open",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "an invitation, not a report"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5647",
+   "labels": [
+    "enhancement",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "feature request",
+   "why": "documentation of inputs"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5645",
+   "labels": [],
+   "state": "open",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "tests to add"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5644",
+   "labels": [],
+   "state": "open",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "tests to add"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5643",
+   "labels": [],
+   "state": "open",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "tests to add"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5642",
+   "labels": [],
+   "state": "open",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": true,
+   "record": "PFI-0059",
+   "classification": "likely technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5635",
+   "labels": [
+    "bug",
+    "server-memory",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "a flaky test"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5634",
+   "labels": [
+    "chore",
+    "server-memory",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "a flaky test"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5624",
+   "labels": [
+    "bug",
+    "server-memory",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": true,
+   "record": "PFI-0060",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5611",
+   "labels": [
+    "enhancement",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "feature request",
+   "why": "labelled enhancement"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5609",
+   "labels": [
+    "documentation",
+    "server-memory",
+    "v2"
+   ],
+   "state": "open",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "documentation"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5605",
+   "labels": [
+    "enhancement",
+    "server-memory",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "a release tracker"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5598",
+   "labels": [
+    "chore",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "CI"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5595",
+   "labels": [
+    "bug",
+    "server-memory",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": true,
+   "record": "PFI-0061",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5593",
+   "labels": [
+    "documentation",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "documentation"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5588",
+   "labels": [
+    "chore",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "repository process"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5570",
+   "labels": [
+    "bug",
+    "server-memory",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "a flaky test"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5565",
+   "labels": [
+    "bug",
+    "server-memory",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": true,
+   "record": "PFI-0062",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5560",
+   "labels": [
+    "bug",
+    "server-memory",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": true,
+   "record": "PFI-0063",
+   "classification": "confirmed technical failure"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5558",
+   "labels": [
+    "enhancement",
+    "server-everything",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "feature request",
+   "why": "labelled enhancement"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5541",
+   "labels": [
+    "chore",
+    "server-memory",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "tests to add"
+  },
+  {
+   "url": "https://github.com/modelcontextprotocol/servers/issues/5540",
+   "labels": [
+    "chore",
+    "server-memory",
+    "v2"
+   ],
+   "state": "closed",
+   "queries": [
+    "GH-6"
+   ],
+   "kept": false,
+   "classification": "unrelated",
+   "why": "tests to add"
+  }
+ ]
+}

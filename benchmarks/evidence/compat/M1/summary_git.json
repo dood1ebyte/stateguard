@@ -1,0 +1,176 @@
+{
+ "git": {
+  "cells": {
+   "keys/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "keys_advertised": [
+     "git_commit"
+    ],
+    "keys_not_advertised": [],
+    "keys_plan": [
+     {
+      "adapter": "python-injector",
+      "db": "/tmp/realhttp-M1-f7nugs7y/runs/git-keys-auto--40000-b4a00e22/keys.db",
+      "keyed_tools": [
+       "git_commit"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "git"
+     },
+     {
+      "adapter": "python-injector",
+      "db": "/tmp/realhttp-M1-f7nugs7y/runs/git-keys-auto--40001-81e18f50/keys.db",
+      "keyed_tools": [
+       "git_commit"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "git"
+     },
+     {
+      "adapter": "python-injector",
+      "db": "/tmp/realhttp-M1-f7nugs7y/runs/git-keys-auto--40002-ad7ec630/keys.db",
+      "keyed_tools": [
+       "git_commit"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "git"
+     }
+    ],
+    "kinds": {},
+    "server_outcomes": {
+     "executed": 3
+    },
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "listing_identical": 3,
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/direct": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/shadow": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "listing_identical": 3,
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/hang/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/kill_before/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/lost_exit/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/none/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/none/shadow": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "write/hang/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {
+     "no_answer_timeout": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "write/kill_before/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {
+     "not_executed": 3,
+     "surfaced_unknown": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "write/lost_exit/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {
+     "surfaced_unknown": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "write/none/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   }
+  },
+  "direct_listings": 1,
+  "driver_errors": 0,
+  "rows": 39,
+  "tools": [
+   "git_add",
+   "git_branch",
+   "git_checkout",
+   "git_commit",
+   "git_create_branch",
+   "git_diff",
+   "git_diff_staged",
+   "git_diff_unstaged",
+   "git_log",
+   "git_reset",
+   "git_show",
+   "git_status"
+  ],
+  "unsafe": 0
+ }
+}

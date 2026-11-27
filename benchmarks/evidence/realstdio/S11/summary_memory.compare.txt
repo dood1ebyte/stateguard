@@ -1,0 +1,4 @@
+MATCH memory      naive                baseline   new 0/156  ref(S10) 0/156  cells 13  unsafe 0
+MATCH memory      raw                  baseline   new 132/156  ref(S10) 132/156  cells 13  unsafe 36
+MATCH memory      sg                   stateguard new 84/156  ref(S10) 84/156  cells 13  unsafe 0
+MATCH memory      sg_keyed             stateguard new 24/156  ref(S10) 24/156  cells 13  unsafe 0

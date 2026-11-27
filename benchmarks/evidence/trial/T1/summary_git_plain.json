@@ -1,0 +1,44 @@
+[
+ {
+  "server": "git",
+  "run": "plain",
+  "exit": 0,
+  "shadow": {
+   "client": {
+    "ok": 9,
+    "tool_error": 1
+   },
+   "unknown": 0,
+   "would_retry": 1,
+   "denominators_hold": true,
+   "bundle_rebuilds": true,
+   "fault_fired": false
+  },
+  "auto": {
+   "client": {
+    "ok": 9,
+    "tool_error": 1
+   },
+   "unknown": 0,
+   "calls_resent": 1,
+   "denominators_hold": true,
+   "bundle_rebuilds": true,
+   "fault_fired": false
+  },
+  "changed_calls": [],
+  "truth": {
+   "shadow": {
+    "commits": [
+     "trial change",
+     "initial"
+    ]
+   },
+   "auto": {
+    "commits": [
+     "trial change",
+     "initial"
+    ]
+   }
+  }
+ }
+]

@@ -1,0 +1,28 @@
+{
+ "sse": {
+  "n": 60,
+  "failed": 0,
+  "rate": 0.0,
+  "ci95": [
+   0.0,
+   0.0602
+  ],
+  "relay_faults": {},
+  "relay_resolutions": {
+   "answered": 60
+  },
+  "answers": {
+   "result:None": 60
+  },
+  "duplicates": 0,
+  "false_success": 0,
+  "not_executed": 0,
+  "upstream_connections": 64,
+  "call_latency_s": {
+   "n": 60,
+   "mean": 0.091,
+   "median": 0.089,
+   "p95": 0.094
+  }
+ }
+}

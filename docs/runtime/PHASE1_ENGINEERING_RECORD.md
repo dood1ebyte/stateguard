@@ -1,0 +1,1140 @@
+# StateGuard Phase 1: engineering record
+
+The running record of Phase 1 (2026-11-06 to 11-18). Execution state lives in `NEXT.md`. The
+final account is `PHASE1_COMPLETION_REPORT.md`, written at the end of Session 5
+(held early on 2026-11-15), which went on to Session 6's agenda on the founder's instruction.
+
+**Every result here is controlled fault injection on named, pinned servers.** None is a
+production rate, and none supports a sub-1% claim. Each batch has a plan written before its
+first row, a `codestate*.json` (code commit, harness commit, versions) and its raw rows, all
+under `benchmarks/evidence/`.
+
+## Session 1 (Fri 2026-11-06, 09:00–14:00 IST)
+
+### Defects found and fixed
+
+| # | Defect | Effect | Fix | Evidence |
+|---|---|---|---|---|
+| D1 | The evidence and drivers behind M16–M20 lived outside the repository | lost with the container (2026-11-05); the results could not be reproduced | harness and evidence in the repository (`benchmarks/runtime/realhttp/`, `realstdio/`, `benchmarks/evidence/`) | B1 and S2 re-measure them |
+| D2 | CI's mcp 1.x environment installed an unpinned pydantic, with which mcp 1.9.4 does not import | its 13 injector tests would skip silently in CI | pydantic 2.11.7 pinned; the test errors when the interpreter is set but unusable | 15/15 pass |
+| D3 | The stdio relay resolved the server program before checking the executor scope's platform | on Python 3.13+ (in CI's matrix) a patched "win32" platform got "program not found"; a test failed, misdiagnosed in `NEXT.md` as sandbox-only | platform checked first | the test passes on 3.13 |
+| D4 | The HTTP relay reused idle upstream connections for httpx's default 5 s, the same as uvicorn's and Node's keep-alive | a call sent as the server closes the connection is lost unread and reported "unknown" | `--pool-idle-timeout`, default 1 s | S1: 13/60 failed before, 0/60 after |
+| D6 | `test_typescript_adapter.py` looked for the pinned servers only at the lost capture paths | 3 tests skipped silently | `STATEGUARD_FS_SERVER` / `STATEGUARD_MEM_SERVER`, else `/opt/sg-servers/` | 17/17 run and pass |
+| D5 | `run_batch.py`: the `node_modules` link made the worktree "not clean"; parallel parts raced to create it | later parts refused to run | the link is excluded; worktree creation is locked | B1 and S1 ran |
+
+### Finding: the relay never reuses a connection after an event-stream answer
+
+It stops reading at the answer, before the stream's end, so httpx discards the connection.
+Every event-stream call therefore pays for a new upstream connection. This is safe: there is no
+stale reuse. It is also a cost, not yet measured on its own.
+
+### B1: HTTP baseline versus StateGuard (`benchmarks/evidence/realhttp/B1`, code `237a332`)
+
+12 trials per cell, 16 cells (8 for server-everything). Fault-free controls run 60 more trials
+per fault-free cell. Strict scoring, Wilson 95%.
+
+| Server | raw | naive (blind resend) | sg (relay) | sg_keyed | best arm |
+|---|---|---|---|---|---|
+| notes (controlled, Python) | 168/168 (24 false failures) | 48/168, **48 duplicates** | 84/168 | 24/168 | sg_keyed_deadline **0/168 (≤ 2.2%)** |
+| tsnotes (controlled, TypeScript) | 168/168 (24 false failures) | 48/168, **48 duplicates** | 84/168 | 24/168 | sg_keyed_deadline **0/168 (≤ 2.2%)** |
+| server-everything 2026.8.31 (reads) | 72/84 | 0/84 | 12/84 | — | sg_deadline **0/84 (≤ 4.4%)** |
+
+- **Fault-free:** 0 failures in every arm (0/144 per arm on the notes servers, 0/72 on
+  everything).
+- **Unsafe outcomes:** none in any StateGuard arm (no duplicate, no false success, no false
+  failure), and none induced.
+- **Relay records:** all 2,103 `invocation` records written by the relay arms agree with ground
+  truth.
+- **Fault-free session latency** (mean, client process start included, 4 workers):
+  - notes: raw 0.862 s, sg 0.896 s, sg_keyed_deadline 0.894 s;
+  - tsnotes: raw 0.881 s, sg_keyed_deadline 0.910 s;
+  - everything: raw 0.889 s, sg_deadline 0.950 s.
+- **Reproduces the lost batches cell for cell** (iter8, iter9b, iter10).
+
+### S1: the stale pooled connection race (`benchmarks/evidence/realhttp/S1`, code `8de3735`)
+
+**Setup.**
+- One SDK session makes 60 unkeyed `add_note` calls.
+- Each call follows an idle gap of 4.8–5.1 s (seed 1, the same gaps in every arm).
+- A 40 ms one-way delay sits between the relay and the server (uvicorn, keep-alive 5 s).
+- The server answers JSON.
+
+| Arm | Failed | Relay's recorded faults | Notes not written | Upstream connections |
+|---|---|---|---|---|
+| old: `--pool-idle-timeout 5` (httpx's default, which the relay used before) | **13/60 (21.7%, CI 13.1–33.6%)** | 13 `transport_lost`, answered unknown | 13 | 32 |
+| new: `--pool-idle-timeout 1` (the new default) | **0/60 (≤ 6.0%)** | none | 0 | 63 |
+| old, keyed server | 0/60 | 16 `transport_lost`, all recovered by key | 0 | 41 |
+| old, event-stream answers | 0/60 | none | 0 | 64 |
+
+- **The failures were all safe:** each lost call was unwritten and reported "unknown", never a
+  success.
+- **The fix costs** a new upstream connection after about a second of idle.
+- **This is synthetic.** The gaps were chosen to sit near the timeout. How often real gaps land
+  there, and real network delay, are unmeasured.
+
+### Regression across CI's Python matrix (local; CI has not run on this branch since `ec339ab`)
+
+- **Python 3.13:** 6,355 passed, 3 skipped (the pinned-server tests, before D6).
+- **Python 3.11:** 6,355 passed, 3 skipped.
+- **Python 3.14:** 6,347 passed, 8 failed. All 8 were executor-scope tests whose
+  unprivileged child could not read an interpreter installed under `/root` (mode 700).
+  With 3.14 installed world-readable, as CI's setup-python is, the four files involved
+  pass 78/78, and the whole suite showed no failures.
+- **Not run:** Python 3.12 and macOS.
+- **TypeScript:** `tsc` clean, `npm test` 73/73.
+
+### Adversarial tests added
+
+- **Concurrent sessions across a mid-call server crash,** keyed and unkeyed.
+  - Setup: four calls in flight when the server dies, and four sessions that call after the
+    restart.
+  - Checks: no duplicate, no false success, no answer delivered to the wrong session, and the
+    late sessions recover on reopened sessions.
+  - Result: passed 3/3 consecutive runs of both variants.
+- **Pool idle timeout:** an idle connection is reused within the timeout and replaced after it.
+
+### S2: stdio baseline (`benchmarks/evidence/realstdio/S2`, code `6181cc2`)
+
+**Setup.**
+- Servers, both third-party and unmodified:
+  - mcp-server-sqlite 2025.4.25 (Python, mcp 1.9.4), keys via the injector;
+  - server-memory 2026.8.31 (TypeScript, SDK 1.32.2), keys via the preload.
+- Cells (13): reads and writes under four shim faults (kill_before, lost_exit, hang,
+  transient), writes under three crash points, and the fault-free cells.
+- 12 trials per cell; fault-free controls run 60 more trials per fault-free cell.
+- The relay arms declare the write `non_idempotent` and the read `read_only`. A first start
+  declared only the write; it is aborted and kept in `aborted/`.
+
+| Server | raw | naive | sg (relay) | sg_keyed |
+|---|---|---|---|---|
+| sqlite | 132/132 (36 false failures) | 48/132, **48 duplicate rows** | 96/132 | **48/132** |
+| memory | 132/132 (36 false failures) | 0/132 (the tool drops duplicates) | 96/132 | **48/132** |
+
+- **The sg_keyed residual, per server:**
+  - after_begin and after_effect, 24 in total: claimed and unrecorded, so in doubt by design;
+  - read/transient and write/transient, 24 in total: a JSON-RPC `-32603` is a "protocol
+    error", which the relay never retries.
+  - The plan expected 24/132; the 24 transient failures are the deviation.
+- **sg:** every declared read recovers except transient. Unkeyed writes are "unknown" and
+  never resent.
+- **Unsafe outcomes:** none in any StateGuard arm (0 duplicates, 0 false successes, 0 false
+  failures), and none induced.
+- **Fault-free:** 0/144 per arm per server.
+- **Relay records:** all 1,104 relay `invocation` records match ground truth.
+- **Session latency, fault-free mean** (on stdio this includes starting the relay process):
+  - sqlite: raw 1.307 s, sg 1.535 s, sg_keyed 1.701 s;
+  - memory: raw 1.129 s, sg 1.366 s, sg_keyed 1.453 s.
+
+### D7: retrying a server's internal error (-32603) where it is safe (`a8ed63d`)
+
+**The change.**
+- `classify_response` gives JSON-RPC `-32603` its own class, `SERVER` (`Observed.SERVER_ERROR`).
+- `decide_retry` treats it like a tool error: it is retried once for a keyed call, or for a tool
+  the operator declared `read_only` or `idempotent`.
+- Otherwise it is delivered as the server sent it, because an internal error may come after the
+  effect.
+- Every other JSON-RPC error is still never retried. Auth signals and an upstream relay's
+  execution state still take precedence.
+
+**Tests:** classification and precedence, the rule, the attempt limit, the property test, and
+the stdio relay end to end.
+
+**S3** (`benchmarks/evidence/realstdio/S3`, code `a8ed63d`): the transient cells, 12 trials,
+both servers.
+
+| Cell | S2 (before): sg / sg_keyed | S3 (after): sg / sg_keyed |
+|---|---|---|
+| read/transient | 12/12 / 12/12 | **0/12 / 0/12** |
+| write/transient | 12/12 / 12/12 | 12/12 (never resent: unkeyed non-idempotent) / **0/12** |
+
+- 0 unsafe outcomes; fault-free 0/24 per arm; all 192 relay records match ground truth.
+- **Combined stdio picture, per server.** Taking S2's other cells with S3's transient cells, the
+  keyed relay's residual is **24/132**: the after_begin and after_effect crash windows, in
+  doubt by design.
+  - These are two batches at different commits. The change affects only `-32603` handling, but
+    a single-batch confirmation remains open (queue).
+
+### S4: the stdio matrix in one batch (`benchmarks/evidence/realstdio/S4`, code `180fae6`)
+
+S2's matrix again, on one commit after D7. The results are per server, and sqlite and memory
+match cell for cell except the naive arm.
+
+| Arm | Faulted failures | Transport | Unsafe outcomes |
+|---|---|---|---|
+| raw | 132/132 | 96/96 | 36 false failures |
+| naive | sqlite 48/132, **48 duplicate rows**; memory 0/132 | — | sqlite: 48 duplicates |
+| sg | 84/132 | 48/96 | 0 |
+| **sg_keyed** | **24/132 (18.2%, CI 12.5–25.6%)** | **0/96 (≤ 3.9%)** | **0** |
+
+- The sg_keyed residual is only after_begin and after_effect, reported unknown or in doubt,
+  never success.
+- Fault-free 0/144 per arm; all 1,104 relay records match ground truth.
+- Session latency, fault-free mean (relay process start included):
+  - sqlite: raw 1.251 s, sg 1.453 s, sg_keyed 1.607 s;
+  - memory: raw 1.061 s, sg 1.280 s, sg_keyed 1.360 s.
+
+### D8: the same `-32603` rule in the HTTP relay
+
+**The gap.** The HTTP relay delivered a server's JSON-RPC error as it arrived.
+
+**The change.** On a `-32603` answer, the relay asks `decide_retry` with `SERVER_ERROR`, as the
+stdio relay does. A keyed call, a declared read or idempotent tool, or a request that changes
+nothing is sent once more; anything else gets the server's error. This applies whether the
+answer came as JSON or as an event stream. The incidence record names the fault
+`internal_error`, apart from HTTP 5xx (`server_error`).
+
+**Tests:**
+- a declared read is requested again, recorded `recovered`;
+- a keyed write is resent once and written once, as JSON and as an event stream;
+- an unkeyed write is delivered the error and never resent.
+
+The fault proxy gains TEST-ONLY `rpc_internal_error` and `rpc_internal_error_sse` modes.
+
+### B2: the HTTP matrix on the current code (`benchmarks/evidence/realhttp/B2`, code `1852365`)
+
+B1 repeated on the commit after D4 (pool idle timeout) and D8 (`-32603` retry where safe), as a
+regression check. Same servers, arms, 12 trials, 60-trial controls and 4 workers.
+
+- **Every failure, unsafe and unresolved count matches B1 cell for cell:**
+  - notes and tsnotes: raw 168/168, naive 48/168 (48 duplicates), sg 84/168, sg_keyed 24/168,
+    sg_keyed_deadline 0/168;
+  - everything: raw 72/84, naive 0/84, sg 12/84, sg_deadline 0/84.
+- Fault-free 0 in every arm; no unsafe outcome in a StateGuard arm; 0 relay records disagree
+  with ground truth.
+- As expected: none of B1's faults injects a `-32603`, and the fault proxy closes every
+  connection, so neither change could move a cell. This shows they broke nothing; S1 and the
+  D8 tests are their evidence.
+- **Observed gap in incidence records (B1 and B2 alike).** In the `sg` arm's `hang_after` cells
+  (no deadline), 15 rows in B1 and 18 in B2 have no `invocation` record. The client gives up
+  while the relay still waits on the hung server, and the run ends before the relay finishes
+  the request. A relay writes a record when a request finishes, so one stopped mid-request
+  writes none. The deadline arms always write one. The incidence denominator therefore misses
+  requests that were still open when a relay stopped.
+
+### P1: relay overhead, paired and uncontended (`benchmarks/evidence/{realhttp,realstdio}/P1`, code `1852365`)
+
+- **Setup:** one worker, with arms interleaved trial by trial, 20 trials per fault-free cell
+  (TRIAL_OFFSET=2000).
+- **Measure:** each arm's session latency minus raw's on the same trial
+  (`paired_overhead.py`): the mean with a normal 95% interval, client process start included.
+- **Failures:** 0 in every arm, and every trial paired.
+
+| Relay | Server | Arm | Mean overhead (95% CI) | raw session |
+|---|---|---|---|---|
+| HTTP | notes | sg | read +0.008 s (−0.018–0.035), write +0.025 s (0.001–0.049) | 0.81–0.83 s |
+| HTTP | notes | sg_keyed_deadline | read +0.006 s (−0.008–0.021), write +0.029 s (0.011–0.048) | |
+| HTTP | tsnotes | sg | read +0.066 s (0.021–0.110), write +0.022 s (−0.003–0.048) | 0.81–0.82 s |
+| HTTP | tsnotes | sg_keyed_deadline | read +0.026 s (−0.004–0.055), write +0.027 s (−0.002–0.056) | |
+| HTTP | everything | sg / sg_deadline | +0.031 s (0.012–0.050) / +0.037 s (0.017–0.058) | 0.80 s |
+| stdio | sqlite | sg | read +0.209 s, write +0.229 s | 1.21–1.22 s |
+| stdio | sqlite | sg_keyed | read +0.370 s, write +0.340 s | |
+| stdio | memory | sg | read +0.269 s, write +0.200 s | 0.97–0.99 s |
+| stdio | memory | sg_keyed | read +0.295 s, write +0.278 s | |
+
+(stdio intervals are ±0.03 to ±0.04 s; all are in `paired_overhead.txt`.)
+
+- **HTTP:** within the plan's 0.15 s everywhere; the largest cell is 0.066 s. The relay's own
+  start is outside the session and not counted.
+- **stdio:** these numbers include starting the relay process, and for sg_keyed the key store.
+  A host pays that once per server process, not per call. The per-call cost on a running stdio
+  relay is not separated here. These are synthetic, single-machine measurements, not
+  production latencies.
+
+### P2: the cost of event-stream answers (`benchmarks/evidence/realhttp/P2`, code `1852365`)
+
+**Setup:** one SDK session, 60 unkeyed calls with 0.2–0.3 s gaps, 40 ms one way, relay pool
+idle timeout 1 s.
+
+| Arm | Failures | Upstream connections | Call latency mean / p95 |
+|---|---|---|---|
+| json | 0/60 | 3 | 0.089 / 0.091 s |
+| sse | 0/60 | 64 | 0.091 / 0.094 s |
+
+- **Confirmed:** an event-stream answer costs one upstream connection per call (64 for 60,
+  against 3).
+- **Not measured: the network cost of those connections.**
+  - The delay proxy accepts and connects upstream on loopback at once and delays only data, so
+    no arm paid a TCP handshake round trip. The +2 ms is the local cost alone.
+  - The plan's expectation (about +80 ms) assumed a delayed handshake that this setup does not
+    have.
+  - On a real path each new connection costs at least one round trip before the request, and
+    TLS adds one or two more. That is an estimate, not a measurement.
+- Measuring it needs a delay in the kernel (netem), which this container lacks (no `tc` or
+  `ip`); queued.
+
+### Queue item 3: the crash-window residual is a floor without server cooperation
+
+A key claimed and never recorded (`after_begin`, `after_effect`) leaves an effect that carries no
+key. Nothing outside the server can tell whether it happened. A probe of the effect cannot
+attribute it to this call either: another actor, or a state that already held, looks the same
+(`RECONCILIATION_CONTRACT_V2.md`). Only these can close it:
+- a transactional effect, where the key's record commits with the effect;
+- a recovery check bound to the key, which the server or its operator supplies (the adapters'
+  `recover=`, K-6).
+
+Neither is available for an unmodified third-party server, so the residual stays reported in
+doubt, never re-run, and never counted as success.
+
+## Session 2 (Mon 2026-11-09, 09:00–14:00 IST)
+
+### Metrics and taxonomy, final (`7b3c4d2`)
+
+`docs/runtime/PHASE1_METRICS.md` is the definition the Completion Report uses. It covers:
+- the unit, and the three row outcomes: success, unresolved, failed and resolved;
+- the RFR, and the counts reported beside it: unsafe, induced, recovered, overhead and record
+  agreement;
+- the reporting rules (never pooled);
+- which `TASKMAP.md` categories the matrix covers: D, E, F and I, and A after D1;
+- the traffic-weighted rate that the sub-1% target needs.
+
+`benchmarks/runtime/phase1_table.py` is its implementation, and on B2 and S4 it reproduces
+every figure above.
+
+Two definitions changed; neither moves a number in B2 or S4, since neither has such a row:
+- "not sent" is a resolved failure;
+- a keyed server's `-32010`/`-32011` is unresolved.
+
+### D1: schema drift, category A (`benchmarks/evidence/realhttp/D1`, code `7b3c4d2`)
+
+**Setup:** `add_note` with its field named `Text`, not `text`, and no transport fault. 60
+trials per arm on notes and tsnotes.
+
+| Arm | notes | tsnotes |
+|---|---|---|
+| raw | 60/60 | 60/60 |
+| naive | 60/60 | 60/60 |
+| sg, sg_keyed, sg_keyed_deadline | **0/60 each (≤ 6.0%)** | **0/60 each (≤ 6.0%)** |
+
+- The server rejects the misnamed field. A blind resend repeats the rejection. The relay
+  repairs the field, and the note exists once.
+- 0 unsafe outcomes and 0 induced failures; all 360 relay records agree with ground truth.
+- This is a single drift (a case-only rename), so it covers category A for that case only.
+- **Harness note:** `driver.py` was edited (`a00a269`) at 03:38:35 UTC, while the tsnotes part
+  was running (started 03:37:02 UTC). The part's driver process had already loaded the
+  committed code, and `harness_dirty` is taken at the start, so the part ran the clean harness.
+  From now on, `benchmarks/runtime/` is not edited while a batch runs.
+
+### D9: incidence records missed requests a relay never finished (`a00a269`)
+
+**The gap (B1, B2):**
+- A relay wrote an `invocation` record when a request finished.
+- A relay stopped or killed while a request was open left that request out of the incidence
+  denominator.
+- A shutdown hook would not close the gap: the benchmark driver kills relays with SIGKILL,
+  and a production relay can die the same way.
+
+**The change:**
+- Each request writes an `invocation_open` line as it arrives (no arguments), in both relays.
+- Its record carries the same random `inv` token.
+- `incidence.read_records` turns an open line with no record into an `unfinished` record,
+  which is unresolved.
+- The drivers read records the same way, so the record check sees these requests.
+- A log read while its relay runs shows requests still in flight as `unfinished`.
+
+**Tests:**
+- pairing works across logs and in any order;
+- a relay SIGKILLed during a hung call reads `unfinished`, and the call did run;
+- a stdio call in flight reads `unfinished`, then `answered` with the same token.
+
+### I1: every relayed request is counted (`benchmarks/evidence/realhttp/I1`, code `a00a269`)
+
+**Setup:** notes and tsnotes; `hang_after` and fault-free cells; arms raw, sg and sg_keyed; 12
+trials.
+
+- **Records:** 96 of 96 relay rows per server have a record. Before D9, B1 and B2 missed 15 and
+  18.
+- **The hang rows** the relay never finished read `unfinished`: sg 14 + 14, sg_keyed 22 + 20.
+  The rest read `unknown`.
+- **0 record mismatches.** The failure rates equal B2's cells: the change touches records
+  only, never traffic.
+
+### What still fails, by configuration (B2, S4, `phase1_table.py --by-category`)
+
+- **Unkeyed relay (`sg`).** The residual is writes left `unknown` after a fault that may have
+  let them run: `kill_before`, `http_503_before`, `lost_response`, `http_502_after`,
+  `cut_stream`, and stdio `lost_exit`, `hang` and `transient`. Hangs also fail without a
+  deadline. Resending an unkeyed write is unsafe, so this is the floor without keys.
+- **Keyed relay (`sg_keyed`):**
+  - HTTP: `hang_after` only, 24/24 per server. With `--call-deadline` it is 0 (B2
+    `sg_keyed_deadline`).
+  - stdio: the two crash windows only, a floor without server cooperation.
+- **The deadline is opt-in** because it once turned slow successes into failures (M5, 8 Z).
+  - For a keyed call, the cause sits in `_race`. When the resend is answered "still running"
+    (`-32011`), the relay waits one more deadline for the original, then delivers that
+    unresolved answer.
+  - So a keyed call slower than about two deadlines ends unresolved. Waiting on the original
+    while the server reports "still running" would remove that path.
+  - That would make a default deadline for recoverable requests (declared reads, keyed calls)
+    worth evaluating. It is queued, not started: it is recovery engineering (Session 3), and a
+    default is a product decision.
+
+### P3: per-call overhead of a running stdio relay (`benchmarks/evidence/realstdio/P3`, code `0cee55c`)
+
+**Setup:** one SDK session per arm and round, 20 rounds × 50 calls alternating read and write,
+no fault, on an idle machine. The difference is taken from raw on the same (round, call, op),
+with a normal 95% interval. Warm calls only; the first read and write of a session are in the
+summary.
+
+| Server | Op | raw mean | sg vs raw | sg_keyed vs raw |
+|---|---|---|---|---|
+| sqlite | read | 2.01 ms | +0.68 ms (0.64–0.72) | +0.75 ms (0.71–0.80) |
+| sqlite | write | 3.78 ms | +0.87 ms (0.75–0.98) | **+6.31 ms (6.15–6.47)** |
+| memory | read | 2.01 ms | +0.94 ms (0.90–0.99) | +1.22 ms (1.15–1.28) |
+| memory | write | 3.10 ms | +0.89 ms (0.66–1.11) | **+6.86 ms (6.57–7.15)** |
+
+- 6,000 calls: 0 failed, and 0 session errors.
+- **The relay costs under 1 ms per call.** P1's +0.20 to +0.37 s per session is almost all
+  the relay's process start, paid once per server process.
+- **A keyed write costs about 6–7 ms more:** the key store commits before and after the
+  effect. A keyed read is not keyed and costs the relay's share only.
+- These are synthetic, single-machine measurements with sub-10 ms tools. They are not
+  production latencies, and a slower tool hides the same absolute cost.
+
+### D10: a slow keyed call under a deadline ended unresolved (HTTP relay)
+
+**Reproduced** (`test_a_keyed_call_still_running_past_its_deadlines_is_waited_for`):
+- a keyed `add_note` that takes 7 s, with `--call-deadline 0.5`;
+- the relay resends it at 0.5 s;
+- the keyed server holds that duplicate for up to 5 s (`wait_seconds`), then answers "still
+  running" (`-32011`);
+- the relay waited one more deadline and delivered `-32011` to the client, while the original
+  went on to succeed.
+- This is a StateGuard-induced failure. It hits any keyed call slower than about deadline +
+  5 s + deadline.
+
+**The fix (HTTP relay, `_race`):**
+- After a "still running" answer, the relay waits for the original, however many deadlines
+  that takes. Each attempt is still bounded by `--upstream-timeout`.
+- The server says the call is executing, so its answer is coming.
+- A resend answered "in doubt" still waits one deadline only.
+- The test passes, with the note written once. The HTTP relay and idempotency tests pass
+  (77).
+
+**The stdio relay is different by contract (checked in Session 2, after the founder allowed
+work to continue inside the window).**
+- The stdio relay's `--call-deadline` is documented as "Answer 'outcome unknown' to a request
+  unanswered after SECONDS". It is off by default because "a long-running tool is not a
+  failure".
+- So there the deadline is a promised answer time: a recoverable call is resent once, and if
+  neither attempt answers by the second deadline, the client is told "unknown".
+- A stdio test showed this with a keyed call of 0.45 s and a 0.1 s deadline. The scripted
+  server handles one request at a time, the resend hit its own deadline, and the retry budget
+  (2 attempts) was spent. The client was told "unknown", and the original's success arrived
+  and was dropped as late.
+- That is the documented contract, not a bug. With the real keyed server's 5 s duplicate hold,
+  the resend also meets its own deadline first, so stdio's "still running" path needs a
+  deadline over 5 s.
+- A change was tried and discarded uncommitted: waiting up to 300 s on "still running" would
+  have silently broken the stated bound.
+- **Finding: the two relays' deadlines mean different things.**
+  - HTTP: when to resend; the first answer wins.
+  - stdio: the latest time an answer is given.
+  - Whether to unify them is a product decision for the founder. The trade is a latency bound
+    against induced failures on slow calls.
+
+### E1: D10 before and after (`benchmarks/evidence/realhttp/E1`)
+
+**Setup.**
+- Notes server; `write/slow` (no fault: `add_note` takes 10 s; deadline 2 s; the client waits
+  18 s); 12 trials.
+- Part `old` runs code `1852365`; part `new` runs `68b5594` (D10).
+- The `write/hang_after` check ran as its own part, `new_hang`, rather than inside `new` as
+  the plan said, so `old` and `new` hold the same cells.
+
+| Part (code) | raw | sg_keyed | sg_keyed_deadline |
+|---|---|---|---|
+| old (`1852365`) | 0/12 | 0/12 | **12/12 failed, all `-32011`; 12 induced** |
+| new (`68b5594`) | 0/12 | 0/12 | **0/12** |
+| new_hang (`68b5594`), `write/hang_after` | — | — | 0/12 |
+
+- **Before D10, a deadline turned every 10 s keyed success into an unresolved answer.** After
+  D10, none.
+- In the old part, ground truth reads "not executed" only because each run ended when the
+  client got its answer (9.9 s), before the 10 s write finished. The call would have run.
+- Recovery from a hang is unchanged. Every relay record agrees with ground truth.
+- **What it means for a default deadline (queue item 2).**
+  - On the HTTP relay, the known way a deadline turns a slow keyed success into a failure is
+    gone.
+  - Declared reads are re-requested, never cut short. Unkeyed writes are never cut short (an
+    existing test).
+  - Still unmeasured: a slow read's double load on the server, slow calls through the
+    TypeScript preload, and the stdio relay, which still has the one-deadline rule.
+  - A default remains the founder's decision.
+
+### E2 and E3: more evidence for a default deadline (HTTP relay, after D10)
+
+Work continued inside the Session 2 window, with the founder's go-ahead.
+
+| Batch (code) | Cell | raw | sg | sg_keyed | sg_deadline / sg_keyed_deadline |
+|---|---|---|---|---|---|
+| E2 (`ece85e7`), tsnotes, keyed by the TypeScript preload | `write/slow` (10 s) | 0/12 | — | 0/12 | **0/12** |
+| E3 (`72fc67b`), notes | `read/slow` (10 s) | 0/12 | 0/12 | — | **0/12** |
+
+- **E2:** with the TypeScript keyed server too, a deadline turns no slow keyed success into a
+  failure. The note is written once.
+- **E3:** a slow declared read is re-requested at the deadline and never cut short.
+  - **Cost:** 2 reads reach the server per call, against 1 without a deadline.
+  - **Incidence caveat:** its record reads `recovered` with fault `deadline`, though nothing
+    failed. Under a deadline, a call slower than the deadline counts as a fault in the
+    incidence rates.
+- **Where a default deadline stands (HTTP), now measured:**
+  - keyed writes (Python and TypeScript keyed servers) and declared reads are never cut short
+    by it;
+  - it recovers `hang_after` (B2, E1);
+  - unkeyed writes are never cut short (an existing test).
+- **Its costs:** a second request to the server for each call slower than the deadline, and
+  incidence records that count slow calls as deadline faults.
+- **Still open:** the stdio relay, whose deadline means something else (D10), and the choice of
+  value. The default remains the founder's decision.
+
+## Session 3 (Wed 2026-11-11, 09:00–14:00 IST): recovery engineering
+
+### D11: the crash window of an operator-declared idempotent tool (`c4de122`)
+
+**The residual:**
+- S4's keyed residual was only the two crash windows: the server died between claiming the key
+  and recording it (`after_begin`, `after_effect`).
+- An unmodified server's effect carries no key, so no recovery check can find it, and the key
+  stays in doubt.
+- Queue item 3 (Session 1) concluded that this is a floor without server cooperation.
+
+**The change:**
+- **Some tools need no check:** a tool whose repeat is harmless (adding an item to a set).
+  For those, the next server process can run the abandoned attempt again.
+- **`Recovery.rerun()` (Python and TypeScript):** cannot tell, and need not; the operator
+  declared the tool idempotent. The executor runs it, once more at most.
+- **`STATEGUARD_IDEMPOTENT_TOOLS`** gives declared keyed tools that recovery, in the Python
+  injector and the TypeScript preload.
+- **It needs `STATEGUARD_IDEMPOTENCY_EXCLUSIVE=1`**, because only an exclusive store makes a
+  dead process's key abandoned rather than in doubt. It is refused without it, and for an
+  unkeyed tool.
+- **It is not exactly-once:** the attempt may have taken effect, and the tool then runs twice.
+  The state is right only if the declaration is true. The declaration is the evidence, as with
+  any effect declaration.
+
+**Tests:**
+- the pinned memory server through the stdio relay, crashed `after_begin` and `after_effect`:
+  declared, the call is `executed` and the observation exists once; undeclared, `unknown`;
+- the mcp 2.x injector with a set-like tool: run again, then replayed;
+- an undeclared tool under the same store stays in doubt;
+- both refusals;
+- the library's recovery verdicts.
+
+### S5: crash windows of a declared idempotent tool (`benchmarks/evidence/realstdio/S5`, code `bc03223`)
+
+**Setup:** memory server, every write cell (fault-free, 4 transport faults, 3 crash points), 12
+trials.
+
+| Arm | transport | crash | faulted, all |
+|---|---|---|---|
+| sg_keyed | 0/48 | **24/36** (`after_begin`, `after_effect`: unknown) | 24/84 (28.6%) |
+| **sg_keyed_idempotent** | 0/48 | **0/36** | **0/84 (≤ 4.4%)** |
+
+- **Both crash windows now succeed:** 24 rows answered `executed`, with the marker in the
+  memory file exactly once. `after_record` still replays.
+- Fault-free 0; 0 unsafe outcomes, 0 duplicates; all 192 relay records agree with ground truth.
+- **On the memory server, with the tool declared idempotent, the keyed relay's residual on this
+  matrix is 0/84.** That holds for this synthetic matrix and this tool only.
+- sqlite's `INSERT` is not idempotent, so its crash windows stay in doubt (S4: 24/132 per
+  server). A non-idempotent tool still needs a key-bound check or a transactional effect.
+
+### C1: server crashes under the HTTP relay (`benchmarks/evidence/realhttp/C1`)
+
+**New harness cells** (`9692d4d`): `write/after_begin`, `after_effect` and `after_record` on
+notes and tsnotes.
+- The server SIGKILLs itself at the point inside `add_note`: keyed arms through the key's two
+  phases, unkeyed arms around the unmodified handler. A supervisor restarts it on the same
+  port.
+- The cells bypass the fault proxy. A dry run showed that a proxy in front of a dead server
+  turns "refused" into "lost", which distorted the relay's recovery.
+- The HTTP driver now scores a keyed server's `-32010`/`-32011` as unresolved, not as a false
+  failure, as the stdio driver already did. No recorded HTTP row is affected.
+
+| Arm, per server (12 trials per cell) | after_begin | after_effect | after_record, before D12 (`9692d4d`) | after_record, D12 (`51f6fdf`) |
+|---|---|---|---|---|
+| raw, naive | 12/12 | 12/12 | 12/12 | 12/12 |
+| sg (unkeyed) | 12/12 unknown | 12/12 unknown | 12/12 unknown | 12/12 unknown |
+| sg_keyed, sg_keyed_deadline | 12/12 unresolved (in doubt, a few unknown) | 12/12 unresolved (in doubt, a few unknown) | **3/12 (notes), 2/12 (tsnotes)** | **0/12 both** |
+
+- **No StateGuard arm ever duplicated a note or misreported one:** 0 unsafe outcomes across
+  360 StateGuard rows. Every relay record agrees with ground truth.
+- **The floor:** `after_begin` and `after_effect` stay unresolved for this non-idempotent tool,
+  as on stdio. D11 does not apply to it.
+
+### D12: back off before a resend after a broken connection (`51f6fdf`)
+
+- **The failure (C1, `after_record`):** the relay resent the keyed call at once, and the
+  connection reached the server that was still going down. It was accepted and reset, which
+  spent the second and last keyed attempt before the restarted server could replay.
+- **The change:** the relay waits `--resend-backoff` (default 0.2 s) before a resend after a
+  transport loss. Only the timing changes: what may be resent is decided as before.
+- **Result:** keyed `after_record` went from 5 of 24 failing to 0 of 24 (C1 `*_d12`). The HTTP
+  relay, idempotency and TypeScript adapter tests pass (98).
+- **Cost:** a recovery after a dropped connection takes 0.2 s longer.
+
+### B3: the HTTP matrix on the Session 2–3 code (`benchmarks/evidence/realhttp/B3`, code `51f6fdf`)
+
+**Setup:** B2 repeated after D9 (open lines, `unfinished` records), D10 (waiting on "still
+running") and D12 (resend backoff). Same servers, arms, 12 trials, 60-trial controls and 4
+workers.
+
+- **Every failure, unsafe, unresolved and induced count matches B2 cell for cell**, on all six
+  parts:
+  - notes and tsnotes: raw 168/168, naive 48/168 (48 duplicates), sg 84/168, sg_keyed 24/168,
+    sg_keyed_deadline 0/168;
+  - everything: raw 72/84, naive 0/84, sg 12/84, sg_deadline 0/84;
+  - fault-free 0.
+- **Every relay row has a record** (D9 at full scale): 192/192 per arm on notes and tsnotes,
+  where B2 had 172–177. All 2,184 records agree with ground truth.
+- **None of the three changes moved a cell of this matrix.** D10 and D12 act on cells it does
+  not have: a slow tool, a server crash. E1–E3 and C1 are their evidence.
+
+## Session 4 (Fri 2026-11-13, 09:00–14:00 IST): hardening, and the two deadline decisions
+
+### Decisions (delegated by the founder on 2026-11-11, recorded in `NEXT.md`)
+
+1. **One meaning for `--call-deadline` in both relays: when to try again, never a point at
+   which a call still running is answered as failed.**
+   - An induced failure is the one outcome Phase 1 forbids.
+   - stdio's old default answered "unknown" on every slow success.
+2. **The HTTP relay gets a default `--call-deadline` of 30 s, for recoverable requests only.**
+
+Both are **behaviour changes** to the defaults.
+
+### Decision 2: the HTTP default deadline (`4c2256d`)
+
+- **The default:** with `--retry auto`, a keyed call, a declared read or a request that changes
+  nothing, still unanswered after 30 s, is sent once more. The first attempt stays open and the
+  first answer that settles it wins. `--call-deadline 0` turns it off.
+- **Records:** when the original answers first, the call was slow, not faulted. Its record says
+  `answered`, with `deadline_resends: 1`, not a `deadline` fault (this fixes the E3 incidence
+  caveat).
+- **Harness:** benchmark arms without `_deadline` pass `--call-deadline 0`, so B1–B3 stay
+  comparable.
+
+**E4** (`benchmarks/evidence/realhttp/E4`, code `570d262`; notes, 12 trials):
+
+| Cell | Arm | Result |
+|---|---|---|
+| `write/hang_after` | sg_keyed_default (no flag) | **0/12**, replayed at 30.8–31.0 s, written once |
+| `write/hang_after` | sg_keyed (`--call-deadline 0`) | 12/12 unresolved |
+| `write/slow` (10 s) | sg_keyed_default | 0/12, answered, no resend, no fault recorded |
+
+0 record mismatches.
+
+### Decision 1: the stdio deadline is when to try again (`2d8a676`)
+
+- **`--deadline-scope recoverable` is now the default.** Only calls the relay could resend
+  (declared reads, honoured keys) are resent at `--call-deadline`.
+  - The resend is never cut short, and the first answer of either attempt is the client's.
+  - A call past its deadline is answered "unknown" only once its server is replaced or gone
+    for good, or after `--answer-timeout` (new, default 300 s).
+  - A keyed resend answered "still running" waits for the original.
+  - Calls the relay cannot resend wait for their answer.
+- **`--deadline-scope all` keeps the old hard bound.**
+- **Tests:**
+  - a keyed call slower than two deadlines is answered and executed once, and is "unknown"
+    under `all`;
+  - an unkeyed slow call is never cut short;
+  - a hung keyed call still running is "unknown" after the answer timeout.
+  - The stdio half of D10 (2026-11-09) is resolved this way.
+
+### S6: the stdio matrix on the new default, and slow answers (`benchmarks/evidence/realstdio/S6`, code `ba310ac`)
+
+**Matrix** (every default cell, 12 trials): identical to S4 per server. sg 84/132, sg_keyed
+24/132 (the two crash windows), fault-free 0.
+
+**Slow answers** (the shim delays the answer 5 s, no fault; deadline 2 s; 12 trials):
+
+| Arm, per server | read/slow | write/slow |
+|---|---|---|
+| raw | 0/12 | 0/12 |
+| **sg** (new default) | 0/12 | **0/12** |
+| sg_bound (`--deadline-scope all`, the old default) | 0/12 | **12/12 unknown, 12 induced vs raw** |
+| sg_keyed, sg_keyed_bound | 0/12 | 0/12 (replayed) |
+
+- **The old default turned every slow unkeyed write into "unknown", although the write
+  succeeded.** That is an induced failure, and the new default removes it.
+- 0 unsafe outcomes; all 816 relay records agree with ground truth.
+
+### Regression across CI's Python matrix, on the Session 4 code (local; `8469759`)
+
+| Python | Result |
+|---|---|
+| 3.11.18 | 6,589 passed, 0 failed, 0 skipped |
+| 3.12.3 (first Phase 1 run on 3.12) | 6,589 passed, 0 failed, 0 skipped |
+| 3.14.6 (installed world-readable, as CI's setup-python is) | 6,589 passed, 0 failed, 0 skipped |
+
+3.13 runs in the session's final suite. These runs are local, not CI's: CI has not run on this
+branch since `ec339ab`. macOS is not run.
+
+### S7: the stdio matrix on a third pinned server, server-filesystem (`benchmarks/evidence/realstdio/S7`, code `8469759`)
+
+**Setup:** `@modelcontextprotocol/server-filesystem` 2026.8.31 (TypeScript, keyed by the
+preload); every default cell, 12 trials.
+- read: `read_text_file`, declared read_only;
+- write: `move_file`, declared non_idempotent;
+- ground truth: the destination exists.
+
+| Arm | transport | crash | faulted | unsafe |
+|---|---|---|---|---|
+| raw | 96/96 | 36/36 | 132/132 | 36 false failures |
+| naive (blind resend) | 24/96 | 24/36 | 48/132 | **48 false failures** |
+| sg | 48/96 | 36/36 | 84/132 (63.6%) | 0 |
+| **sg_keyed** | **0/96 (≤ 3.9%)** | 24/36 | **24/132 (18.2%)** | **0** |
+
+- **StateGuard's residual is the same as on sqlite and memory:** sg 84/132; sg_keyed 24/132,
+  only the two crash windows, unresolved.
+- **The blind resend fails differently:** a second `move_file` finds its source gone. Where
+  sqlite showed 48 duplicates, the filesystem shows 48 false failures: the client is told an
+  error for a move that happened. Both are unsafe outcomes; StateGuard arms had neither.
+- Fault-free 0; all 312 relay records agree with ground truth.
+- `move_file` is not idempotent, so D11 does not apply. Its crash windows stay in doubt.
+
+### B4: the deadline arms on the full HTTP matrix after decision 2 (`benchmarks/evidence/realhttp/B4`, code `f5af9a8`)
+
+**Setup:** decision 2 restructured the deadline race (answers tagged by attempt). B4 re-runs
+the arms that exercise it, on every default cell, 12 trials.
+
+- **B3's counts, cell for cell:**
+  - sg_keyed_deadline 0/168 on notes and on tsnotes (Wilson upper bound 2.2%);
+  - sg_deadline 0/84 on everything (≤ 4.4%);
+  - fault-free 0; 0 unsafe.
+- **Records** (480, 0 mismatches):
+  - the 60 `hang_after` rows read `recovered` with fault `deadline` and one deadline resend
+    (the resend won);
+  - the other faults read `recovered` with their own fault;
+  - fault-free rows read `answered`.
+
+## Extra session (Fri 2026-11-13, 17:15–22:15 IST; added by the founder)
+
+### A1: adversarial cells for categories J, H, C and B (`benchmarks/evidence/realstdio/A1`, code `c255b44`)
+
+**New shim modes** (the call always runs):
+- `duplicate` (J): the answer is sent twice;
+- `garbage` and `truncated` (H): the answer is replaced by non-JSON, or cut off half-way;
+- `nonconformant` (C): the answer says `"jsonrpc": "1.0"`;
+- `stale_listing` (B): the first two listings show the tool's first property capitalised, a
+  schema the server no longer serves.
+
+**Setup:** sqlite and memory, 12 trials per cell.
+
+| Category, fault | raw | sg | sg_keyed | sg_norefresh |
+|---|---|---|---|---|
+| J duplicate (read and write) | 0/24 | 0/24 | 0/24 | — |
+| H garbage (read and write) | 24/24 | 12/24 (unkeyed writes) | **0/24** | — |
+| H truncated (read and write) | 24/24 | 12/24 (unkeyed writes) | **0/24** | — |
+| C nonconformant (read and write) | 24/24 | **24/24** | **24/24** | — |
+| B stale_listing (write) | 0/12 | 0/12 | 0/12 | **12/12** (sqlite: 12 false successes) |
+
+(per server; the two servers match except the B false successes, which are sqlite's)
+
+- **J:** a duplicate response is harmless here. The relay drops the second.
+- **H:** the relay recovers what it can resend: reads are re-read at the deadline and keyed
+  writes replayed. An unkeyed write stays unresolved, correctly: it cannot be resent.
+- **C, a defect (D13):** the relay delivered the non-conformant answer as the request's answer.
+  The client rejected it, and nothing was resent. It also recorded those calls `answered`:
+  96 of the 120 record mismatches.
+- **B:** the default relay refreshes its listing before acting, so 0 failures. With
+  `--no-listing-refresh`, it "repaired" correct calls into the stale schema: 12/12 failed on
+  both servers. On sqlite they were answered success without writing (12 false successes);
+  memory answered tool errors. The help of both relays now states this risk.
+- **The other 24 record mismatches:**
+  - 12 are tool errors, which incidence counts as answers by definition (`PHASE1_METRICS.md`);
+  - 12 are sqlite's false successes, which no relay can see.
+
+### D13: a non-conformant answer to a call that can be resent is resent (`87f43d4`)
+
+- `jsonrpc.is_conformant_response` is the shared check: `"jsonrpc": "2.0"`, a valid id, and
+  exactly one of a result or a well-formed error.
+- **Both relays:** a non-conformant answer to a call the relay could resend (a declared read,
+  an honoured key, a request that changes nothing) counts as an unknown outcome and is resent.
+  On stdio it is resent at once: the server is up.
+- **Anything else** is passed through as it came, never rewritten, and logged category C.
+- **Incidence:** a client sent a non-conformant answer has resolution `nonconformant`
+  (unresolved).
+- **Tests:** in both relays, a keyed call answered non-conformantly is resent and executed once;
+  an unkeyed one passes through and is recorded `nonconformant`. Unit tests cover the check.
+
+### P2b: blocked by the kernel
+
+- iproute2 installs, and network namespaces work. But this VM's kernel has no `sch_netem`
+  ("Specified qdisc kind is unknown"), so no delay in the kernel is possible here.
+- A delay added by a proxy at connection setup would only restate the delay chosen. P2's
+  measured fact stands: one upstream connection per event-stream answer.
+- **The reuse optimisation** (reading a stream to its end so the connection can be reused) is
+  deferred to Phase 2. It saves at most one handshake per call (more with TLS), mainly for
+  remote servers. It is unmeasured here and is a stated limitation.
+
+### A1 on D13 (`benchmarks/evidence/realstdio/A1`, parts `adv_*_d13`, code `87f43d4`)
+
+| C nonconformant, per server | raw | sg | sg_keyed |
+|---|---|---|---|
+| before D13 (`c255b44`) | 24/24 | 24/24 | 24/24 |
+| **D13 (`87f43d4`)** | 24/24 | **12/24** (only unkeyed writes, passed through) | **0/24** |
+
+- Reads are re-read and keyed writes replayed. An unkeyed write is passed through as it came,
+  and recorded `nonconformant`.
+- J, H and B: unchanged.
+- **All 432 relay records agree with ground truth;** before D13, 96 disagreed.
+
+### The extra session resumed (Sat 2026-11-14, 20:22 IST; the founder's "Try again")
+
+**Why it resumed:** the extra session's turn ended at about 17:53 IST on Friday without
+closing out. The A2 harness was left uncommitted and `NEXT.md` was not updated.
+
+**What happened on resuming:** the harness was committed (`db99799`), and the session resumed
+with the time it had lost.
+
+### A2: adversarial cells J, H, C and B under the HTTP relay (`benchmarks/evidence/realhttp/A2`, code `69079ed`)
+
+**Setup:** new fault proxy modes alter the server's answer to a call that ran:
+- `dup_answer` (J), `garbage_answer` and `truncated_answer` (H), `nonconformant_answer` (C);
+- `stale_listing` (B): the client's first listing is stale. The HTTP relay does not list on
+  its own, so its refresh gets the true one.
+
+notes and tsnotes, 12 trials.
+
+| Category, per server | raw | sg | sg_keyed | sg_norefresh |
+|---|---|---|---|---|
+| J dup_answer | 0/24 | 0/24 | 0/24 | — |
+| H garbage_answer, truncated_answer | 24/24 each | 12/24 each (unkeyed writes unknown) | **0/24 each** | — |
+| C nonconformant_answer | 24/24 | **12/24, 12 false failures** | **0/24** | — |
+| B stale_listing | 0/12 | 0/12 | 0/12 | 12/12 (tool errors) |
+
+- **raw's write failures under H and C are false failures:** the client's SDK turns the
+  altered answer into a parse error (`-32700`) for a write that ran.
+- **C under sg is a defect (D14):** the relay passed through the non-conformant answer to an
+  unkeyed write, and the SDK turned it into the same false failure. That is an unsafe outcome
+  in a StateGuard arm.
+- **A finding from the dry runs:** with the first *two* listings stale, the second was the
+  HTTP relay's own refresh. The server's fresh listing then disagreed with what it accepts, and
+  the relay "repaired" correct calls into errors that raw delivered successfully. Schema repair
+  trusts the server's listing; a server whose listing is wrong defeats it. This is a stated
+  limitation, not a batch cell.
+- **Records:** the 24 mismatches are the tool errors with refresh off, by definition.
+
+### D14: a non-conformant answer that cannot be resent is answered unknown (`fccee7c`)
+
+- **Both relays:** a non-conformant answer to a call the relay cannot resend is replaced by
+  "outcome unknown" (reason `nonconformant`), not passed through. The client is never told
+  "failure" for a call that may have run.
+- Recoverable calls are resent as in D13. Shadow mode still passes the answer through.
+- **On stdio** the A1 counts do not change (the client got no answer before; now it is told
+  "unknown" at once). Both are unresolved.
+- **Tests:** in both relays, an unkeyed call answered non-conformantly is answered "unknown"
+  and recorded `unknown` with fault `nonconformant`; shadow mode passes through.
+
+**A2 on D14** (parts `c_*_d14`, code `fccee7c`), `{read,write}/nonconformant_answer`, per server:
+- sg 12/24, all "unknown", **0 false failures** (12 before D14);
+- sg_keyed 0/24;
+- raw 24/24 (12 false failures; the client's SDK);
+- 96 relay records, 0 mismatches.
+
+### P4: overhead on the final code, paired and uncontended (`benchmarks/evidence/{realhttp,realstdio}/P4`, code `16e26b9`)
+
+- **HTTP relay, per session against raw** (20 paired trials per cell, client start included):
+  - +0.009 to +0.058 s (sg and sg_keyed_default) on notes and tsnotes, and +0.021 s on
+    everything;
+  - within P1's range (+0.006 to +0.066 s) and the 0.15 s bound, with the 30 s default
+    deadline on;
+  - 0 failures.
+- **stdio relay, per warm call** (20 rounds × 50 calls; 6,000 calls, 0 failed):
+  - sg +0.51 to +0.95 ms;
+  - sg_keyed reads +0.63 to +1.18 ms; **sg_keyed writes +4.53 ms (sqlite) and +4.99 ms
+    (memory)**.
+- **The keyed writes are lower than P3's +6.3 to +6.9 ms, although the keyed path did not
+  change.** This is run-to-run variance of the machine (another day, another VM boot), not an
+  improvement to claim. The cost of a keyed write is about 4.5–7 ms on this machine.
+
+### Regression on the final code, Python 3.11–3.14 (local; code `16e26b9`, test fixes `47fa17e`)
+
+| Python | Full suite | After the test fixes (`test_http_proxy.py`) |
+|---|---|---|
+| 3.13.18 | 6,608 passed | — |
+| 3.11.18 | 6,607 passed, **1 failed** | 63/63 |
+| 3.12.3 | 6,607 passed, **1 failed** | 63/63 |
+| 3.14.6 | 6,608 passed | 63/63 |
+
+Ruff, format, mypy and TypeScript (74/74) are clean. Both failures are intermittent HTTP tests;
+neither is a relay defect.
+
+**`test_concurrent_sessions_across_a_server_crash` (3.11): a race in the test.**
+- The test killed the server once the early calls reached it, without waiting for the late
+  sessions' handshake, although its docstring says they had finished it.
+- One late session's own `tools/list` was still in flight. The relay resent it once after the
+  backoff, the server was still down (and the test's fault proxy turns "refused" into "lost"),
+  so the client got "unknown" before it made its call.
+- The relay's records are consistent: 3 late calls recovered, the fourth never sent, no
+  duplicate.
+- The test now waits for every late session's handshake before the kill (5/5 on 3.11 after the
+  fix).
+
+**`test_an_internal_error_on_a_declared_read_is_requested_again` (3.12): cause not proven.**
+- The read was answered correctly, but no call passed through the test's fault proxy. That is
+  consistent with the proxy's port being taken by another process before the proxy bound it.
+- It passed 10/10 in isolation, and the failing run's files were rotated away before they
+  could be read.
+- The rig now checks that the process it spawned is the one listening on each port, so this
+  becomes a clear error.
+
+### A harness race found in B5: two trials can be handed the same port
+
+- **What happened:** in B5 (tsnotes), one fault-free `read/none` row of the `naive` arm (no
+  StateGuard in the path) failed. Its TypeScript server exited with `EADDRINUSE`: another
+  parallel trial had bound the port that `free_port()` chose, and the trial's requests reached
+  the other trial's server.
+- **The cause:** `free_port()` picks a port that is free when checked, and `wait_port()` only
+  checks that *something* listens on it.
+- **This can only cause a failure, never a false success:** a trial on the wrong server finds
+  its own seed or note missing, so it fails, visibly. Every earlier batch's fault-free cells
+  are 0, so no earlier result was hit this way.
+- **The row stays in the data**, explained here.
+- **Fix (`8568fa3`, after S8; `benchmarks/runtime/` is not edited while a batch runs):** each
+  batch takes ports from one shared, locked sequence starting at a random offset, so two
+  parallel trials are never handed the same port. The same race is the likely cause of the
+  3.12 test failure above.
+- **Scan of every failing-run archive** (`benchmarks/evidence/realhttp/*/failing*.tar.gz`,
+  every server log searched for `EADDRINUSE`): the only hit is B5's
+  `tsnotes-read-none-naive-11`. No earlier batch, and no StateGuard row anywhere, was hit.
+
+### B5: the HTTP matrix on the final Phase 1 code (`benchmarks/evidence/realhttp/B5`, code `47fa17e`)
+
+- **B3's parts:** identical to B3 cell for cell on notes, notes_control, tsnotes_control,
+  everything and everything_control:
+  - notes and tsnotes: raw 168/168, naive 48/168, sg 84/168, sg_keyed 24/168,
+    sg_keyed_deadline 0/168;
+  - everything: raw 72/84, naive 0/84, sg 12/84, sg_deadline 0/84.
+- **The one difference** is tsnotes `naive` `read/none`: 1/12, the harness port race above (no
+  StateGuard in that path).
+- **C1's crash cells** (notes and tsnotes):
+  - keyed `after_record` 0/12;
+  - `after_begin` and `after_effect` 12/12 unresolved (the floor for a non-idempotent tool);
+  - unkeyed arms 12/12 unresolved;
+  - 0 unsafe outcomes in StateGuard arms.
+- All 2,400 relay records agree with ground truth; the harness was clean in every part.
+
+### S8: the stdio matrix on the final Phase 1 code, three servers (`benchmarks/evidence/realstdio/S8`, code `47fa17e`)
+
+| Arm, faulted (132 per server) | sqlite | memory | filesystem |
+|---|---|---|---|
+| raw | 132/132 | 132/132 | 132/132 |
+| naive | 48/132, **48 duplicates** | 0/132 | 48/132, **48 false failures** |
+| sg | 84/132 | 84/132 | 84/132 |
+| **sg_keyed** | **24/132 (18.2%)** | **24/132** | **24/132** |
+| sg_keyed_idempotent (D11) | — | **0/84 (≤ 4.4%)** | — |
+
+- The sg_keyed residual on every server is only the two crash windows, unresolved.
+- Fault-free 0 everywhere; 0 unsafe outcomes in StateGuard arms; all 1,032 relay records agree
+  with ground truth.
+- **On the final code these match S4, S5, S6 and S7 cell for cell.**
+
+### R1: concurrency under repeated faults (`benchmarks/evidence/realhttp/R1`)
+
+**Setup.**
+- Four client sessions call one relay at once. Each session makes six `add_note` writes, so
+  each trial has 24 calls.
+- The fault proxy's new `repeat` mode faults every 3rd write request that reaches it, from any
+  session, the relay's own resends included. It cycles through `kill_before`,
+  `http_503_before`, `lost_response`, `http_502_after`, `cut_stream` and `rpc_internal_error`.
+- Ten trials per arm per server.
+- Each call is scored by its note's count in the notes file (ground truth).
+- Rows are not paired with raw. Resends use up fault slots: StateGuard's keyed arm met about
+  103 faults per 240 calls, against raw's 80.
+- `phase1_table.py` pools a batch's parts, which here ran on two commits. The numbers below are
+  the per-part summaries.
+
+**Parts `notes` and `tsnotes` (code `4d27df8`, before D15):**
+
+| Arm (240 calls per server) | notes | tsnotes |
+|---|---|---|
+| raw | 80 (33.3%, 27.7–39.5%), **20 false failures** | 80, **20 false failures** |
+| naive | 55 (22.9%), **46 duplicates**, 9 false failures | 51 (21.2%), **39 duplicates**, 8 false failures |
+| sg | 80 (33.3%): 70 unresolved, 10 resolved; **0 unsafe** | the same |
+| sg_keyed | 21 (8.8%, 5.8–13.0%): 20 unresolved, **1 false failure** | 20 (8.3%): 16 unresolved, **4 false failures** |
+
+- **A defect: the 5 false failures (D15).** Each was a call whose first attempt ran and whose
+  answer was lost (`lost_response` or `http_502_after`). The keyed resend was then answered
+  `-32603` by the fault proxy, no attempt was left, and the relay passed that error on. It
+  answered only the resend, so the client was told a call that ran had failed. No earlier
+  batch could show this: each faulted one attempt only.
+- **sg (unkeyed, non-idempotent):** every failure is a single fault the relay correctly could
+  not settle.
+  - The 70 unresolved are unknown outcomes, never resent. Over HTTP, a connection closed or
+    a 5xx after the request was sent cannot be told apart from a call that ran.
+  - The 10 resolved are first-attempt `-32603`s, which were not executed and were reported as
+    failed, correctly.
+- **The rest of sg_keyed's residual** is calls faulted on both of their two allowed attempts,
+  surfaced as unknown.
+
+**D15** (`4969b89`, both relays):
+- Once an attempt's outcome is unknown, an internal error answering a later attempt that is
+  not resent again is answered "outcome unknown" (`io.stateguard/reason: in_doubt`).
+- A declared read, and a request that is not a `tools/call`, still get the error as sent.
+- The stdio relay first gives an original that is past its deadline one more deadline to
+  answer, as it does for a resend answered "in doubt".
+- Tests:
+  - HTTP: 7 new tests (lost answer, 502 or cut stream, then `-32603`, on the default-deadline
+    path and with no deadline), plus one first-attempt control. Without the fix, the 6 D15
+    cases fail.
+  - stdio: 3 new tests. The scripted server gets `GATEWAY_ERROR`, a `-32603` from in front of
+    its keys. Without the fix, the 2 D15 cases fail.
+
+**Parts `notes_d15` and `tsnotes_d15` (code `4969b89`; sg and sg_keyed only):**
+- sg: 80/240 on each server, unchanged, 0 unsafe.
+- **sg_keyed: 18/240 (7.5%, 4.8–11.5%) on each server.** All 18 are unresolved, with **0
+  unsafe outcomes**, and every one met a fault on both of its two attempts.
+- Every trial's relay records agree with ground truth:
+  - `tools/call` records = calls made;
+  - calls the relay said ran = calls that succeeded.
+- No driver errors; the harness was clean in every part.
+
+**What remains (for Session 5): the attempt budget.**
+- `DEFAULT_MAX_ATTEMPTS` is 2: one resend. A keyed resend can never run twice, so a larger
+  budget for keyed calls would recover most of the remaining 7.5% under faults this frequent.
+- It is not changed here. It is a shared default of both relays, and the stdio relay's
+  deferred resend after a restart assumes only a first attempt is deferred.
+- It should be measured with R1's harness.
+
+**Python and TypeScript side by side:** under concurrency and repeated faults, notes (Python)
+and tsnotes (TypeScript) behave alike in every arm. On D15 their sg_keyed residuals are equal
+(18/240 each).
+
+## Session 5 (held early, Sun 2026-11-15 from 04:15 IST, on the founder's instruction)
+
+### D16: a keyed call has its own attempt budget, 3
+
+- **The change.** `decide_retry` takes `keyed_max_attempts`, by default
+  `KEYED_MAX_ATTEMPTS` = 3: two resends. It applies in both relays, and every other call keeps
+  `DEFAULT_MAX_ATTEMPTS` = 2.
+- **Why it is safe.** A keyed resend is answered from the server's durable record of the key,
+  so no resend can run twice. One more attempt covers a fault on the first resend as well.
+  R1 showed that every remaining keyed failure met a fault on both of its two attempts.
+- **Still bounded.** A call faulted on all three attempts is escalated "unknown", never
+  reported as a failure.
+- **The stdio relay's deferred resend.** A call lost with its server waits for the restarted
+  server; with D16 it can be deferred again if the restarted server is lost too. It still
+  answers for the client's own invocation, looked up by the client's id.
+  `CLOSE_BEFORE_KEY`, a scripted server dying before the call reaches its keys, as a crash
+  loop does, tests it: three servers, three attempts, executed once.
+- **Tests:**
+  - effects: the keyed budget for unknown and internal-error outcomes; the unkeyed budget
+    unchanged.
+  - HTTP: two faulted attempts, then a replay (default deadline and no deadline); all three
+    faulted, unknown after three.
+  - stdio: two server losses, then a replay; a `-32603` on every attempt stops after three.
+  - Without D16, all 5 new relay tests fail.
+  - The D15 tests now exhaust the larger budget (two `-32603`s after the lost attempt).
+- The fault proxy's `repeat` cycle accepts `none`: that request passes.
+
+**R1 part 3, on D16** (`benchmarks/evidence/realhttp/R1`, parts `*_d16`, code `4e859c1`; sg_keyed
+only):
+
+| | on D15 | on D16 |
+|---|---|---|
+| notes sg_keyed | 18/240 (7.5%) | **1/240 (0.4%, 0.1–2.3%)** |
+| tsnotes sg_keyed | 18/240 (7.5%) | **4/240 (1.7%, 0.7–4.2%)** |
+
+- Every remaining call is unresolved; there are 0 unsafe outcomes, and every trial's relay
+  records agree.
+- These parts record `harness_dirty: true`. The uncommitted files were the stdio harness's
+  (`realstdio/driver.py`, `shim.py`, `multi_client.py`, `repeated.py`, R2's work in
+  progress), which R1's HTTP driver does not use. The R1 harness was the committed one.
+
+### D17: on stdio, a keyed resend with attempts left is tried again at its own deadline
+
+- **What R2's smoke run showed.** A keyed call's first answer was replaced by garbage, and its
+  resend's answer was truncated. Neither line can be matched to a request. The stdio relay's
+  default scope (`recoverable`) applied the deadline only to a call's first attempt, by
+  design: "the deadline is when to try again, and the call has been tried again". So the call
+  waited until the client gave up at 8 s, and the third attempt D16 allows was never sent.
+- **D17.**
+  - In `recoverable` scope, a keyed resend whose call has attempts left is also expired at
+    its deadline, and the call is tried again.
+  - If the call is still running, the server answers "in progress" from its record and the
+    relay waits, as before. If the answer was lost, the server replays the result.
+  - A resend's success that arrives after its own deadline, while the client is still
+    waiting, is delivered (`late_answer_delivered`). Before, it would have been dropped as
+    late.
+- **Tests:** two new stdio tests, both failing without the fix.
+  - The first answer lost and the resend swallowed (`DROP_BEFORE_KEY`): the third attempt is
+    replayed, executed once.
+  - The resend held past its deadline (`SLOW_GATEWAY`): its late answer is delivered, exactly
+    one answer.
+
+### R2: repeated faults on stdio, calls in flight together (`benchmarks/evidence/realstdio/R2`, code `ab4f93d`: D15–D17)
+
+**Setup.**
+- One stdio session per trial makes 12 writes, up to 4 in flight at once.
+- memory runs one at a time: server-memory's `add_observations` loads, changes and saves its
+  file with no lock, so concurrent calls can lose each other's writes with no fault. That is a
+  third-party property, noted and avoided here.
+- The shim faults every 3rd write that reaches it, resends included, cycling through all
+  eight stdio modes.
+- A server killed by one call's fault takes every call in flight with it, so raw fails far
+  more calls than it has faults. On sqlite: 80/96 failed from 24 faults.
+- 8 trials per arm per server.
+
+| Arm (96 calls per server) | sqlite (Python) | memory (TypeScript) | filesystem (TypeScript) |
+|---|---|---|---|
+| raw | 80 (83.3%), **27 false failures** | 40 (41.7%), **8 false failures** | 79 (82.3%), **15 false failures** |
+| naive | 48 (50.0%), **16 duplicates**, 10 false failures | 16 (16.7%), 8 false failures | 50 (52.1%), 20 false failures |
+| sg | 68 (70.8%), all unresolved, **0 unsafe** | 32 (33.3%), 24 unresolved, **0 unsafe** | 58 (60.4%), all unresolved, **0 unsafe** |
+| **sg_keyed** | **9 (9.4%, 5.0–16.9%)**, all unresolved, **0 unsafe** | **0 (≤ 3.9%)** | **11 (11.5%, 6.5–19.4%)**, all unresolved, **0 unsafe** |
+
+- **Safety holds under concurrency and repeated faults.** No StateGuard arm, on any server,
+  duplicated a write, reported success for a call that did not run, or reported failure for a
+  call that ran. Every trial's relay records agree with ground truth.
+- **sg** is mostly unresolved. An unknown outcome of a non-idempotent call is never resent,
+  and with calls in flight together, one server loss leaves every one of them unknown. That
+  is correct, and the reason the keyed arm matters.
+- **sg_keyed's residual**, call by call:
+  - **The crash window** (`idempotency_in_doubt`; sqlite 4, filesystem 7). A server was
+    killed after the call's effect and before its key's record. It was often killed by
+    *another* call's fault while this call was in flight. This is the documented floor for a
+    non-idempotent tool, and concurrency makes it more frequent.
+  - **Three faulted attempts** (sqlite 5, answered "unknown" by D15 after a `-32603`;
+    filesystem 4, the client's own 8 s limit reached first). Here, too, other calls' faults
+    killing the shared server account for some of the lost attempts.
+  - memory has 0/96: one call at a time, so no losses from other calls.
+- **Found and fixed on the way:** D17 (above), from the smoke run.
+- **Python and TypeScript side by side:** the relay behaves the same on all three. The
+  differences are the servers' own: filesystem's `move_file` cannot be repeated, so the blind
+  resend turns into false failures there rather than duplicates.
+
+### B6 and S9: the matrices' keyed arms on the final code (`benchmarks/evidence/realhttp/B6`, `realstdio/S9`)
+
+**Code:** B6 and S9 ran `d72755a`, P5 ran `60ad165`. Both carry the same product code as
+`93addf9` (D17); every later commit is evidence or documentation.
+
+- **B6** (HTTP, arms sg_keyed and sg_keyed_deadline, notes and tsnotes, B5's cells and crash
+  cells, 12 trials): **identical to B5, cell for cell** (76 cells, 0 differ).
+  - sg_keyed 48/204 faulted per server: its 24 `hang_after` rows, plus the 24 crash-window
+    rows.
+  - sg_keyed_deadline 24/204: the crash windows only.
+  - Fault-free 0/96; 0 unsafe; all 912 relay records agree with ground truth.
+- **S9** (stdio, sg_keyed on sqlite, memory and filesystem, plus memory's
+  sg_keyed_idempotent, 12 trials): **identical to S8, cell for cell** (47 cells, 0 differ).
+  - sg_keyed 24/132 per server: the two crash windows.
+  - sg_keyed_idempotent 0/84.
+  - New `write/slow` cells (the answer 5 s late, 2 s deadline): 0/12 on each server. D17 does
+    not turn a slow keyed call into a failure.
+  - Fault-free 0/84; 0 unsafe; all 600 relay records agree.
+- **So D15, D16 and D17 change nothing where a call meets a single fault.** They act where
+  R1 and R2 put them: on a second and a third.
+
+### P5: overhead on the final code (`benchmarks/evidence/{realhttp,realstdio}/P5`, code `60ad165`)
+
+P4's commands, one worker, idle machine.
+
+| Measure | P4 (`16e26b9`) | P5 (final) |
+|---|---|---|
+| HTTP, per session, notes and tsnotes (sg, sg_keyed_default) | +0.009 to +0.058 s | **+0.011 to +0.056 s** |
+| HTTP, per session, everything (sg) | +0.021 s | +0.041 s (0.018–0.065) |
+| stdio, per warm call, sg | +0.51 to +0.95 ms | **+0.41 to +0.88 ms** |
+| stdio, per warm call, sg_keyed reads | +0.63 to +1.18 ms | +0.63 to +1.11 ms |
+| stdio, per warm call, sg_keyed writes | +4.53, +4.99 ms | **+4.10 (sqlite), +4.62 ms (memory)** |
+
+- 0 failures in 280 HTTP sessions and 6,000 stdio calls.
+- Within P4's range and the plan's bounds (≤ 0.07 s per HTTP session). Differences between
+  P4 and P5 are run-to-run variance, not an improvement to claim.

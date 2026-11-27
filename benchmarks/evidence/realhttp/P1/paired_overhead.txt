@@ -1,0 +1,10 @@
+everything read   sg                 pairs 20  unpaired 0  mean_s 0.031  ci95_s [0.012, 0.05]  median_s 0.036  raw_mean_s 0.804
+everything read   sg_deadline        pairs 20  unpaired 0  mean_s 0.037  ci95_s [0.017, 0.058]  median_s 0.019  raw_mean_s 0.804
+notes      read   sg                 pairs 20  unpaired 0  mean_s 0.008  ci95_s [-0.018, 0.035]  median_s -0.002  raw_mean_s 0.826
+notes      read   sg_keyed_deadline  pairs 20  unpaired 0  mean_s 0.006  ci95_s [-0.008, 0.021]  median_s -0.004  raw_mean_s 0.826
+notes      write  sg                 pairs 20  unpaired 0  mean_s 0.025  ci95_s [0.001, 0.049]  median_s 0.016  raw_mean_s 0.814
+notes      write  sg_keyed_deadline  pairs 20  unpaired 0  mean_s 0.029  ci95_s [0.011, 0.048]  median_s 0.033  raw_mean_s 0.814
+tsnotes    read   sg                 pairs 20  unpaired 0  mean_s 0.066  ci95_s [0.021, 0.11]  median_s 0.052  raw_mean_s 0.805
+tsnotes    read   sg_keyed_deadline  pairs 20  unpaired 0  mean_s 0.026  ci95_s [-0.004, 0.055]  median_s 0.03  raw_mean_s 0.805
+tsnotes    write  sg                 pairs 20  unpaired 0  mean_s 0.022  ci95_s [-0.003, 0.048]  median_s 0.02  raw_mean_s 0.82
+tsnotes    write  sg_keyed_deadline  pairs 20  unpaired 0  mean_s 0.027  ci95_s [-0.002, 0.056]  median_s 0.036  raw_mean_s 0.82

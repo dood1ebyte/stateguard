@@ -1,0 +1,33 @@
+rows 96  driver_errors 0
+
+===== coop
+
+raw
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw -  recovered_vs_raw -
+  latency fault-free {'n': 24, 'mean': 1.443, 'median': 1.432, 'p95': 1.517}
+
+naive
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  latency fault-free {'n': 24, 'mean': 1.436, 'median': 1.45, 'p95': 1.534}
+
+sg
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 24, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 1.633, 'median': 1.614, 'p95': 1.75}
+
+sg_keyed
+  fault-free  0/24 (0.0%, ci 0.0%-13.8%)
+  faulted     -   transport -   session -
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 0
+  relay invocation records 24, mismatching ground truth 0
+  latency fault-free {'n': 24, 'mean': 1.645, 'median': 1.635, 'p95': 1.763}
+
+op/mode                                 raw              naive                 sg           sg_keyed
+read/none                          0/12               0/12               0/12               0/12    
+write/none                         0/12               0/12               0/12               0/12    

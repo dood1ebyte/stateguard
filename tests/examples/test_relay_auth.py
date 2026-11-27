@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "benchmarks"))
 
 from runtime import auth  # noqa: E402
 from runtime.harness import (  # noqa: E402
-    DELAY_SECONDS,
     RelayMode,
     Rig,
     ScriptedServer,
@@ -191,7 +190,7 @@ def test_a_late_auth_answer_never_reclassifies_an_unknown_outcome() -> None:
     rig = _rig(_server(case), call_deadline=0.2, retry="auto")
     try:
         answer = rig.call(case.tool, case.arguments, timeout=3.0)
-        time.sleep(DELAY_SECONDS + 0.1)  # let the late 401 arrive
+        time.sleep(auth.LATE_SECONDS + 0.1)  # let the late 401 arrive
     finally:
         rig.close()
     identifier = rig.sent_ids[-1]

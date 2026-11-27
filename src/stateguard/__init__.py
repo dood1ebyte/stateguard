@@ -31,7 +31,7 @@ from stateguard.core.models.config import GuardConfig, RepairConfig
 from stateguard.guard import ContractGuard
 from stateguard.logging.repair_history import RepairHistoryRecorder
 
-__version__ = "0.1.0"
+__version__ = "0.2.0rc1"
 
 __all__ = [
     "__version__",

@@ -1,0 +1,101 @@
+{
+ "everything/read/sg": {
+  "pairs": 20,
+  "unpaired": 0,
+  "mean_s": 0.021,
+  "ci95_s": [
+   -0.018,
+   0.059
+  ],
+  "median_s": 0.005,
+  "raw_mean_s": 0.904
+ },
+ "notes/read/sg": {
+  "pairs": 20,
+  "unpaired": 0,
+  "mean_s": 0.038,
+  "ci95_s": [
+   0.012,
+   0.064
+  ],
+  "median_s": 0.036,
+  "raw_mean_s": 0.833
+ },
+ "notes/read/sg_keyed_default": {
+  "pairs": 20,
+  "unpaired": 0,
+  "mean_s": 0.058,
+  "ci95_s": [
+   0.032,
+   0.084
+  ],
+  "median_s": 0.043,
+  "raw_mean_s": 0.833
+ },
+ "notes/write/sg": {
+  "pairs": 20,
+  "unpaired": 0,
+  "mean_s": 0.018,
+  "ci95_s": [
+   -0.013,
+   0.049
+  ],
+  "median_s": 0.027,
+  "raw_mean_s": 0.855
+ },
+ "notes/write/sg_keyed_default": {
+  "pairs": 20,
+  "unpaired": 0,
+  "mean_s": 0.013,
+  "ci95_s": [
+   -0.023,
+   0.049
+  ],
+  "median_s": 0.038,
+  "raw_mean_s": 0.855
+ },
+ "tsnotes/read/sg": {
+  "pairs": 20,
+  "unpaired": 0,
+  "mean_s": 0.026,
+  "ci95_s": [
+   -0.004,
+   0.056
+  ],
+  "median_s": 0.023,
+  "raw_mean_s": 0.85
+ },
+ "tsnotes/read/sg_keyed_default": {
+  "pairs": 20,
+  "unpaired": 0,
+  "mean_s": 0.018,
+  "ci95_s": [
+   -0.013,
+   0.049
+  ],
+  "median_s": 0.002,
+  "raw_mean_s": 0.85
+ },
+ "tsnotes/write/sg": {
+  "pairs": 20,
+  "unpaired": 0,
+  "mean_s": 0.009,
+  "ci95_s": [
+   -0.011,
+   0.028
+  ],
+  "median_s": 0.01,
+  "raw_mean_s": 0.856
+ },
+ "tsnotes/write/sg_keyed_default": {
+  "pairs": 20,
+  "unpaired": 0,
+  "mean_s": 0.032,
+  "ci95_s": [
+   0.006,
+   0.059
+  ],
+  "median_s": 0.025,
+  "raw_mean_s": 0.856
+ }
+}

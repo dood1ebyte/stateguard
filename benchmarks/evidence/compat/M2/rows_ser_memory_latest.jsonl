@@ -1,0 +1,15 @@
+{"arm": "raw", "trial": 51000, "calls": 16, "seconds": 1.001, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1}
+{"arm": "sg", "trial": 51000, "calls": 16, "seconds": 1.4, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1, "serialized_waits": 0, "serialize_timeouts": 0}
+{"arm": "sg_serial", "trial": 51000, "calls": 16, "seconds": 1.145, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1, "serialized_waits": 15, "serialize_timeouts": 0}
+{"arm": "raw", "trial": 51001, "calls": 16, "seconds": 1.04, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1}
+{"arm": "sg", "trial": 51001, "calls": 16, "seconds": 1.122, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1, "serialized_waits": 0, "serialize_timeouts": 0}
+{"arm": "sg_serial", "trial": 51001, "calls": 16, "seconds": 1.219, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1, "serialized_waits": 15, "serialize_timeouts": 0}
+{"arm": "raw", "trial": 51002, "calls": 16, "seconds": 1.059, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1}
+{"arm": "sg", "trial": 51002, "calls": 16, "seconds": 1.051, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1, "serialized_waits": 0, "serialize_timeouts": 0}
+{"arm": "sg_serial", "trial": 51002, "calls": 16, "seconds": 1.189, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1, "serialized_waits": 15, "serialize_timeouts": 0}
+{"arm": "raw", "trial": 51003, "calls": 16, "seconds": 1.157, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1}
+{"arm": "sg", "trial": 51003, "calls": 16, "seconds": 1.308, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1, "serialized_waits": 0, "serialize_timeouts": 0}
+{"arm": "sg_serial", "trial": 51003, "calls": 16, "seconds": 1.253, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1, "serialized_waits": 15, "serialize_timeouts": 0}
+{"arm": "raw", "trial": 51004, "calls": 16, "seconds": 1.313, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1}
+{"arm": "sg", "trial": 51004, "calls": 16, "seconds": 1.266, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1, "serialized_waits": 0, "serialize_timeouts": 0}
+{"arm": "sg_serial", "trial": 51004, "calls": 16, "seconds": 1.241, "told_ok": 16, "present": 16, "lost": 0, "duplicates": 0, "not_ok": 0, "sessions": 1, "serialized_waits": 15, "serialize_timeouts": 0}

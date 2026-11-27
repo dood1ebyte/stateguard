@@ -1,0 +1,31 @@
+{
+ "new": "benchmarks/evidence/realstdio/S12/summary_memory_idempotent.json",
+ "refs": [
+  "benchmarks/evidence/realstdio/S10/summary_memory_idempotent.json"
+ ],
+ "arms": [
+  {
+   "server": "memory",
+   "arm": "sg_keyed_idempotent",
+   "kind": "stateguard",
+   "ref": "benchmarks/evidence/realstdio/S10/summary_memory_idempotent.json",
+   "ref_arm": "sg_keyed_idempotent",
+   "cells": 8,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    0,
+    96
+   ],
+   "ref_total": [
+    0,
+    96
+   ]
+  }
+ ]
+}

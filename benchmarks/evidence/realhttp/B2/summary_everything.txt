@@ -1,0 +1,39 @@
+rows 384  driver_errors 0
+
+===== everything
+
+raw
+  fault-free  0/12 (0.0%, ci 0.0%-24.2%)
+  faulted     72/84 (85.7%, ci 76.7%-91.6%)   transport 60/72 (83.3%, ci 73.1%-90.2%)   session 12/12 (100.0%, ci 75.8%-100.0%)
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 12, 'no_answer_crash': 24}  induced_vs_raw -  recovered_vs_raw -
+  latency fault-free {'n': 12, 'mean': 0.88, 'median': 0.874, 'p95': 0.993}
+
+naive
+  fault-free  0/12 (0.0%, ci 0.0%-24.2%)
+  faulted     0/84 (0.0%, ci 0.0%-4.4%)   transport 0/72 (0.0%, ci 0.0%-5.1%)   session 0/12 (0.0%, ci 0.0%-24.2%)
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 72
+  latency fault-free {'n': 12, 'mean': 0.902, 'median': 0.906, 'p95': 1.012}
+
+sg
+  fault-free  0/12 (0.0%, ci 0.0%-24.2%)
+  faulted     12/84 (14.3%, ci 8.4%-23.3%)   transport 12/72 (16.7%, ci 9.8%-26.9%)   session 0/12 (0.0%, ci 0.0%-24.2%)
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 12, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 60
+  relay invocation records 87, mismatching ground truth 0
+  latency fault-free {'n': 12, 'mean': 0.915, 'median': 0.903, 'p95': 0.995}
+
+sg_deadline
+  fault-free  0/12 (0.0%, ci 0.0%-24.2%)
+  faulted     0/84 (0.0%, ci 0.0%-4.4%)   transport 0/72 (0.0%, ci 0.0%-5.1%)   session 0/12 (0.0%, ci 0.0%-24.2%)
+  unsafe {'duplicate_effect': 0, 'false_success': 0, 'false_failure': 0, 'wrong_content': 0}  unresolved {'surfaced_unknown': 0, 'surfaced_not_sent': 0, 'no_answer_timeout': 0, 'no_answer_crash': 0}  induced_vs_raw 0  recovered_vs_raw 72
+  relay invocation records 96, mismatching ground truth 0
+  latency fault-free {'n': 12, 'mean': 0.916, 'median': 0.892, 'p95': 1.126}
+
+op/mode                                 raw              naive                 sg        sg_deadline
+read/cut_stream                    0/12               0/12               0/12               0/12    
+read/hang_after                   12/12               0/12              12/12               0/12    
+read/http_502_after               12/12               0/12               0/12               0/12    
+read/http_503_before              12/12               0/12               0/12               0/12    
+read/kill_before                  12/12               0/12               0/12               0/12    
+read/lost_response                12/12               0/12               0/12               0/12    
+read/none                          0/12               0/12               0/12               0/12    
+read/session_loss                 12/12               0/12               0/12               0/12    

@@ -1,0 +1,174 @@
+{
+ "memory": {
+  "cells": {
+   "keys/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "keys_advertised": [],
+    "keys_not_advertised": [],
+    "keys_plan": [
+     {
+      "adapter": "node-preload",
+      "db": "/tmp/realhttp-M2-t5ecckww/runs/memory-keys-auto--41000-a66ab6d0/keys.db",
+      "keyed_tools": [
+       "add_observations"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "memory"
+     },
+     {
+      "adapter": "node-preload",
+      "db": "/tmp/realhttp-M2-t5ecckww/runs/memory-keys-auto--41001-08cb3122/keys.db",
+      "keyed_tools": [
+       "add_observations"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "memory"
+     },
+     {
+      "adapter": "node-preload",
+      "db": "/tmp/realhttp-M2-t5ecckww/runs/memory-keys-auto--41002-4fc59663/keys.db",
+      "keyed_tools": [
+       "add_observations"
+      ],
+      "keys": "auto",
+      "notes": [],
+      "scope": "memory"
+     }
+    ],
+    "kinds": {
+     "not_executed": 3,
+     "surfaced_unknown": 3
+    },
+    "server_outcomes": {
+     "None": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "listing_identical": 3,
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/direct": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "list/shadow": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "listing_identical": 3,
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/hang/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/kill_before/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/lost_exit/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/none/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "read/none/shadow": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "write/hang/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {
+     "no_answer_timeout": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "write/kill_before/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {
+     "not_executed": 3,
+     "surfaced_unknown": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "write/lost_exit/auto": {
+    "errors": [],
+    "fault_fired": 3,
+    "kinds": {
+     "surfaced_unknown": 3
+    },
+    "successes": 0,
+    "trials": 3,
+    "unsafe": 0
+   },
+   "write/none/auto": {
+    "errors": [],
+    "fault_fired": 0,
+    "kinds": {},
+    "successes": 3,
+    "trials": 3,
+    "unsafe": 0
+   }
+  },
+  "direct_listings": 1,
+  "driver_errors": 0,
+  "rows": 39,
+  "tools": [
+   "add_observations",
+   "create_entities",
+   "create_relations",
+   "delete_entities",
+   "delete_observations",
+   "delete_relations",
+   "open_nodes",
+   "read_graph",
+   "search_nodes"
+  ],
+  "unsafe": 0
+ }
+}

@@ -1,0 +1,101 @@
+{
+ "new": "benchmarks/evidence/realstdio/S10/summary_sqlite.json",
+ "refs": [
+  "benchmarks/evidence/realstdio/S8/summary_sqlite.json",
+  "benchmarks/evidence/realstdio/S9/summary_sqlite.json"
+ ],
+ "arms": [
+  {
+   "server": "sqlite",
+   "arm": "naive",
+   "kind": "baseline",
+   "ref": "benchmarks/evidence/realstdio/S8/summary_sqlite.json",
+   "ref_arm": "naive",
+   "cells": 13,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 48,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    48,
+    156
+   ],
+   "ref_total": [
+    48,
+    156
+   ]
+  },
+  {
+   "server": "sqlite",
+   "arm": "raw",
+   "kind": "baseline",
+   "ref": "benchmarks/evidence/realstdio/S8/summary_sqlite.json",
+   "ref_arm": "raw",
+   "cells": 13,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 36,
+    "wrong_content": 0
+   },
+   "new_total": [
+    132,
+    156
+   ],
+   "ref_total": [
+    132,
+    156
+   ]
+  },
+  {
+   "server": "sqlite",
+   "arm": "sg",
+   "kind": "stateguard",
+   "ref": "benchmarks/evidence/realstdio/S8/summary_sqlite.json",
+   "ref_arm": "sg",
+   "cells": 13,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    84,
+    156
+   ],
+   "ref_total": [
+    84,
+    156
+   ]
+  },
+  {
+   "server": "sqlite",
+   "arm": "sg_keyed",
+   "kind": "stateguard",
+   "ref": "benchmarks/evidence/realstdio/S9/summary_sqlite.json",
+   "ref_arm": "sg_keyed",
+   "cells": 13,
+   "differences": [],
+   "unsafe": {
+    "duplicate_effect": 0,
+    "false_success": 0,
+    "false_failure": 0,
+    "wrong_content": 0
+   },
+   "new_total": [
+    24,
+    156
+   ],
+   "ref_total": [
+    24,
+    156
+   ]
+  }
+ ]
+}
