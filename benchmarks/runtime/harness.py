@@ -538,6 +538,8 @@ class Rig:
         deadline_scope: str = "all",
         idempotency_keys: bool = False,
         answer_timeout: float = 300.0,
+        serialize_tools: tuple[str, ...] = (),
+        serialize_wait: float = 30.0,
     ) -> None:
         from stateguard import ContractGuard, GuardConfig
         from stateguard.core.models.config import RepairMode
@@ -599,6 +601,8 @@ class Rig:
             deadline_scope=deadline_scope,
             idempotency_keys=idempotency_keys,
             answer_timeout=answer_timeout,
+            serialize_tools=serialize_tools,
+            serialize_wait=serialize_wait,
         )
         server_in, server_out = os.fdopen(r2s_r, "rb"), os.fdopen(s2r_w, "wb")
         first = threading.Thread(target=server.serve, args=(server_in, server_out), daemon=True)

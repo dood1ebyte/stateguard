@@ -212,16 +212,18 @@ def test_a_call_the_lane_cannot_take_is_answered_not_sent_and_never_runs(tmp_pat
 
 def test_a_call_answered_unknown_holds_the_lane_until_the_server_answers(tmp_path: Path) -> None:
     """The client is told "unknown" at the deadline; the server still runs it: the next waits."""
-    relay = Relay(tmp_path, "--serialize-tools", "slow,add", "--call-deadline", "0.3",
+    # The second call answers at once: the deadline (0.3 s, counted from the write) must not
+    # race its own handler on a slow runner (CI run 71, macOS 3.14, with a 0.2 s handler).
+    relay = Relay(tmp_path, "--serialize-tools", "slow,other", "--call-deadline", "0.3",
                   "--deadline-scope", "all")  # fmt: skip
     try:
         relay.call("s", "slow", 0)  # 1.0 s at the server; "unknown" to the client at 0.3 s
-        relay.call("a", "add", 1)
+        relay.call("o", "other", 1)
         slow = relay.wait("s")
         assert slow is not None and "error" in slow  # outcome unknown, the server still at it
-        assert _ok(relay.wait("a"))
+        assert _ok(relay.wait("o"))
         log = relay.server_log()
-        assert log.index("call add 1") > log.index("end 0")  # sent only once the slow one ended
+        assert log.index("call other 1") > log.index("end 0")  # sent once the slow one ended
     finally:
         relay.close()
 
