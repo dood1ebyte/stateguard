@@ -162,6 +162,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     executions stay 0.
 
 ### Fixed
+- **`--keys auto` no longer stops a Node server that is not on the TypeScript SDK 1.x from
+  starting.** The preload wraps `@modelcontextprotocol/sdk` 1.x. On a server built on the
+  SDK v2 (`@modelcontextprotocol/server`), as the reference servers' current releases are,
+  it threw at start, so every call ended "outcome unknown". The plan now looks for the SDK
+  above the server's entry script. With no SDK, another major version, or no entry file, the
+  server runs unkeyed and the relay and `stateguard doctor` say why. Servers on SDK 1.x are
+  keyed as before. Found by M2 (`benchmarks/evidence/compat/M2/`).
 - `stateguard relay http` now returns (exit 0) after a graceful SIGINT/SIGTERM shutdown
   instead of dying with the signal uvicorn raises again, so its recording is closed.
 - **A repair that changed only a value's JSON type was forwarded unrepaired.**
