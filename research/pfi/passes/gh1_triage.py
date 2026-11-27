@@ -21,7 +21,12 @@ REPOS = {
     "ts": "modelcontextprotocol/typescript-sdk",
     "srv": "modelcontextprotocol/servers",
 }
-MONTHS = {m: i for i, m in enumerate(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
+MONTHS = {
+    m: i
+    for i, m in enumerate(
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1
+    )
+}
 
 #: Every reviewed issue: (repo, number, labels as shown, state, opened as shown, queries).
 REVIEWED = [
