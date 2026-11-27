@@ -95,7 +95,9 @@ class TestArgParsing:
         with pytest.raises(SystemExit):
             main(["--version"])
         out, _ = capsys.readouterr()
-        assert "0.1.0" in out
+        import stateguard
+
+        assert stateguard.__version__ in out  # the package's version (pyproject.toml's)
 
     def test_check_help_exits_zero(self, capsys: pytest.CaptureFixture) -> None:
         with pytest.raises(SystemExit) as exc_info:
