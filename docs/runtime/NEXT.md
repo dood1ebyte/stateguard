@@ -361,6 +361,83 @@ allowed. Early completion or idle capacity never advances the schedule.
     - S3.3, the TypeScript cooperating server (`e22ce8e`), with CW2.
   - See "S4 result".
 
+### S4 result (Wed 2026-11-25, 09:01 to about 10:31 IST): agenda done; interrupted before its close
+
+- **First, S3's never-cut items:**
+  - CW1 and contract §4.5 (`78e7b94`);
+  - the run-61 test-margin fix (`7022ff3`).
+- **S4.1, done** (`290ba5d`): schema-repair safety.
+  - With refresh off, no repair or refusal is made on an unconfirmed listing: the call is
+    forwarded unchanged, and the proposal is logged as withheld.
+  - A repair the server refuses falls back to the client's own call, but only on `-32602` or
+    for a tool declared `read_only` or `idempotent`.
+  - **SL1:** the A1/A2 stale-listing cells with refresh off are 0/12 on sqlite, memory, notes
+    and tsnotes, with 0 unsafe. Phase 1 had sqlite at 12/12 false successes.
+- **S4.2, done:** M1, the compatibility matrix (`docs/runtime/COMPATIBILITY_MATRIX.md`).
+  - 10 servers attempted, 315 rows, 0 unsafe.
+  - 2 Pass, 8 Pass with a documented limitation; the browser server was not attempted.
+- **S4.3, done** (`572c74e`): `--serialize-tools` on the stdio relay.
+  - **SER1:** server-memory with 16 concurrent writes lost 0 of 160 with the flag, against 149
+    of 160 without it (150 with no relay). Each lost write was told success: the server's own
+    defect.
+- **S4.4, done** (`0dd8604`): the event-stream drain.
+  - **NR1:** under netem on a GitHub runner, new connections fell from 40 to 0 per 40 calls,
+    and p50 per call from 54.6 to 34.3 ms at 5 ms one-way delay.
+  - Caveat: a server that does not set TCP_NODELAY can stall on a reused connection.
+- **Deferred S3 items, done** (window rule 3):
+  - S3.2, `STATEGUARD_RECOVERY_CHECK` (`7643452`, `f1e0490`, `b1e80f6`);
+  - S3.3, the TypeScript cooperating server, with **CW2** keyed at 0/36 and 0 duplicates on
+    each relay (`e22ce8e`).
+- **Regressions:**
+  - **B8 and S11** (S4.1's code): identical to B7 and S10 cell for cell.
+  - **B9 and S12** (the final code, `d429817`): B9 is identical to B7; S12 was finished in S5,
+    see below.
+- **The interruption.** S4 stopped at about 10:31 IST, during B9's `notes_control` part. Its
+  223 rows are kept, labelled interrupted. The cause was not recorded; the container was
+  replaced afterwards. Not done before it stopped:
+  - the full suites;
+  - this handoff;
+  - the END report.
+  The disk survived, and S5 finished all three.
+
+### S5 result (Fri 2026-11-27, 09:01 IST onwards)
+
+- **First, S4's close.**
+  - **CI runs 67–71** (macOS) were red, for two reasons:
+    - **The lane test:** its second call ran a 0.2 s handler against a 0.3 s deadline, and a
+      slow runner tripped it. Reproduced with a 0.35 s handler. The relay was correct, so the
+      test was fixed.
+    - **Coverage:** the total was 79.66%, under the 80% gate. S4's new code runs in subprocess
+      relays, which coverage does not count. In-process tests were added.
+  - Both were fixed in `b4dae2b`; **run 72 passed all 11 jobs.**
+  - B9 and S12 were re-run on the final code. B8, S11 and B9 results were written.
+- **S5.1, done** (`c504e38`): `stateguard trial`.
+  - **T1** (real filesystem, sqlite and git servers, scripted): every result as predicted,
+    0 unsafe.
+- **S5.2, done:**
+  - `stateguard doctor` (`d49df75`);
+  - the snippets (`docs/runtime/ONBOARDING.md`);
+  - **O1:** 10–11 s from a clean environment to the first protected call, against the
+    5-minute target.
+- **S5.3, done:** release candidates `0.2.0rc1` and `0.2.0-rc.1`, from `d49df75`, verified in
+  fresh environments and **not published**.
+  - The sdist fell from 45 MB to 0.4 MB.
+  - The npm package now ships compiled `dist/`.
+- **S5.4, done:**
+  - **Frozen configuration:** `docs/runtime/RECOMMENDED_CONFIG.md` (`51f07a5`).
+  - **Reproduction:** `scripts/reproduce.sh` and `docs/runtime/REPRODUCE.md`. B7's
+    `crash_notes` was reproduced cell for cell from a fresh clone (REPRO-20261127).
+- **S5.5, done** (`0c05179`): `research/pfi/`, with its schema, validator, dedup, counts,
+  queries and access log, and the first GitHub pass. **Report counts, not rates:**
+  - 93 issues reviewed;
+  - 63 kept: 31 confirmed and 32 likely technical failures;
+  - 30 rejected: 13 feature requests, 17 unrelated.
+- **The GitHub search API was not used.** The proxy attaches a credential to `api.github.com`,
+  which would exceed the session's GitHub scope. Public pages were read instead.
+- **A rejected push, at about 09:32 IST.** My push and the background evidence committer's
+  push ran at the same moment from the same checkout. The committer's push carried both
+  commits: origin was level (`0 0`), with no divergence, no force and no rebase.
+
 ### S5 starting checklist (Fri 2026-11-27, 09:00 IST)
 
 1. **Check the environment.**
@@ -391,6 +468,33 @@ allowed. Early completion or idle capacity never advances the schedule.
      configuration.
    - The HTTP relay's event-stream drain is always on.
 5. **Track B:** public information only, no contact, never used for rates (PHASE2_PLAN §10–11).
+
+### S6 starting checklist (Wed 2026-12-02, 09:00 IST)
+
+1. **Check the environment.**
+   - Run `TZ=Asia/Kolkata date`; check git is `0 0` with origin.
+   - Check the toolchain, as in the S5 checklist. A new container can be rebuilt with
+     `SG_PREFIX=... scripts/reproduce.sh setup`, then `eval "$(scripts/reproduce.sh env)"`.
+2. **CI:** confirm the last run on PR #19 is green.
+3. **S6.0 first:** commit PHASE2_PLAN.md §6 **unchanged** as the S6 batch's `PLAN.md`, before any
+   trial, filling in only the commit hashes and server versions.
+4. **The configuration under test** is exactly `docs/runtime/RECOMMENDED_CONFIG.md`, frozen at
+   `51f07a5`:
+   - memory serialised;
+   - stdio `--call-deadline 2`;
+   - HTTP `--call-deadline 2`, keyed by the injector and the preload;
+   - the cooperating servers keyed natively.
+   Raw follows each StateGuard run.
+5. **S6.1:**
+   - the harness reuses the R1/R2 drivers, with independent per-attempt faults, seeds equal to
+     the run index, and the §6 fault classes drawn uniformly;
+   - it adds W1-coop and W2-coop on the Python and TypeScript cooperating servers (`coop`,
+     `tscoop`, `coopnotes`).
+6. **S6.2:** runs in §6's order (q = 5%, then 20%, then 1%; W1, W2, W1-coop, W2-coop), about
+   2–2.5 h of compute in the background.
+7. **The observed-mix run:** S2's captures held fewer than 30 observed faults, so it is not run
+   (§6.4).
+8. **Never** let Track B (`research/pfi/`) touch the fault mix or the claim rule.
 
 ## Handoff (end of S2, Fri 2026-11-20 about 10:20 IST)
 
