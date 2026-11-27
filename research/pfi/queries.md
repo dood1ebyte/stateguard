@@ -16,7 +16,7 @@ log records the date.
 
 URL form: `https://github.com/<repository>/issues?q=<query, URL-encoded>`.
 
-## Other sources (written 2026-11-27 at about 11:00 IST, before any of them was run)
+## Other sources (written 2026-11-27 at about 10:54 IST, before any of them was run)
 
 Each source's terms and `robots.txt` are read first, and the outcome is written to
 `access_log.jsonl`. A query runs only through an official public endpoint, or a public page the

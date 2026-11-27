@@ -85,7 +85,7 @@ for CI only.
     (`0c05179`) passed.
   - **Runs 74 and 75** (`d2801cd`, `d49df75`) failed on `test_cli`'s hard-coded "0.1.0" after
     the version became `0.2.0rc1`. Fixed in `45b684e`; **run 76 passed.**
-  - **Run 77** (`e76475c`, the `--keys auto` fix): in progress at 10:34 IST.
+  - **Run 77** (`e76475c`, the `--keys auto` fix): **passed all 11 jobs.**
   - **`netem.yml` runs 10–12:** green.
   - The session's last commit runs full CI: see "Handoff (end of S5)".
 
@@ -409,7 +409,7 @@ allowed. Early completion or idle capacity never advances the schedule.
   - the END report.
   The disk survived, and S5 finished all three.
 
-### S5 result (Fri 2026-11-27, 09:01 IST onwards)
+### S5 result (Fri 2026-11-27, 09:01 to about 10:59 IST): all deliverables done
 
 - **First, S4's close.**
   - **CI runs 67–71** (macOS) were red, for two reasons:
@@ -443,6 +443,18 @@ allowed. Early completion or idle capacity never advances the schedule.
   - 30 rejected: 13 feature requests, 17 unrelated.
 - **The GitHub search API was not used.** The proxy attaches a credential to `api.github.com`,
   which would exceed the session's GitHub scope. Public pages were read instead.
+- **Track B's other sources: not accessible from this environment.** S5.5 asks for queries
+  per source, and `queries.md` had GitHub's only. These were added after the agenda, before any
+  access attempt (`4d2a536`):
+  - HN-1 to HN-3 (Hacker News);
+  - RD-1 to RD-3 (Reddit);
+  - IH-1 (Indie Hackers).
+  - **The cause was this environment, not the sites.** The proxy refused all four hosts (403 at
+    CONNECT). The web-fetch tool could not resolve the Hacker News or Indie Hackers hosts, and
+    it refuses Reddit.
+  - Logged as "not accessible" in `access_log.jsonl` and `passes/2026-11-27-other-1.md`. No
+    query was run and nothing was worked around, so the first pass stays GitHub-only (S5
+    fallback 2).
 - **After the agenda, deferral-list item 2 (window rule 3): M2,** M1's cells on the servers'
   current releases (`benchmarks/evidence/compat/M2/`). 0 unsafe.
   - **The SDK v2 Node servers did not start under `--keys auto`:** the preload threw.
@@ -516,7 +528,7 @@ allowed. Early completion or idle capacity never advances the schedule.
    (§6.4).
 8. **Never** let Track B (`research/pfi/`) touch the fault mix or the claim rule.
 
-## Handoff (end of S5, Fri 2026-11-27 (in progress))
+## Handoff (end of S5, Fri 2026-11-27 about 10:59 IST)
 
 S3 and S4 stopped before writing a handoff; their results and S5's close of them are in
 "S3 result" and "S4 result" above.
@@ -534,7 +546,8 @@ S3 and S4 stopped before writing a handoff; their results and S5's close of them
   - **Configuration and documentation:**
     - `51f07a5`: the frozen configuration;
     - `609bfa5` and `1969535`: reproduction;
-    - `3e5749b`: CHANGELOG.
+    - `3e5749b`: CHANGELOG;
+    - `4d2a536`: Track B queries for Hacker News, Reddit and Indie Hackers.
   - **Evidence:** B9, S12, T1, O1, REPRO-20261127, M2, and the first GitHub pass of Track B.
 - **Unfinished on the S5 agenda:** nothing.
 - **Found, and left for later:**
@@ -543,14 +556,24 @@ S3 and S4 stopped before writing a handoff; their results and S5's close of them
     so it was not started here.
   - **The FastMCP quickstart** (`mcp.server.fastmcp`) does not run on mcp 2.x. This is the
     upstream rename to `MCPServer`, not a StateGuard defect (M2).
-  - **Track B's other sources** (Reddit, Hacker News, Indie Hackers and others) belong to S7's
-    analysis, per PHASE2_PLAN.md. S5 delivered the GitHub pass.
-- **Blockers:** none.
-- **Tell the founder:** one push was rejected at about 09:32 IST. Two pushes from this
+  - **Track B's other sources** (Hacker News, Reddit, Indie Hackers) are not accessible from
+    this environment (see "S5 result"). The pass on them moves to S7.1 (fallback 2).
+- **Blockers:** none for S6.
+- **Tell the founder:**
+  - **For S7.1 only, if the founder wants these sources:** allow `hn.algolia.com`,
+    `news.ycombinator.com` and `www.indiehackers.com` in the cloud environment's network
+    settings. This session is unattended, so it made no environment change.
+    - Reddit also needs a route the fetch tool allows. Its Data API needs registered
+      credentials (A7: none).
+    - Without them, Track B stays GitHub-only, which PHASE2_PLAN.md section 10 allows.
+  - One push was rejected at about 09:32 IST. Two pushes from this
   checkout raced: mine and my own background evidence committer's. Origin was level (`0 0`)
   and nothing diverged; no force-push or rebase was used.
-- **Tests on the final code** (pending):
-  - the four full suites: running;
+- **Tests on the final code** (`30407e0`; its code is `e76475c`'s, and later commits change
+  only docs, evidence and Track B data):
+  - Python 3.11.18, 3.12.3, 3.13.18 and 3.14.6: 6,790 passed each, with 0 failed, 0 errors and
+    0 skipped;
+  - Track B's tests: 47 passed after the access-log change, and the corpus validates;
   - TypeScript: tsc clean, 74/74;
   - ruff, format and mypy (both configurations): clean.
 - **Pushed:** everything; origin and local are level. **Uncommitted:** nothing.
@@ -776,7 +799,7 @@ The queue as it stood before Session 5 (done: items 1–3, and 5):
 One line per session, newest first:
 `YYYY-MM-DD · task · result (tests: N passed / failures) · next`.
 
-- 2026-11-27 · Phase 2 S5 (09:01–in progress) · S4 closed (CI runs 67–71 fixed in `b4dae2b`, run 72 green; B9 and S12 equal to B7 and S10 on S4's final code); S5.1 `stateguard trial` (T1 as predicted, 0 unsafe); S5.2 `doctor`, snippets, O1 10–11 s to the first protected call; S5.3 RCs 0.2.0rc1 / 0.2.0-rc.1 built and verified, not published; S5.4 frozen configuration (`51f07a5`) and B7 `crash_notes` reproduced cell for cell from a clean clone; S5.5 Track B tools and the first GitHub pass (report counts, not rates: 93 reviewed, 63 kept, 30 rejected); M2 (deferral item 2): 0 unsafe, SDK v2 Node servers did not start under `--keys auto`, fixed (`e76475c`: unkeyed) · pushed, level with origin; one push rejected at 09:32 by a race with my own committer, no divergence (tests: full suites on the final code running; TypeScript tsc clean, 74/74; ruff, format, mypy clean) · S6 Wed 2 Dec 09:00 IST
+- 2026-11-27 · Phase 2 S5 (09:01–about 10:59 IST) · S4 closed (CI runs 67–71 fixed in `b4dae2b`, run 72 green; B9 and S12 equal to B7 and S10 on S4's final code); S5.1 `stateguard trial` (T1 as predicted, 0 unsafe); S5.2 `doctor`, snippets, O1 10–11 s to the first protected call; S5.3 RCs 0.2.0rc1 / 0.2.0-rc.1 built and verified, not published; S5.4 frozen configuration (`51f07a5`) and B7 `crash_notes` reproduced cell for cell from a clean clone; S5.5 Track B tools and the first GitHub pass (report counts, not rates: 93 reviewed, 63 kept, 30 rejected); M2 (deferral item 2): 0 unsafe, SDK v2 Node servers did not start under `--keys auto`, fixed (`e76475c`: unkeyed); Track B queries for HN, Reddit and Indie Hackers documented, all three not accessible from this environment (logged, not worked around); CI runs 72, 73, 76, 77 green · pushed, level with origin; one push rejected at 09:32 by a race with my own committer, no divergence (tests: Python 3.11.18 / 3.12.3 / 3.13.18 / 3.14.6 each 6790 passed / 0 failed / 0 skipped; TypeScript tsc clean, 74/74; ruff, format, mypy clean) · S6 Wed 2 Dec 09:00 IST
 - 2026-11-25 · Phase 2 S4 (09:01–about 10:31 IST, interrupted) · S3's never-cut items first (CW1, contract §4.5); S4.1 schema-repair safety (SL1 0/12 on 4 servers); S4.2 M1 (10 servers, 0 unsafe); S4.3 `--serialize-tools` (SER1 0/160 lost, against 149/160); S4.4 event-stream drain (NR1 40 → 0 new connections); S3.2 and S3.3 (CW2 0/36); B8 and S11 equal to B7 and S10 · pushed, level with origin; stopped during B9 before the suites, handoff and report, which S5 did (tests: full suites not run; run in S5) · S5 Fri 27 Nov 09:00 IST
 - 2026-11-23 · Phase 2 S3 (09:00–about 09:10 IST, interrupted, cause not recorded) · S3.1 the Python cooperating notes server (`a9d1c7a`); CW1's plan and drivers (`6b0de13`) · pushed, level with origin; no handoff written; finished in S4 (tests: none recorded) · S4 Wed 25 Nov 09:00 IST
 - 2026-11-20 · Phase 2 S2 (09:01–about 10:20 IST) · run 55 auth flake root-caused and fixed (deadline-thread race, reproduced); `stateguard capture stdio|http` and `stateguard report` (masked bundle, allowlisted invocations, rebuilt from the bundle alone); denominator checks; key-store duplicate detection (verified on a deliberate duplicate); HTTP relay `--record` (shadow only); C1: 1,200 calls on 3 real servers, scripted workloads, shadow and auto paired, every check holding, 0 failed and 0 UNKNOWN, 23 designed resends of tool errors on declared reads · pushed, level with origin (tests: Python 3.11.18 / 3.12.3 / 3.13.18 / 3.14.6 each 6677 passed / 0 failed / 0 skipped; TypeScript tsc clean, 74/74; ruff, format, mypy clean; CI 10/11 on `b291562` plus a runner action-download failure re-run) · S3 Mon 23 Nov 09:00 IST
